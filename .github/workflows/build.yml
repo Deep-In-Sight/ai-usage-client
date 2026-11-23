@@ -1,0 +1,97 @@
+name: build
+
+# Builds the three release files and SHA256SUMS, and runs the publish
+# script as a dry run. Called by ci.yml (every push) and release.yml (tags).
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: MAJOR.MINOR.PATCH[-pre], without the leading v
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux-windows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+      - name: build
+        env:
+          VERSION: ${{ inputs.version }}
+        run: tools/build.sh "$VERSION"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-linux-windows
+          path: |
+            agent/dist/claude-usage-linux-amd64
+            agent/dist/claude-usage-windows-amd64.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  macos:
+    runs-on: macos-26
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+      - name: build
+        env:
+          VERSION: ${{ inputs.version }}
+        run: tools/build-macos.sh "$VERSION"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-macos
+          path: agent/dist/claude-usage-macos-universal
+          if-no-files-found: error
+          retention-days: 14
+
+  files:
+    needs: [linux-windows, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: build-*
+          merge-multiple: true
+          path: dist
+      - name: checksums
+        run: agent/tools/sums.sh dist --require-all
+      - name: release dry run
+        env:
+          VERSION: ${{ inputs.version }}
+        run: DRY_RUN=1 agent/tools/publish-release.sh dist "v$VERSION"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: |
+            dist/claude-usage-linux-amd64
+            dist/claude-usage-windows-amd64.exe
+            dist/claude-usage-macos-universal
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14

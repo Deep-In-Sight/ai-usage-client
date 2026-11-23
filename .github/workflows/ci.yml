@@ -46,26 +46,9 @@ jobs:
           CLAUDE_USAGE_KEYCHAIN_TEST: "1"
         run: go test -count=1 -run TestKeychainIntegration -v ./internal/creds/
 
+  # The release build on every push: the same files a tag would publish,
+  # with the publish step as a dry run.
   build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: agent
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
-        with:
-          go-version-file: agent/go.mod
-          cache-dependency-path: agent/go.sum
-      - name: cross build
-        env:
-          CGO_ENABLED: "0"
-        run: |
-          GOOS=linux GOARCH=amd64 go build -trimpath -o dist/claude-usage-linux-amd64 ./cmd/claude-usage
-          GOOS=windows GOARCH=amd64 go build -trimpath -o dist/claude-usage-windows-amd64.exe ./cmd/claude-usage
-          GOOS=darwin GOARCH=amd64 go build -trimpath -o dist/claude-usage-darwin-amd64 ./cmd/claude-usage
-          GOOS=darwin GOARCH=arm64 go build -trimpath -o dist/claude-usage-darwin-arm64 ./cmd/claude-usage
-          file dist/claude-usage-linux-amd64 | grep -q 'statically linked'
+    uses: ./.github/workflows/build.yml
+    with:
+      version: 0.0.0-ci
