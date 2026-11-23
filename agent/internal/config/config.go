@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/atomicfile"
@@ -136,9 +137,23 @@ func Save(path string, c Config) error {
 
 // State is what the agent learns while running (state.json).
 type State struct {
-	LastGoodURL string   `json:"last_good_url,omitempty"`
-	ServerURLs  []string `json:"server_urls,omitempty"`
-	BatchLimit  int      `json:"batch_limit,omitempty"`
+	LastGoodURL string     `json:"last_good_url,omitempty"`
+	ServerURLs  []string   `json:"server_urls,omitempty"`
+	BatchLimit  int        `json:"batch_limit,omitempty"`
+	FetchLimit  FetchLimit `json:"fetch_limit,omitzero"`
+}
+
+// FetchLimit is the agent's own record of recent usage fetches, kept so that
+// a restart does not reset the local limit.
+type FetchLimit struct {
+	Attempts       []time.Time `json:"attempts,omitempty"`
+	NotBefore      time.Time   `json:"not_before,omitzero"`
+	Consecutive429 int         `json:"consecutive_429,omitempty"`
+}
+
+// IsZero lets omitzero drop an empty record.
+func (f FetchLimit) IsZero() bool {
+	return len(f.Attempts) == 0 && f.NotBefore.IsZero() && f.Consecutive429 == 0
 }
 
 // LoadState returns the zero State when the file is missing or broken.

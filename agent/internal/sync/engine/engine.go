@@ -129,6 +129,7 @@ func New(d Deps) *Engine {
 	if d.StatePath != "" {
 		e.state = config.LoadState(d.StatePath)
 	}
+	e.limiter.Restore(e.state.FetchLimit)
 	if b := e.state.BatchLimit; b >= 1 && b < defaultBatch {
 		e.batchLimit = b
 	}
@@ -176,7 +177,12 @@ func (e *Engine) Step(ctx context.Context) time.Duration {
 	resp, err := e.syncOnce(ctx, login, now)
 	if err == nil {
 		wait = clampNextSync(resp.NextSyncSeconds)
-		if resp.FetchNow && resp.Role == "poller" && e.canFetch(login, e.d.Clock.Now()) {
+		ordered := resp.FetchNow && resp.Role == "poller"
+		if ordered && !e.canFetch(login, e.d.Clock.Now()) {
+			// Not an error: no result goes back and the server hands over.
+			e.noteFetch("fetch order not followed (sign-in or local fetch limit)")
+		}
+		if ordered && e.canFetch(login, e.d.Clock.Now()) {
 			e.fetch(ctx, login)
 			if resp2, err2 := e.syncOnce(ctx, login, e.d.Clock.Now()); err2 == nil {
 				wait = clampNextSync(resp2.NextSyncSeconds)
@@ -191,8 +197,10 @@ func (e *Engine) Step(ctx context.Context) time.Duration {
 	return wait
 }
 
+// canFetch: a usable sign-in with a known account (a result without one is
+// dropped by the server) and room under the agent's own fetch limit.
 func (e *Engine) canFetch(login creds.Login, now time.Time) bool {
-	return login.State(now) == "ok" && e.limiter.Allowed(now)
+	return login.State(now) == "ok" && login.Account != nil && login.Account.UUID != "" && e.limiter.Allowed(now)
 }
 
 func clampNextSync(s int) time.Duration {
@@ -385,6 +393,11 @@ func (e *Engine) fetch(ctx context.Context, login creds.Login) {
 		return
 	}
 	e.limiter.Record(res)
+	e.state.FetchLimit = e.limiter.Snapshot()
+	e.saveState()
+	if ctx.Err() != nil {
+		return // shutting down: the attempt counts locally, but its "no response" is not a result
+	}
 	st := res.HTTPStatus
 	e.lastFetchAt, e.lastFetchStatus = res.FetchedAt, &st
 	note := "fetch: HTTP " + strconv.Itoa(st)
@@ -392,15 +405,12 @@ func (e *Engine) fetch(ctx context.Context, login creds.Login) {
 		note += " (" + res.Problem + ")"
 	}
 	e.noteFetch(note)
-	acct := ""
-	if login.Account != nil {
-		acct = login.Account.UUID
-	}
-	r := protocol.Result{AccountUUID: acct, FetchedAt: protocol.Time{Time: res.FetchedAt}, HTTPStatus: st, Usage: res.Usage}
+	r := protocol.Result{AccountUUID: login.Account.UUID, FetchedAt: protocol.Time{Time: res.FetchedAt}, HTTPStatus: st, Usage: res.Usage}
 	if err := e.d.Backlog.Add(r); err != nil {
 		e.d.Log.Printf("backlog: %v", err)
 	}
-	if st == 200 && res.Usage != nil {
+	// Like the extension: a 200 without a weekly number does not replace good numbers.
+	if st == 200 && res.Usage != nil && usage.ParseLimits(res.Usage, usage.ScopedModel).Weekly.Percent != nil {
 		e.setLatest(protocol.Latest{FetchedAt: protocol.Time{Time: res.FetchedAt}.UTC().Format("2006-01-02T15:04:05.000Z"), Usage: res.Usage})
 	}
 }

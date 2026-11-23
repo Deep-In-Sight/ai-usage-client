@@ -44,16 +44,21 @@ type fakeLogins struct{ login creds.Login }
 func (f *fakeLogins) Current(context.Context) creds.Login { return f.login }
 
 type fakeFetcher struct {
-	clk    clock.Clock
-	calls  int
-	status int
-	at     []time.Time
+	clk     clock.Clock
+	calls   int
+	status  int
+	at      []time.Time
+	body    string
+	onFetch func()
 }
 
 func (f *fakeFetcher) Fetch(context.Context) (anthropic.Result, error) {
 	f.calls++
 	now := f.clk.Now()
 	f.at = append(f.at, now)
+	if f.onFetch != nil {
+		f.onFetch()
+	}
 	st := f.status
 	if st == 0 {
 		st = 200
@@ -61,6 +66,9 @@ func (f *fakeFetcher) Fetch(context.Context) (anthropic.Result, error) {
 	r := anthropic.Result{FetchedAt: now.UTC().Truncate(time.Millisecond), HTTPStatus: st}
 	if st == 200 {
 		r.Usage = json.RawMessage(usageBody)
+		if f.body != "" {
+			r.Usage = json.RawMessage(f.body)
+		}
 	}
 	return r, nil
 }
@@ -161,6 +169,18 @@ func (r *rig) step() time.Duration {
 
 func (r *rig) snap() status.Snapshot { return r.snaps[len(r.snaps)-1] }
 
+// stepUntil steps until cond holds, failing after limit of fake time.
+func (r *rig) stepUntil(t *testing.T, limit time.Duration, cond func() bool) {
+	t.Helper()
+	start := r.clk.Now()
+	for !cond() {
+		if r.clk.Now().Sub(start) > limit {
+			t.Fatalf("condition not reached within %v of fake time", limit)
+		}
+		r.step()
+	}
+}
+
 func TestPollerFetchesAndSyncsAtOnce(t *testing.T) {
 	r := newRig(t, func(n int, _ string, _ protocol.Request) (protocol.Response, error) {
 		if n == 0 {
@@ -256,12 +276,7 @@ func TestThreeFailuresEnterStandalone(t *testing.T) {
 	eq(t, r.snap().Mode, "standalone")
 	eq(t, r.snap().SyncFailures, 3)
 	eq(t, r.fetcher.calls, 0)
-	for r.fetcher.calls < 2 {
-		r.step()
-		if r.clk.Now().Sub(entered) > time.Hour {
-			t.Fatal("no standalone fetches")
-		}
-	}
+	r.stepUntil(t, time.Hour, func() bool { return r.fetcher.calls >= 2 })
 	// first standalone fetch at +2.5 min after entering (Rand 0.5), the next 30 min after that
 	eq(t, r.fetcher.at[0], entered.Add(150*time.Second))
 	eq(t, r.fetcher.at[1], entered.Add(150*time.Second+30*time.Minute))
@@ -303,14 +318,10 @@ func TestStandaloneIntervalStaysIn25to35(t *testing.T) {
 func TestStandaloneWaitsForRateLimit(t *testing.T) {
 	r := newRig(t, always(protocol.Response{}, errDown))
 	r.fetcher.status = 429
-	for r.fetcher.calls < 1 {
-		r.step()
-	}
+	r.stepUntil(t, time.Hour, func() bool { return r.fetcher.calls >= 1 })
 	// after a 429 the limiter allows the next fetch after 120 s, which is
 	// shorter than 25 min: the standalone interval still applies
-	for r.fetcher.calls < 2 {
-		r.step()
-	}
+	r.stepUntil(t, time.Hour, func() bool { return r.fetcher.calls >= 2 })
 	gap := r.fetcher.at[1].Sub(r.fetcher.at[0])
 	if gap < 25*time.Minute {
 		t.Fatalf("gap %v", gap)
@@ -323,15 +334,15 @@ func TestStandaloneSkipsWithoutLogin(t *testing.T) {
 	l.ExpiresAt = t0.Add(-time.Minute)
 	r.logins.login = l
 	start := r.clk.Now()
+	steps := 0
 	for r.clk.Now().Sub(start) < 2*time.Hour {
-		eq(t, r.step() <= 60*time.Second, true)
+		eq(t, r.step(), 60*time.Second) // never faster while signed out
+		steps++
 	}
+	eq(t, steps, 120)
 	eq(t, r.fetcher.calls, 0)
 	eq(t, r.snap().Mode, "standalone")
 	eq(t, r.snap().AuthState, "expired")
-	if len(r.syncer.calls) < 120 {
-		t.Fatalf("%d sync calls in 2 hours", len(r.syncer.calls))
-	}
 }
 
 func TestOutageThenRecoveryDeliversBacklog(t *testing.T) {
@@ -351,9 +362,8 @@ func TestOutageThenRecoveryDeliversBacklog(t *testing.T) {
 		r.step()
 	}
 	// continue until a step that fetched, so the recovery step is not a fetch step
-	for n := r.fetcher.calls; r.fetcher.calls == n; {
-		r.step()
-	}
+	n0 := r.fetcher.calls
+	r.stepUntil(t, time.Hour, func() bool { return r.fetcher.calls > n0 })
 	fetched := r.fetcher.calls
 	if fetched < 7 || fetched > 10 {
 		t.Fatalf("%d standalone fetches in 4 hours", fetched)
@@ -488,9 +498,137 @@ func TestLimiterBlocksTooSoonFetch(t *testing.T) {
 	r.clk.Advance(5 * time.Second)
 	r.e.Step(ctx)
 	eq(t, r.fetcher.calls, 1)
-	r.clk.Advance(5 * time.Second)
+	r.clk.Advance(54 * time.Second) // 59 s after the fetch: still too soon
+	r.e.Step(ctx)
+	eq(t, r.fetcher.calls, 1)
+	r.clk.Advance(time.Second)
 	r.e.Step(ctx)
 	eq(t, r.fetcher.calls, 2)
+	// refused orders are not sync failures
+	eq(t, r.snap().SyncFailures, 0)
+	eq(t, r.snap().Mode, "coordinated")
+}
+
+// fetchesInAnyHour is the largest number of fetches in a rolling hour.
+func fetchesInAnyHour(at []time.Time) int {
+	most := 0
+	for i := range at {
+		n := 0
+		for j := i; j < len(at) && at[j].Sub(at[i]) < time.Hour; j++ {
+			n++
+		}
+		most = max(most, n)
+	}
+	return most
+}
+
+func TestServerOrderingFetchOnEverySyncIsCapped(t *testing.T) {
+	r := newRig(t, always(resp("poller", true, 0), nil))
+	for r.clk.Now().Sub(t0) < 3*time.Hour {
+		r.step()
+	}
+	if n := fetchesInAnyHour(r.fetcher.at); n > 15 {
+		t.Fatalf("%d fetches in one hour", n)
+	}
+	for i := 1; i < len(r.fetcher.at); i++ {
+		if gap := r.fetcher.at[i].Sub(r.fetcher.at[i-1]); gap < time.Minute {
+			t.Fatalf("gap %v", gap)
+		}
+	}
+	eq(t, len(r.fetcher.at), 45) // the budget is used, never exceeded
+	eq(t, r.snap().SyncFailures, 0)
+	eq(t, r.snap().Mode, "coordinated")
+}
+
+func TestFetchLimitSurvivesRestart(t *testing.T) {
+	r := newRig(t, always(resp("poller", true, 0), nil))
+	for r.clk.Now().Sub(t0) < 20*time.Minute {
+		r.step()
+	}
+	eq(t, r.fetcher.calls, 15)
+	// a crash-restart loop must not reset the budget
+	for r.clk.Now().Sub(t0) < 59*time.Minute {
+		r.e = r.build()
+		r.step()
+	}
+	eq(t, r.fetcher.calls, 15)
+	r.clk.Set(t0.Add(time.Hour))
+	r.e = r.build()
+	r.e.Step(ctx)
+	eq(t, r.fetcher.calls, 16)
+	// and the 60 s gap holds across a restart as well
+	r.e = r.build()
+	r.clk.Advance(30 * time.Second)
+	r.e.Step(ctx)
+	eq(t, r.fetcher.calls, 16)
+}
+
+func TestStandaloneCountsTowardTheSameBudget(t *testing.T) {
+	r := newRig(t, always(resp("poller", true, 0), nil))
+	for r.clk.Now().Sub(t0) < 20*time.Minute {
+		r.step()
+	}
+	eq(t, r.fetcher.calls, 15)
+	r.syncer.fn = always(protocol.Response{}, errDown)
+	r.stepUntil(t, time.Hour, func() bool { return r.snap().Mode == "standalone" })
+	for r.clk.Now().Sub(t0) < 59*time.Minute {
+		r.step()
+	}
+	eq(t, r.fetcher.calls, 15) // the stand-alone fetch waits for the hourly budget
+	r.stepUntil(t, 10*time.Minute, func() bool { return r.fetcher.calls == 16 })
+	if r.fetcher.at[15].Before(r.fetcher.at[0].Add(time.Hour)) {
+		t.Fatal("stand-alone fetch broke the hourly budget")
+	}
+}
+
+func TestFailureCountResetsAfterSuccess(t *testing.T) {
+	up := false
+	r := newRig(t, func(int, string, protocol.Request) (protocol.Response, error) {
+		if up {
+			return resp("standby", false, 60), nil
+		}
+		return protocol.Response{}, errDown
+	})
+	for i := 0; i < 3; i++ {
+		r.step()
+	}
+	eq(t, r.snap().Mode, "standalone")
+	up = true
+	r.step()
+	eq(t, r.snap().Mode, "coordinated")
+	eq(t, r.snap().SyncFailures, 0)
+	up = false
+	r.step() // one lost sync after recovery
+	eq(t, r.snap().Mode, "coordinated")
+	eq(t, r.snap().SyncFailures, 1)
+	r.step()
+	r.step()
+	eq(t, r.snap().Mode, "standalone")
+}
+
+func TestFailedSyncAfterFetchCounts(t *testing.T) {
+	// the first sync succeeds and orders a fetch; every call after that fails,
+	// including the sync right after the fetch
+	first := true
+	r := newRig(t, func(int, string, protocol.Request) (protocol.Response, error) {
+		if first {
+			first = false
+			return resp("poller", true, 60), nil
+		}
+		return protocol.Response{}, errDown
+	})
+	d := r.e.Step(ctx)
+	eq(t, r.fetcher.calls, 1)
+	eq(t, r.snap().SyncFailures, 1)
+	eq(t, d, RetryInterval)
+	eq(t, r.backlog.Len(), 1) // kept for the next sync
+	eq(t, r.snap().Mode, "coordinated")
+	// it counts toward the three: two more failed steps and the agent is stand-alone
+	r.clk.Advance(d)
+	r.step()
+	eq(t, r.snap().Mode, "coordinated")
+	r.step()
+	eq(t, r.snap().Mode, "standalone")
 }
 
 func TestNextSyncClamped(t *testing.T) {
@@ -549,4 +687,46 @@ func TestStatusHasNoSecrets(t *testing.T) {
 	if strings.Contains(string(b), ingestKey) || strings.Contains(string(b), "fake-access-token") {
 		t.Fatal(string(b))
 	}
+}
+
+func TestNoFetchWithoutAccount(t *testing.T) {
+	r := newRig(t, always(resp("poller", true, 60), nil))
+	l := okLogin()
+	l.Account = nil // token present, .claude.json missing: a result would be dropped by the server
+	r.logins.login = l
+	r.step()
+	eq(t, r.fetcher.calls, 0)
+	r.syncer.fn = always(protocol.Response{}, errDown)
+	for r.clk.Now().Sub(t0) < time.Hour {
+		r.step()
+	}
+	eq(t, r.snap().Mode, "standalone")
+	eq(t, r.fetcher.calls, 0)
+}
+
+func TestEmptyUsageDoesNotReplaceNumbers(t *testing.T) {
+	x := resp("poller", true, 60)
+	x.Latest = &protocol.Latest{FetchedAt: "2026-01-05T08:59:00.000Z", Usage: json.RawMessage(usageBody)}
+	r := newRig(t, always(x, nil))
+	r.fetcher.body = `{}`
+	r.step()
+	eq(t, r.fetcher.calls, 1)
+	eq(t, *r.snap().WeeklyPercent, 5.0)
+	eq(t, len(r.syncer.calls[1].req.Results), 1) // the result still goes to the server unchanged
+	eq(t, string(r.syncer.calls[1].req.Results[0].Usage), `{}`)
+}
+
+func TestShutdownDuringFetchDropsResult(t *testing.T) {
+	r := newRig(t, always(resp("poller", true, 60), nil))
+	c, cancel := context.WithCancel(ctx)
+	r.fetcher.onFetch = cancel // SIGTERM arrives while the request is in flight
+	r.e.Step(c)
+	eq(t, r.fetcher.calls, 1)
+	eq(t, r.backlog.Len(), 0)
+	// the attempt still counts locally, also after a restart
+	r.e = r.build()
+	r.fetcher.onFetch = nil
+	r.clk.Advance(30 * time.Second)
+	r.e.Step(ctx)
+	eq(t, r.fetcher.calls, 1)
 }
