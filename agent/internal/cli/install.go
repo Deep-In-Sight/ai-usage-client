@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/autostart"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/config"
@@ -150,7 +151,7 @@ func install(env Env, args []string) (int, string) {
 
 	// 5b: the executable.
 	if staged != "" {
-		if err := os.Rename(staged, env.Dirs.InstallExe); err != nil {
+		if err := replaceFile(goos, staged, env.Dirs.InstallExe, os.Rename, 300*time.Millisecond); err != nil {
 			restore()
 			return fail("replacing the executable: " + err.Error())
 		}
@@ -246,6 +247,23 @@ func install(env Env, args []string) (int, string) {
 		}
 	}
 	return code, ""
+}
+
+// replaceFile renames src over dst. On Windows the old executable can stay
+// locked for a moment after its process ended, so it tries for about 3 s.
+func replaceFile(goos, src, dst string, rename func(string, string) error, wait time.Duration) error {
+	tries := 1
+	if goos == "windows" {
+		tries = 10
+	}
+	var err error
+	for i := 0; i < tries; i++ {
+		if err = rename(src, dst); err == nil {
+			return nil
+		}
+		time.Sleep(wait)
+	}
+	return err
 }
 
 // firstLine is s up to its first line break.

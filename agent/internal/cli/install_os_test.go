@@ -339,3 +339,25 @@ type stateMethod struct {
 }
 
 func (s *stateMethod) State(context.Context) string { return s.state }
+
+func TestReplaceRetriesOnWindows(t *testing.T) {
+	calls := 0
+	failTwice := func(string, string) error {
+		calls++
+		if calls <= 2 {
+			return errors.New("Access is denied.")
+		}
+		return nil
+	}
+	must(t, replaceFile("windows", "a", "b", failTwice, 0))
+	eq(t, calls, 3)
+	calls = 0
+	if err := replaceFile("linux", "a", "b", failTwice, 0); err == nil {
+		t.Fatal("linux retried")
+	}
+	eq(t, calls, 1)
+	calls = -100 // always fails on Windows: gives up
+	if err := replaceFile("windows", "a", "b", func(string, string) error { calls++; return errors.New("denied") }, 0); err == nil {
+		t.Fatal("no error")
+	}
+}
