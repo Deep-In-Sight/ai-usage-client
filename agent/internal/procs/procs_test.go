@@ -12,53 +12,76 @@ import (
 	"time"
 )
 
-func TestFindByExeFindsChild(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		_, err := FindByExe("/x")
-		if !errors.Is(err, ErrUnsupported) {
-			t.Fatalf("%v", err)
-		}
-		t.Skip("linux only")
+// TestMain lets the test binary act as a long-running helper process.
+func TestMain(m *testing.M) {
+	if os.Getenv("CLAUDE_USAGE_HELPER") == "sleep" {
+		time.Sleep(60 * time.Second)
+		os.Exit(0)
 	}
-	src, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skip("no sleep binary")
-	}
-	cp := filepath.Join(t.TempDir(), "sleep-copy")
+	os.Exit(m.Run())
+}
+
+func copyFile(t *testing.T, src, dst string) {
+	t.Helper()
 	in, err := os.Open(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := os.OpenFile(cp, os.O_CREATE|os.O_WRONLY, 0o755)
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY, 0o755)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = io.Copy(out, in)
-	in.Close()
-	out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
-	cmd := exec.Command(cp, "30")
+func TestFindByExeFindsChild(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "helper-copy"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	cp := filepath.Join(t.TempDir(), name)
+	copyFile(t, self, cp)
+
+	cmd := exec.Command(cp)
+	cmd.Env = append(os.Environ(), "CLAUDE_USAGE_HELPER=sleep")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	t.Cleanup(func() { _ = cmd.Process.Kill(); <-done })
 
-	pids, err := FindByExe(cp)
-	if err != nil {
-		t.Fatal(err)
+	var pids []int
+	deadline := time.Now().Add(5 * time.Second)
+	for !slices.Contains(pids, cmd.Process.Pid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("pid %d not in %v", cmd.Process.Pid, pids)
+		}
+		pids, err = FindByExe(cp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if !slices.Contains(pids, cmd.Process.Pid) {
-		t.Fatalf("pid %d not in %v", cmd.Process.Pid, pids)
-	}
-	// the executable replaced on disk (an upgrade) is still found
-	if err := os.Remove(cp); err != nil {
-		t.Fatal(err)
-	}
-	pids, _ = FindByExe(cp)
-	if !slices.Contains(pids, cmd.Process.Pid) {
-		t.Fatalf("deleted exe: pid %d not in %v", cmd.Process.Pid, pids)
+	if runtime.GOOS == "linux" {
+		// the executable replaced on disk (an upgrade) is still found
+		if err := os.Remove(cp); err != nil {
+			t.Fatal(err)
+		}
+		pids, _ = FindByExe(cp)
+		if !slices.Contains(pids, cmd.Process.Pid) {
+			t.Fatalf("deleted exe: pid %d not in %v", cmd.Process.Pid, pids)
+		}
 	}
 	// except leaves a pid alone
 	Kill(pids, cmd.Process.Pid)
@@ -67,11 +90,13 @@ func TestFindByExeFindsChild(t *testing.T) {
 		t.Fatal("excepted process was killed")
 	case <-time.After(200 * time.Millisecond):
 	}
+	start := time.Now()
 	Kill(pids, 0)
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("process did not exit")
+		done <- nil // for the cleanup
+	case <-time.After(6*time.Second - time.Since(start)):
+		t.Fatal("process did not exit within 6 s")
 	}
 	if pids, _ := FindByExe(filepath.Join(t.TempDir(), "nothing")); len(pids) != 0 {
 		t.Fatalf("%v", pids)

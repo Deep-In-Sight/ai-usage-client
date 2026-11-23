@@ -1,5 +1,7 @@
-//go:build !linux
+//go:build !linux && !darwin && !windows
 
 package autostart
 
-func forOS(bool, string, Runner) (Method, error) { return nil, ErrUnsupported }
+func forOS(Options) (Method, error) { return nil, ErrUnsupported }
+
+func othersOS(Options) []Method { return nil }

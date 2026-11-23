@@ -1,19 +1,13 @@
-//go:build !linux
+//go:build !linux && !darwin && !windows
 
-// Package procs finds and stops other copies of the agent and holds the
-// single-instance lock.
 package procs
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 )
 
-// ErrUnsupported: process lookup is not available on this OS.
-var ErrUnsupported = errors.New("procs: not supported on this OS")
-
-// FindByExe is not implemented outside Linux yet.
+// FindByExe is not available on this OS.
 func FindByExe(string) ([]int, error) { return nil, ErrUnsupported }
 
 // Kill stops the given processes except one.

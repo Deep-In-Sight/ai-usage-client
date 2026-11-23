@@ -1,20 +1,13 @@
-// Package procs finds and stops other copies of the agent and holds the
-// single-instance lock.
 package procs
 
 import (
-	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
-
-// ErrUnsupported: process lookup is not available on this OS.
-var ErrUnsupported = errors.New("procs: not supported on this OS")
 
 // FindByExe lists the processes (of any user it can see) whose executable
 // is exe, including ones whose file was replaced since they started.
@@ -89,20 +82,4 @@ func gone(pid int) bool {
 		return s[i+2] == 'Z'
 	}
 	return false
-}
-
-// StartDetached starts exe in its own session with no terminal.
-func StartDetached(exe string, args ...string) error {
-	cmd := exec.Command(exe, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
-	if err != nil {
-		return err
-	}
-	defer devnull.Close()
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	return cmd.Process.Release()
 }

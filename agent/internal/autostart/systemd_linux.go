@@ -9,8 +9,18 @@ import (
 	"strings"
 )
 
-func forOS(_ bool, home string, run Runner) (Method, error) {
-	return &Systemd{home: home, run: run}, nil
+func forOS(o Options) (Method, error) {
+	if o.Headless {
+		return &Systemd{home: o.Home, run: o.Run}, nil
+	}
+	return &XDGAutostart{Home: o.Home, Exe: o.Exe, Start: o.Start}, nil
+}
+
+func othersOS(o Options) []Method {
+	if o.Headless {
+		return []Method{&XDGAutostart{Home: o.Home, Exe: o.Exe, Start: o.Start}}
+	}
+	return []Method{&Systemd{home: o.Home, run: o.Run}}
 }
 
 // Systemd is the systemd user service. The unit lives in

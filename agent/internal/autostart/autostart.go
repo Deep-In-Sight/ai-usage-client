@@ -1,16 +1,19 @@
 // Package autostart registers the agent to start with the user's session,
-// using the one documented mechanism of each OS. This version has the
-// systemd user service (Linux); the tray plan adds the others behind the
-// same Method interface.
+// using the one documented mechanism of each OS: the HKCU Run key
+// (Windows), a LaunchAgent (macOS), XDG autostart on a Linux desktop and a
+// systemd user service on a Linux without a desktop.
 package autostart
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/procs"
 )
 
 // Runner runs a command and returns its combined output.
@@ -39,14 +42,43 @@ type Method interface {
 	State(ctx context.Context) string
 }
 
-// ErrUnsupported: no autostart method for this OS yet.
-var ErrUnsupported = errors.New("autostart: not implemented on this OS yet")
+// ErrUnsupported: no autostart method for this OS.
+var ErrUnsupported = errors.New("autostart: not supported on this OS")
 
-// For picks the method for this OS. On Linux it is the systemd user service
-// whether or not there is a desktop (the desktop autostart comes with the
-// tray).
-func For(headless bool, home string, run Runner) (Method, error) {
-	return forOS(headless, home, run)
+// ErrStartFailed: the entry was written but the agent could not be started
+// now; the caller starts it itself.
+var ErrStartFailed = errors.New("autostart: registered, but not started")
+
+// Options are what the methods need to know.
+type Options struct {
+	Headless bool   // Linux without a desktop session
+	Home     string // the user's home folder
+	DataDir  string // the agent's data folder (macOS writes agent.log there)
+	Exe      string // the install location, for finding processes left running
+	Run      Runner
+	Start    func(exe string, args ...string) error // starts a detached process
+}
+
+// For picks the method for this OS: Linux the systemd user service when
+// headless and XDG autostart otherwise, Windows the Run key, macOS a
+// LaunchAgent.
+func For(o Options) (Method, error) { return forOS(o) }
+
+// Others are the methods of this OS that For did not pick (Linux: the other
+// one), so that install and uninstall can clean them up.
+func Others(o Options) []Method { return othersOS(o) }
+
+// RunValue is the HKCU Run value for exe: the path in quotes, then "run".
+func RunValue(exe string) string { return `"` + exe + `" run` }
+
+// killLeft stops the processes still running exe, except this one.
+func killLeft(exe string) {
+	if exe == "" {
+		return
+	}
+	if pids, err := procs.FindByExe(exe); err == nil {
+		procs.Kill(pids, os.Getpid())
+	}
 }
 
 // UnitName is the systemd user unit.

@@ -7,31 +7,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
-
-type fakeRun struct {
-	calls [][]string
-	reply func(args []string) (string, error)
-}
-
-func (f *fakeRun) run(_ context.Context, name string, args ...string) (string, error) {
-	c := append([]string{name}, args...)
-	f.calls = append(f.calls, c)
-	if f.reply != nil {
-		return f.reply(c)
-	}
-	return "", nil
-}
-
-func eq[T any](t *testing.T, got, want T) {
-	t.Helper()
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %#v, want %#v", got, want)
-	}
-}
 
 const wantUnit = `[Unit]
 Description=Claude Usage agent
@@ -50,20 +28,38 @@ func TestUnitText(t *testing.T) {
 	eq(t, UnitText("/h/.local/bin/claude-usage"), wantUnit)
 }
 
-func TestForIsSystemdOnLinux(t *testing.T) {
-	for _, headless := range []bool{true, false} {
-		m, err := For(headless, t.TempDir(), (&fakeRun{}).run)
-		if err != nil {
-			t.Fatal(err)
-		}
-		eq(t, m.Name(), "systemd-user")
+func TestForPicksMethod(t *testing.T) {
+	o := Options{Headless: true, Home: t.TempDir(), Run: (&fakeRun{}).run}
+	m, err := For(o)
+	if err != nil {
+		t.Fatal(err)
 	}
+	eq(t, m.Name(), "systemd-user")
+	eq(t, names(Others(o)), []string{"xdg-autostart"})
+	o.Headless = false
+	m, err = For(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, m.Name(), "xdg-autostart")
+	eq(t, names(Others(o)), []string{"systemd-user"})
+	if _, ok := m.(Toggler); !ok {
+		t.Fatal("xdg-autostart is not a Toggler")
+	}
+}
+
+func names(ms []Method) []string {
+	var out []string
+	for _, m := range ms {
+		out = append(out, m.Name())
+	}
+	return out
 }
 
 func TestRegisterCallsSystemctl(t *testing.T) {
 	home := t.TempDir()
 	f := &fakeRun{}
-	m, _ := For(true, home, f.run)
+	m, _ := For(Options{Headless: true, Home: home, Run: f.run})
 	exe := filepath.Join(home, ".local", "bin", "claude-usage")
 	if err := m.Register(context.Background(), exe); err != nil {
 		t.Fatal(err)
@@ -97,7 +93,7 @@ func TestRegisterFailure(t *testing.T) {
 		}
 		return "", nil
 	}}
-	m, _ := For(true, t.TempDir(), f.run)
+	m, _ := For(Options{Headless: true, Home: t.TempDir(), Run: f.run})
 	err := m.Register(context.Background(), "/x/claude-usage")
 	if err == nil || !strings.Contains(err.Error(), "Failed to connect to bus") {
 		t.Fatalf("%v", err)
@@ -115,7 +111,7 @@ func TestAvailableStopStateUnregister(t *testing.T) {
 		}
 		return "", nil
 	}}
-	m, _ := For(true, home, f.run)
+	m, _ := For(Options{Headless: true, Home: home, Run: f.run})
 	ctx := context.Background()
 	eq(t, m.Available(ctx), true)
 	// nothing installed: Stop is a no-op, State says so
@@ -197,7 +193,7 @@ func TestUnitEscapesSpecifiers(t *testing.T) {
 	for _, exe := range []string{`/h/a"b/claude-usage`, `/h/a\b/claude-usage`, "/h/a\nb/claude-usage"} {
 		f := &fakeRun{}
 		home := t.TempDir()
-		m, _ := For(true, home, f.run)
+		m, _ := For(Options{Headless: true, Home: home, Run: f.run})
 		if err := m.Register(context.Background(), exe); err == nil {
 			t.Fatalf("%q accepted", exe)
 		}

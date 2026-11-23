@@ -43,6 +43,11 @@ type Env struct {
 	Syncer        func(cfg config.Config, userAgent string) engine.Syncer                                    // nil means the real sync client
 }
 
+// autostartOptions are the autostart inputs for this user.
+func autostartOptions(d paths.Dirs, headless bool, run autostart.Runner, start func(string, ...string) error) autostart.Options {
+	return autostart.Options{Headless: headless, Home: d.Home, DataDir: d.Data, Exe: d.InstallExe, Run: run, Start: start}
+}
+
 func (env Env) goos() string {
 	if env.GOOS == "" {
 		return runtime.GOOS
@@ -80,7 +85,7 @@ func DefaultEnv() Env {
 		StartDetached: procs.StartDetached,
 		Clock:         clock.Real{},
 		Autostart: func(headless bool) (autostart.Method, error) {
-			return autostart.For(headless, dirs.Home, autostart.ExecRunner)
+			return autostart.For(autostartOptions(dirs, headless, autostart.ExecRunner, procs.StartDetached))
 		},
 		GOOS: runtime.GOOS,
 		TrayAvailable: func(ctx context.Context) (bool, string) {

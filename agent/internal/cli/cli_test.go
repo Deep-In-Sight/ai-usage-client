@@ -88,8 +88,10 @@ func newEnv(t *testing.T) *testEnv {
 			te.detached = append(te.detached, append([]string{exe}, args...))
 			return nil
 		},
-		Clock:     clock.NewFake(time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)),
-		Autostart: func(headless bool) (autostart.Method, error) { return autostart.For(headless, home, te.runner.run) },
+		Clock: clock.NewFake(time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)),
+	}
+	te.Env.Autostart = func(headless bool) (autostart.Method, error) {
+		return autostart.For(autostartOptions(dirs, headless, te.runner.run, te.Env.StartDetached))
 	}
 	return te
 }
