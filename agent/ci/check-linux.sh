@@ -34,8 +34,9 @@ if [ "$a" = active ]; then pass systemd.active "$a"; else fail systemd.active "$
 systemctl --user status claude-usage.service --no-pager > "$out/systemd-status.txt" 2>&1
 
 # sync.arrives
-device=$(cat "$data/device-id" 2>/dev/null)
-if wait_for 90 sync_ok "$device" headless; then pass sync.arrives "device $device"
+# run creates device-id when it starts, which may be just after install returns
+synced_now() { device=$(cat "$data/device-id" 2>/dev/null) && sync_ok "$device" headless; }
+if wait_for 90 synced_now; then pass sync.arrives "device $device"
 else fail sync.arrives "device=$device stats=$(stats | jget - devices "$device")"; fi
 
 # status.json
@@ -79,8 +80,7 @@ else fail uninstall "rc=$rc unit=$([ -e "$unit" ] && echo left) exe=$([ -e "$exe
 XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent oneliner > "$out/install-desktop.log" 2>&1
 rc=$?
 exec_line=$(grep '^Exec=' "$desktop" 2>/dev/null)
-device3=$(cat "$data/device-id" 2>/dev/null)
-headless_now() { [ "$(dev "$device3" last_mode)" = headless ]; }
+headless_now() { device3=$(cat "$data/device-id" 2>/dev/null) && [ "$(dev "$device3" last_mode)" = headless ]; }
 wait_for 90 headless_now
 n=$(agent_count)
 problems=""

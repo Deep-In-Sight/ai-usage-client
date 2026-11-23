@@ -143,7 +143,7 @@ Check 'run.process' {
 
 $script:device = DeviceId
 Check 'sync.arrives' {
-    $ok = WaitFor 90 { $d = DevStat $script:device; $d -and $d.syncs -ge 2 -and $d.last_auth_state -eq 'ok' -and $d.last_email -eq $email -and $d.last_version -eq '0.0.0-ci' }
+    $ok = WaitFor 90 { $script:device = DeviceId; $d = DevStat $script:device; $d -and $d.syncs -ge 2 -and $d.last_auth_state -eq 'ok' -and $d.last_email -eq $email -and $d.last_version -eq '0.0.0-ci' }
     $d = DevStat $script:device
     if ($ok) { Pass 'sync.arrives' "device $($script:device)" }
     else { Fail 'sync.arrives' "device=$($script:device) stats=$(ConvertTo-Json -Compress -InputObject $d)" }

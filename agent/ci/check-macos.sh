@@ -54,8 +54,8 @@ sleep $(( t_install + 5 - $(date +%s) > 0 ? t_install + 5 - $(date +%s) : 0 ))
 screencapture -x "$out/menubar-5s.png" 2>/dev/null
 
 # sync.arrives
-device=$(cat "$data/device-id" 2>/dev/null)
-if wait_for 90 sync_ok "$device" tray; then pass sync.arrives "device $device (sign-in from the keychain)"
+synced_now() { device=$(cat "$data/device-id" 2>/dev/null) && sync_ok "$device" tray; }
+if wait_for 90 synced_now; then pass sync.arrives "device $device (sign-in from the keychain)"
 else fail sync.arrives "device=$device stats=$(stats | jget - devices "$device")"; fi
 
 sleep $(( t_install + 30 - $(date +%s) > 0 ? t_install + 30 - $(date +%s) : 0 ))
