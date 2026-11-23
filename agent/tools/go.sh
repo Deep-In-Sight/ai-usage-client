@@ -1,14 +1,15 @@
 #!/bin/sh
 # Run the Go toolchain inside the official golang Docker image.
 # Usage: agent/tools/go.sh <go args...>   (agent/ is mounted at /src)
-# GOOS, GOARCH, CGO_ENABLED, GOFLAGS are passed through when set.
+# GOOS, GOARCH, CGO_ENABLED, GOFLAGS and CLAUDE_USAGE_* (test switches) are
+# passed through when set.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/claude-usage-agent-go"
 mkdir -p "$cache/mod" "$cache/build" "$cache/home"
 case "$(pwd)" in "$here"*) wd="/src${PWD#"$here"}" ;; *) wd=/src ;; esac
 envs=""
-for v in GOOS GOARCH CGO_ENABLED GOFLAGS; do
+for v in GOOS GOARCH CGO_ENABLED GOFLAGS $(env | sed -n 's/^\(CLAUDE_USAGE_[A-Z0-9_]*\)=.*/\1/p'); do
   eval "val=\${$v:-}"
   [ -n "$val" ] && envs="$envs -e $v=$val"
 done
