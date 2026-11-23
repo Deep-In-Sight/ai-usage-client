@@ -246,6 +246,7 @@ func TestControllerRefreshSendsWantFresh(t *testing.T) {
 	}
 	cancel, code := te.mainAsync("run")
 	c := <-ctrlCh
+	eq(t, c.IconDir(), te.Dirs.File(paths.TrayIconsDir))
 	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 1 })
 	c.Refresh()
 	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 2 && r[len(r)-1].WantFresh })

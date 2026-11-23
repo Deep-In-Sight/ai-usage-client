@@ -13,13 +13,14 @@ import (
 
 // controller is the tray's view of the running agent (tray.Controller).
 type controller struct {
-	mu     sync.Mutex
-	snap   status.Snapshot
-	cfg    config.Config
-	eng    *engine.Engine
-	toggle autostart.Toggler
-	exe    string
-	remove func() error
+	mu      sync.Mutex
+	snap    status.Snapshot
+	cfg     config.Config
+	eng     *engine.Engine
+	toggle  autostart.Toggler
+	exe     string
+	iconDir string
+	remove  func() error
 }
 
 func newController(cfg config.Config, initial status.Snapshot, eng *engine.Engine, toggle autostart.Toggler) *controller {
@@ -76,3 +77,5 @@ func (c *controller) Remove() error {
 	}
 	return c.remove()
 }
+
+func (c *controller) IconDir() string { return c.iconDir }

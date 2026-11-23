@@ -18,6 +18,7 @@ const (
 	LockFile     = "run.lock"
 	NotifyFile   = "notify-pending" // install writes it; the next tray run shows the notice once
 	LogFile      = "agent.log"      // where a run without a console writes its log
+	TrayIconsDir = "tray-icons"     // the Windows tray's icon files
 )
 
 // Dirs are the agent's locations for the current OS user.

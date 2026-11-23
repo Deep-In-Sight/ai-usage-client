@@ -18,4 +18,7 @@ type Controller interface {
 	AutostartOn() bool
 	SetAutostart(on bool) error
 	Remove() error
+	// IconDir is where the Windows tray keeps its icon files (in the data
+	// folder, so that uninstall removes them).
+	IconDir() string
 }

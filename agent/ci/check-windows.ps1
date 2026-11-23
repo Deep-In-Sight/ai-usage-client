@@ -103,6 +103,9 @@ if (-not (WaitFor 30 { try { $null = Invoke-RestMethod -TimeoutSec 5 "$base/heal
     Fail 'fakeserver' 'did not start'
 }
 
+function TempIcons { @(Get-ChildItem -Path $env:TEMP -Filter 'systray_temp_icon_*' -ErrorAction SilentlyContinue).Count }
+$script:tempIconsBefore = TempIcons
+
 $script:installAt = Get-Date
 Check 'install.oneline' {
     $r = OneLiner 'install.log'
@@ -179,6 +182,12 @@ if ($Desktop) {
         else { Fail 'notice.consumed' 'notify-pending is still there 30 s after install' }
     }
     Info 'tray.screenshot' (Shot 'tray.png')
+}
+Check 'tray.no_temp_icons' {
+    $left = ($script:installAt.AddSeconds(30) - (Get-Date)).TotalSeconds
+    if ($left -gt 0) { Start-Sleep -Seconds ([int][Math]::Ceiling($left)) }
+    $n = TempIcons
+    if ($n -le $script:tempIconsBefore) { Pass 'tray.no_temp_icons' "$n" } else { Fail 'tray.no_temp_icons' "systray_temp_icon_* in TEMP: $($script:tempIconsBefore) -> $n" }
 }
 Info 'exe.signature' "$((Get-AuthenticodeSignature -LiteralPath $exe).Status)"
 

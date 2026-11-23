@@ -30,6 +30,9 @@ const (
 // of ctx. It must be called on the main goroutine (macOS draws there).
 func Run(ctx context.Context, c Controller, updates <-chan struct{}, notice string) error {
 	systray.Run(func() { go loop(ctx, c, updates, notice) }, func() {})
+	if runtime.GOOS == "windows" {
+		removeIconFiles(c.IconDir())
+	}
 	return nil
 }
 
@@ -71,7 +74,7 @@ func loop(ctx context.Context, c Controller, updates <-chan struct{}, notice str
 		if titleOverride != "" {
 			v.Title = titleOverride
 		}
-		apply(menu, &last, v)
+		apply(menu, &last, v, c.IconDir())
 	}
 	draw()
 	tick := time.NewTicker(redrawEvery)
@@ -125,10 +128,10 @@ func openLogged(u string) {
 }
 
 // apply changes only what differs from what is shown.
-func apply(menu []*systray.MenuItem, last *shown, v View) {
+func apply(menu []*systray.MenuItem, last *shown, v View, iconDir string) {
 	img := icon.TrayImage(runtime.GOOS, v.Icon)
 	if !bytes.Equal(img, last.icon) {
-		systray.SetIcon(img)
+		setIcon(img, iconDir)
 		last.icon = img
 	}
 	if runtime.GOOS == "darwin" && v.Title != last.title {
@@ -172,4 +175,20 @@ func apply(menu []*systray.MenuItem, last *shown, v View) {
 		}
 	}
 	last.items = append([]Item(nil), v.Items...)
+}
+
+// setIcon shows img. On Windows the library needs a file: it gets one of
+// ours (see iconFile) instead of writing to %TEMP% itself.
+func setIcon(img []byte, iconDir string) {
+	if runtime.GOOS != "windows" || iconDir == "" {
+		systray.SetIcon(img)
+		return
+	}
+	p, err := iconFile(iconDir, img, iconsKeep)
+	if err == nil {
+		err = systray.SetIconFromFilePath(p)
+	}
+	if err != nil {
+		log.Printf("tray: icon: %v", err)
+	}
 }
