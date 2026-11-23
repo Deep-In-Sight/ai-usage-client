@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -67,12 +68,29 @@ func FindByExe(exe string) ([]int, error) {
 		}
 		if ok && strings.EqualFold(filepath.Clean(p), want) {
 			pids = append(pids, int(e.ProcessID))
+			seen.Store(int(e.ProcessID), filepath.Clean(p))
 		}
 	}
 	if !errors.Is(err, windows.ERROR_NO_MORE_FILES) {
 		return pids, err
 	}
 	return pids, nil
+}
+
+// seen is what FindByExe last found: pid -> image path.
+var seen sync.Map
+
+func sameImage(h windows.Handle, want string) bool {
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	n := uint32(len(buf))
+	if err := windows.QueryFullProcessImageName(h, 0, &buf[0], &n); err != nil {
+		return false
+	}
+	p := windows.UTF16ToString(buf[:n])
+	if strings.Contains(p, "~") {
+		p = longPath(p)
+	}
+	return strings.EqualFold(filepath.Clean(p), want)
 }
 
 // Kill ends the given processes except one (usually the caller) and waits
@@ -83,8 +101,14 @@ func Kill(pids []int, except int) {
 		if pid == except || pid <= 0 {
 			continue
 		}
-		h, err := windows.OpenProcess(windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, uint32(pid))
+		h, err := windows.OpenProcess(windows.PROCESS_TERMINATE|windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 		if err != nil {
+			continue
+		}
+		// The pid may have been reused since FindByExe: check the image on
+		// this very handle before ending it.
+		if want, ok := seen.Load(pid); ok && !sameImage(h, want.(string)) {
+			windows.CloseHandle(h)
 			continue
 		}
 		if windows.TerminateProcess(h, 1) != nil {
