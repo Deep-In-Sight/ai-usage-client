@@ -76,7 +76,11 @@ func statusCmd(env Env, args []string) int {
 	if snap.ServerURL != "" {
 		mode = append(mode, "server "+snap.ServerURL)
 	}
-	fmt.Fprintf(w, "Mode:       %s\n", strings.Join(mode, ", "))
+	clientMode := ""
+	if snap.ClientMode != "" {
+		clientMode = " (" + snap.ClientMode + ")"
+	}
+	fmt.Fprintf(w, "Mode:       %s%s\n", strings.Join(mode, ", "), clientMode)
 	syncState := "ok"
 	if !snap.LastSyncOK {
 		syncState = "failing"

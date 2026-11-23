@@ -17,6 +17,8 @@ import (
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/osinfo"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/paths"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/procs"
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/sync/engine"
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/tray"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/version"
 )
 
@@ -33,6 +35,26 @@ type Env struct {
 	StartDetached func(exe string, args ...string) error
 	Clock         clock.Clock
 	Autostart     func(headless bool) (autostart.Method, error)
+
+	GOOS          string                                                                                     // "" means runtime.GOOS
+	Context       context.Context                                                                            // nil means context.Background(); tests cancel it like SIGTERM
+	TrayAvailable func(ctx context.Context) (bool, string)                                                   // nil means tray.Available
+	Tray          func(ctx context.Context, c tray.Controller, updates <-chan struct{}, notice string) error // nil means tray.Run
+	Syncer        func(cfg config.Config, userAgent string) engine.Syncer                                    // nil means the real sync client
+}
+
+func (env Env) goos() string {
+	if env.GOOS == "" {
+		return runtime.GOOS
+	}
+	return env.GOOS
+}
+
+func (env Env) ctx() context.Context {
+	if env.Context == nil {
+		return context.Background()
+	}
+	return env.Context
 }
 
 // DefaultEnv is the real environment.
@@ -60,6 +82,11 @@ func DefaultEnv() Env {
 		Autostart: func(headless bool) (autostart.Method, error) {
 			return autostart.For(headless, dirs.Home, autostart.ExecRunner)
 		},
+		GOOS: runtime.GOOS,
+		TrayAvailable: func(ctx context.Context) (bool, string) {
+			return tray.Available(ctx, os.Getenv)
+		},
+		Tray: tray.Run,
 	}
 }
 
@@ -92,7 +119,11 @@ func Main(env Env) int {
 	case "status":
 		return statusCmd(env, args)
 	case "version", "--version":
-		fmt.Fprintf(env.Stdout, "claude-usage %s %s/%s\n", version.Version, runtime.GOOS, runtime.GOARCH)
+		word := "no-tray"
+		if tray.Compiled {
+			word = "tray"
+		}
+		fmt.Fprintf(env.Stdout, "claude-usage %s %s/%s %s\n", version.Version, runtime.GOOS, runtime.GOARCH, word)
 		return 0
 	case "help", "-h", "--help":
 		fmt.Fprint(env.Stdout, usageText)

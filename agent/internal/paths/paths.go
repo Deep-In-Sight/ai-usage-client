@@ -16,6 +16,8 @@ const (
 	LatestFile   = "latest.json"
 	StatusFile   = "status.json"
 	LockFile     = "run.lock"
+	NotifyFile   = "notify-pending" // install writes it; the next tray run shows the notice once
+	LogFile      = "agent.log"      // where a run without a console writes its log
 )
 
 // Dirs are the agent's locations for the current OS user.

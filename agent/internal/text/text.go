@@ -27,3 +27,23 @@ const (
 	StaleMark     = " ⚠"
 	Sep           = "  ·  "
 )
+
+// Notices shown once after an install or upgrade (Linux and Windows as an
+// OS notification, macOS as the menu bar title for a while).
+const (
+	NoticeWindows = "Claude Usage is running. Its icon is under the ^ arrow on the taskbar; drag it onto the taskbar to keep it in view."
+	NoticeLinux   = "Claude Usage is running. Its icon is in the top bar."
+	NoticeDarwin  = "Claude Usage is running"
+	RemoveFailed  = "Claude Usage could not be removed completely: "
+)
+
+// Notice is the once-only notice for goos.
+func Notice(goos string) string {
+	switch goos {
+	case "windows":
+		return NoticeWindows
+	case "darwin":
+		return NoticeDarwin
+	}
+	return NoticeLinux
+}

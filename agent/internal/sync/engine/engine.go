@@ -185,11 +185,19 @@ func (e *Engine) RequestFresh() {
 	}
 }
 
-// SetClientMode sets what the next requests report as client.mode.
+// SetClientMode sets what the next requests report as client.mode; a change
+// wakes Run so the server hears it soon.
 func (e *Engine) SetClientMode(mode string) {
 	e.modeMu.Lock()
+	changed := e.clientMode != mode
 	e.clientMode = mode
 	e.modeMu.Unlock()
+	if changed {
+		select {
+		case e.wake <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (e *Engine) currentClientMode() string {

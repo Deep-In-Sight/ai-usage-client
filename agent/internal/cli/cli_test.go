@@ -18,6 +18,7 @@ import (
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/paths"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/procs"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/status"
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/tray"
 )
 
 const validConfig = `{"server_urls":["http://claude-usage.local","http://192.0.2.10:8700"],"ingest_key":"test-ingest-key-0123456789"}`
@@ -101,7 +102,11 @@ func (te *testEnv) main(args ...string) int {
 func TestVersion(t *testing.T) {
 	te := newEnv(t)
 	eq(t, te.main("version"), 0)
-	eq(t, te.out.String(), "claude-usage 0.0.0-dev "+runtime.GOOS+"/"+runtime.GOARCH+"\n")
+	word := "no-tray"
+	if tray.Compiled {
+		word = "tray"
+	}
+	eq(t, te.out.String(), "claude-usage 0.0.0-dev "+runtime.GOOS+"/"+runtime.GOARCH+" "+word+"\n")
 }
 
 func TestUnknownCommandAndNoArgsUsage(t *testing.T) {
