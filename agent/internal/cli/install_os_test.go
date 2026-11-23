@@ -453,6 +453,8 @@ func TestInstallSweepsRemovedExes(t *testing.T) {
 
 func TestUninstallKeepsEntryWhenExeCannotMove(t *testing.T) {
 	te, rec, _, _, _ := osEnv(t, "windows")
+	// the Windows layout: the executable is not inside the data folder
+	te.Dirs.InstallExe = filepath.Join(t.TempDir(), "Programs", "ClaudeUsage", "claude-usage.exe")
 	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
 	te.Exe = te.Dirs.InstallExe
 	te.vars["TEMP"] = filepath.Join(t.TempDir(), "missing", "deeper") // the move fails
