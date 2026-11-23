@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/anthropic"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/autostart"
@@ -204,7 +205,22 @@ func runCmd(env Env, args []string) int {
 	if !ok {
 		e.SetClientMode("headless")
 		logger.Printf("no tray (%s): running without an icon", reason)
-		return withoutTray()
+		_ = os.Remove(marker)
+		// The tray host can come later (an extension switched on after
+		// login): look again now and then.
+		for !ok {
+			select {
+			case <-ctx.Done():
+				return finish()
+			case <-time.After(trayRecheck):
+			}
+			ok, _ = available(ctx)
+			if ctx.Err() != nil {
+				return finish()
+			}
+		}
+		e.SetClientMode("tray")
+		logger.Print("tray found: showing the icon")
 	}
 	notice := ""
 	if _, err := os.Stat(marker); err == nil {
@@ -223,6 +239,9 @@ func runCmd(env Env, args []string) int {
 	// 6: Quit, Remove or a signal.
 	return finish()
 }
+
+// trayRecheck is how often a run without a tray looks for one again.
+var trayRecheck = 5 * time.Minute
 
 // logOutput is where run logs: standard error, and on Windows (where the
 // agent has no console) also the data folder's agent.log, restarted when it

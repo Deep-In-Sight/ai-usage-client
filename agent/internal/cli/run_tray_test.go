@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -348,4 +349,34 @@ func TestMacLogIsCutAtStart(t *testing.T) {
 	if st.Size() > 1<<20 {
 		t.Fatalf("agent.log is still %d bytes", st.Size())
 	}
+}
+
+func TestLateTrayHostIsPickedUp(t *testing.T) {
+	old := trayRecheck
+	trayRecheck = 50 * time.Millisecond
+	t.Cleanup(func() { trayRecheck = old })
+	fs := newFakeServer(t)
+	te := trayEnv(t, fs)
+	var checks atomic.Int32
+	te.TrayAvailable = func(context.Context) (bool, string) {
+		if checks.Add(1) < 3 {
+			return false, "no StatusNotifierWatcher"
+		}
+		return true, ""
+	}
+	shown := make(chan struct{})
+	te.Tray = func(ctx context.Context, c tray.Controller, u <-chan struct{}, notice string) error {
+		close(shown)
+		<-ctx.Done()
+		return nil
+	}
+	cancel, code := te.mainAsync("run")
+	select {
+	case <-shown:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tray never came")
+	}
+	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) > 0 && modeOf(r[len(r)-1]) == "tray" })
+	cancel()
+	eq(t, waitCode(t, code), 0)
 }
