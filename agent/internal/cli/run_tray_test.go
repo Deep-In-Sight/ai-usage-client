@@ -334,3 +334,18 @@ func TestTrayRemoveRemovesEverything(t *testing.T) {
 		t.Fatalf("%v", calls)
 	}
 }
+
+func TestMacLogIsCutAtStart(t *testing.T) {
+	fs := newFakeServer(t)
+	te := trayEnv(t, fs)
+	te.GOOS = "darwin"
+	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error { return nil }
+	logPath := te.Dirs.File(paths.LogFile) // launchd appends here
+	must(t, os.WriteFile(logPath, make([]byte, 2<<20), 0o600))
+	eq(t, te.main("run"), 0)
+	st, err := os.Stat(logPath)
+	must(t, err)
+	if st.Size() > 1<<20 {
+		t.Fatalf("agent.log is still %d bytes", st.Size())
+	}
+}

@@ -225,8 +225,15 @@ func runCmd(env Env, args []string) int {
 
 // logOutput is where run logs: standard error, and on Windows (where the
 // agent has no console) also the data folder's agent.log, restarted when it
-// grows past 1 MiB.
+// grows past 1 MiB. On macOS launchd writes agent.log; it is cut the same way.
 func logOutput(env Env) (io.Writer, func()) {
+	if env.goos() == "darwin" {
+		// launchd appends standard output and error to agent.log for ever.
+		p := env.Dirs.File(paths.LogFile)
+		if st, err := os.Stat(p); err == nil && st.Size() > 1<<20 {
+			_ = os.Truncate(p, 0)
+		}
+	}
 	if env.goos() != "windows" {
 		return env.Stderr, func() {}
 	}
