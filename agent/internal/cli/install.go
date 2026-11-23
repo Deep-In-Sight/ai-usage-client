@@ -83,12 +83,17 @@ func install(env Env, args []string) (int, string) {
 		return fail(err.Error())
 	}
 	cfg.ClaudeConfigDir = ""
+	keptDir := false
 	if d := env.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
 		abs, err := filepath.Abs(d)
 		if err != nil {
 			return fail("CLAUDE_CONFIG_DIR: " + err.Error())
 		}
 		cfg.ClaudeConfigDir = abs
+	} else if old, err := config.Load(env.Dirs.File(paths.ConfigFile)); err == nil && old.ClaudeConfigDir != "" {
+		// An upgrade from a shell without the variable keeps the folder the
+		// agent was installed with.
+		cfg.ClaudeConfigDir, keptDir = old.ClaudeConfigDir, true
 	}
 	if err := cfg.Validate(); err != nil {
 		return fail(err.Error())
@@ -261,6 +266,13 @@ func install(env Env, args []string) (int, string) {
 	fmt.Fprintln(env.Stdout, "config:", cfgDst)
 	fmt.Fprintln(env.Stdout, "autostart:", autostartLine)
 	fmt.Fprintln(env.Stdout, "Claude Code sign-in:", signIn)
+	if cfg.ClaudeConfigDir != "" {
+		line := "Claude Code folder: " + cfg.ClaudeConfigDir
+		if keptDir {
+			line += " " + text.KeptClaudeDir
+		}
+		fmt.Fprintln(env.Stdout, line)
+	}
 	if line := text.Installed(goos, headless); line != "" {
 		fmt.Fprintln(env.Stdout, line)
 	}

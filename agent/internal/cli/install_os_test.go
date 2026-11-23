@@ -484,3 +484,18 @@ func TestRemoveDataRefusesAFolderThatIsNotOurs(t *testing.T) {
 		t.Fatal("file removed")
 	}
 }
+
+func TestUpgradeKeepsClaudeConfigDir(t *testing.T) {
+	te, _, _, _, _ := osEnv(t, "linux")
+	dir := filepath.Join(t.TempDir(), "claude-work")
+	te.vars["CLAUDE_CONFIG_DIR"] = dir
+	cfgPath := writeCfg(t, validConfig)
+	eq(t, te.main("install", "--config", cfgPath), 0)
+	delete(te.vars, "CLAUDE_CONFIG_DIR") // upgraded from another terminal
+	te.out.Reset()
+	eq(t, te.main("install", "--config", cfgPath), 0)
+	c, err := config.Load(te.Dirs.File(paths.ConfigFile))
+	must(t, err)
+	eq(t, c.ClaudeConfigDir, dir)
+	contains(t, te.out.String(), "Claude Code folder: "+dir+" (kept from the previous install; set CLAUDE_CONFIG_DIR to change it)")
+}
