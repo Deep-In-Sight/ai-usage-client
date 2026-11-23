@@ -1,13 +1,9 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/autostart"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/procs"
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/text"
 )
 
 func uninstallCmd(env Env, args []string) int {
@@ -15,41 +11,16 @@ func uninstallCmd(env Env, args []string) int {
 		fmt.Fprintf(env.Stderr, "claude-usage uninstall: unknown argument %q\n", args[0])
 		return 2
 	}
-	ctx := background()
-	method, err := env.Autostart(true)
-	switch {
-	case err == nil:
-		if err := method.Stop(ctx); err != nil {
-			fmt.Fprintln(env.Stderr, "claude-usage uninstall:", err)
-		}
-		if err := method.Unregister(ctx); err != nil {
-			fmt.Fprintln(env.Stderr, "claude-usage uninstall:", err)
-		}
-	case !errors.Is(err, autostart.ErrUnsupported):
+	if err := newRemover(env).run(removalSteps(env.goos(), false)); err != nil {
 		fmt.Fprintln(env.Stderr, "claude-usage uninstall:", err)
-	}
-	if pids, err := procs.FindByExe(env.Dirs.InstallExe); err == nil {
-		procs.Kill(pids, os.Getpid())
-	}
-	failed := false
-	if err := os.Remove(env.Dirs.InstallExe); err != nil && !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintln(env.Stderr, "claude-usage uninstall:", err)
-		failed = true
-	}
-	// Only ever remove our own folder.
-	switch filepath.Base(env.Dirs.Data) {
-	case "claude-usage", "ClaudeUsage":
-		if err := os.RemoveAll(env.Dirs.Data); err != nil {
-			fmt.Fprintln(env.Stderr, "claude-usage uninstall:", err)
-			failed = true
+		if !env.hasConsole() {
+			env.alert(text.App, err.Error())
 		}
-	default:
-		fmt.Fprintln(env.Stderr, "claude-usage uninstall: unexpected data folder, left in place:", env.Dirs.Data)
-		failed = true
-	}
-	if failed {
 		return 1
 	}
-	fmt.Fprintln(env.Stdout, "removed")
+	fmt.Fprintln(env.Stdout, text.Removed)
+	if !env.hasConsole() {
+		env.alert(text.App, text.AlertRemoved)
+	}
 	return 0
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/sync/engine"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/tray"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/version"
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/winapp"
 )
 
 // Env is everything the commands touch outside the process, so tests can
@@ -36,16 +37,64 @@ type Env struct {
 	Clock         clock.Clock
 	Autostart     func(headless bool) (autostart.Method, error)
 
-	GOOS          string                                                                                     // "" means runtime.GOOS
-	Context       context.Context                                                                            // nil means context.Background(); tests cancel it like SIGTERM
-	TrayAvailable func(ctx context.Context) (bool, string)                                                   // nil means tray.Available
-	Tray          func(ctx context.Context, c tray.Controller, updates <-chan struct{}, notice string) error // nil means tray.Run
-	Syncer        func(cfg config.Config, userAgent string) engine.Syncer                                    // nil means the real sync client
+	// GOOS is the OS the commands act for ("" means runtime.GOOS).
+	GOOS string
+	// Context ends a run like SIGTERM (nil means context.Background()).
+	Context context.Context
+	// TrayAvailable and Tray default to tray.Available and tray.Run.
+	TrayAvailable func(ctx context.Context) (bool, string)
+	Tray          func(ctx context.Context, c tray.Controller, updates <-chan struct{}, notice string) error
+	// Syncer makes the sync client (nil means the real one).
+	Syncer func(cfg config.Config, userAgent string) engine.Syncer
+	// HasConsole (nil means true) and Alert (nil means none): a Windows GUI
+	// executable started from Explorer reports in a message box.
+	HasConsole func() bool
+	Alert      func(title, text string)
+	// WinApp is the "Installed apps" entry (nil means the real one).
+	WinApp WinApp
+	// Others are the autostart methods For did not pick (nil means none).
+	Others func(headless bool) []autostart.Method
 }
 
 // autostartOptions are the autostart inputs for this user.
 func autostartOptions(d paths.Dirs, headless bool, run autostart.Runner, start func(string, ...string) error) autostart.Options {
 	return autostart.Options{Headless: headless, Home: d.Home, DataDir: d.Data, Exe: d.InstallExe, Run: run, Start: start}
+}
+
+// WinApp writes and removes the Windows "Installed apps" entry.
+type WinApp interface {
+	Register(winapp.Entry) error
+	Unregister() error
+}
+
+func (env Env) hasConsole() bool { return env.HasConsole == nil || env.HasConsole() }
+
+func (env Env) alert(title, text string) {
+	if env.Alert != nil {
+		env.Alert(title, text)
+	}
+}
+
+func (env Env) winApp() WinApp {
+	if env.WinApp == nil {
+		return winAppFuncs{}
+	}
+	return env.WinApp
+}
+
+func (env Env) others(headless bool) []autostart.Method {
+	if env.Others == nil {
+		return nil
+	}
+	return env.Others(headless)
+}
+
+// tempDir is %TEMP% (or the OS default).
+func (env Env) tempDir() string {
+	if d := env.Getenv("TEMP"); d != "" {
+		return d
+	}
+	return os.TempDir()
 }
 
 func (env Env) goos() string {
@@ -64,6 +113,12 @@ func (env Env) ctx() context.Context {
 
 // DefaultEnv is the real environment.
 func DefaultEnv() Env {
+	args := os.Args[1:]
+	// A Windows GUI executable has no console: when started from cmd or
+	// PowerShell for a command that prints, write to theirs.
+	if runtime.GOOS == "windows" && !winapp.HasConsole() && printsOutput(args) {
+		winapp.AttachParentConsole()
+	}
 	exe, err := os.Executable()
 	if err == nil {
 		if r, err2 := filepath.EvalSymlinks(exe); err2 == nil {
@@ -74,8 +129,11 @@ func DefaultEnv() Env {
 	if derr != nil {
 		fmt.Fprintln(os.Stderr, "claude-usage:", derr)
 	}
+	opts := func(headless bool) autostart.Options {
+		return autostartOptions(dirs, headless, autostart.ExecRunner, procs.StartDetached)
+	}
 	return Env{
-		Args:          os.Args[1:],
+		Args:          args,
 		Getenv:        os.Getenv,
 		Stdout:        os.Stdout,
 		Stderr:        os.Stderr,
@@ -84,10 +142,11 @@ func DefaultEnv() Env {
 		Run:           autostart.ExecRunner,
 		StartDetached: procs.StartDetached,
 		Clock:         clock.Real{},
-		Autostart: func(headless bool) (autostart.Method, error) {
-			return autostart.For(autostartOptions(dirs, headless, autostart.ExecRunner, procs.StartDetached))
-		},
-		GOOS: runtime.GOOS,
+		Autostart:     func(headless bool) (autostart.Method, error) { return autostart.For(opts(headless)) },
+		Others:        func(headless bool) []autostart.Method { return autostart.Others(opts(headless)) },
+		HasConsole:    winapp.HasConsole,
+		Alert:         winapp.Alert,
+		GOOS:          runtime.GOOS,
 		TrayAvailable: func(ctx context.Context) (bool, string) {
 			return tray.Available(ctx, os.Getenv)
 		},
@@ -138,11 +197,28 @@ func Main(env Env) int {
 	return 2
 }
 
+// printsOutput: the commands whose output someone reads in a console.
+func printsOutput(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	switch args[0] {
+	case "status", "version", "--version", "uninstall", "help", "-h", "--help":
+		return true
+	}
+	return false
+}
+
 // noArgs: a downloaded executable next to its config.json installs itself;
-// anything else prints the usage.
+// on Windows the installed executable runs (it has no console to show the
+// usage in); anything else prints the usage.
 func noArgs(env Env) int {
+	installed := samePath(env.Exe, env.Dirs.InstallExe)
+	if installed && env.goos() == "windows" {
+		return runCmd(env, nil)
+	}
 	adjacent := filepath.Join(filepath.Dir(env.Exe), paths.ConfigFile)
-	if _, err := os.Stat(adjacent); err == nil && !samePath(env.Exe, env.Dirs.InstallExe) {
+	if _, err := os.Stat(adjacent); err == nil && !installed {
 		return installCmd(env, nil)
 	}
 	fmt.Fprint(env.Stderr, usageText)

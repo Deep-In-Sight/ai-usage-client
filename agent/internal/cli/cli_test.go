@@ -19,6 +19,7 @@ import (
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/procs"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/status"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/tray"
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/winapp"
 )
 
 const validConfig = `{"server_urls":["http://claude-usage.local","http://192.0.2.10:8700"],"ingest_key":"test-ingest-key-0123456789"}`
@@ -93,6 +94,10 @@ func newEnv(t *testing.T) *testEnv {
 	te.Env.Autostart = func(headless bool) (autostart.Method, error) {
 		return autostart.For(autostartOptions(dirs, headless, te.runner.run, te.Env.StartDetached))
 	}
+	te.Env.Others = func(headless bool) []autostart.Method {
+		return autostart.Others(autostartOptions(dirs, headless, te.runner.run, te.Env.StartDetached))
+	}
+	te.Env.WinApp = noWinApp{}
 	return te
 }
 
@@ -199,3 +204,23 @@ func TestStatusShowsSignInProblem(t *testing.T) {
 	eq(t, te.main("status"), 0)
 	contains(t, te.out.String(), "Sign-in:    ok (account file larger than 32 MiB)")
 }
+
+func read(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	must(t, err)
+	return string(b)
+}
+
+func writeCfg(t *testing.T, s string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "config.json")
+	must(t, os.WriteFile(p, []byte(s), 0o600))
+	return p
+}
+
+// noWinApp keeps tests away from the real registry.
+type noWinApp struct{}
+
+func (noWinApp) Register(winapp.Entry) error { return nil }
+func (noWinApp) Unregister() error           { return nil }

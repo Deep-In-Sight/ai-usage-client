@@ -15,20 +15,6 @@ import (
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/paths"
 )
 
-func read(t *testing.T, p string) string {
-	t.Helper()
-	b, err := os.ReadFile(p)
-	must(t, err)
-	return string(b)
-}
-
-func writeCfg(t *testing.T, s string) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "config.json")
-	must(t, os.WriteFile(p, []byte(s), 0o600))
-	return p
-}
-
 func (te *testEnv) unitPath() string {
 	return filepath.Join(te.home, ".config", "systemd", "user", "claude-usage.service")
 }

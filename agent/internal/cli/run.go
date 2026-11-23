@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/anthropic"
@@ -56,7 +57,10 @@ func runCmd(env Env, args []string) int {
 		fmt.Fprintln(env.Stderr, "claude-usage: lock:", err)
 		return 1
 	}
-	defer unlock()
+	var release func() // unlock and close the log, once
+	var releaseOnce sync.Once
+	release = func() { releaseOnce.Do(unlock) }
+	defer func() { release() }()
 
 	cfg, err := config.Load(env.Dirs.File(paths.ConfigFile))
 	if err != nil {
@@ -64,8 +68,14 @@ func runCmd(env Env, args []string) int {
 		return 1
 	}
 	logOut, closeLog := logOutput(env)
-	defer closeLog()
 	logger := log.New(logOut, "", 0)
+	release = func() {
+		releaseOnce.Do(func() {
+			unlock()
+			logger.SetOutput(env.Stderr)
+			closeLog()
+		})
+	}
 	if env.goos() == "windows" {
 		logger.SetFlags(log.LstdFlags)
 	}
@@ -156,6 +166,18 @@ func runCmd(env Env, args []string) int {
 		<-engineDone
 		logger.Print("claude-usage stopped")
 		return 0
+	}
+	// The tray's Remove: this process stops its engine and lets go of
+	// run.lock and the log before removing everything.
+	ctrl.remove = func() error {
+		r := newRemover(env)
+		r.stopEngine = func() { cancelEngine(); <-engineDone }
+		r.unlock = release
+		err := r.run(removalSteps(env.goos(), true))
+		if err != nil {
+			fmt.Fprintln(env.Stderr, "claude-usage: remove:", err)
+		}
+		return err
 	}
 	marker := env.Dirs.File(paths.NotifyFile)
 	withoutTray := func() int {

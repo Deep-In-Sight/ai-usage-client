@@ -8,12 +8,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/autostart"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/clock"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/config"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/paths"
@@ -303,4 +306,30 @@ func TestStatusShowsClientMode(t *testing.T) {
 	must(t, status.Write(te.Dirs.File(paths.StatusFile), status.Snapshot{Mode: "coordinated", Role: "standby", ClientMode: "tray", AuthState: "ok"}))
 	eq(t, te.main("status"), 0)
 	contains(t, te.out.String(), "Mode:       coordinated, standby (tray)")
+}
+
+func TestTrayRemoveRemovesEverything(t *testing.T) {
+	fs := newFakeServer(t)
+	te := trayEnv(t, fs)
+	rec := &recorder{}
+	main := &fakeMethod{name: "main", rec: rec, exe: te.Dirs.InstallExe}
+	te.Autostart = func(bool) (autostart.Method, error) { return main, nil }
+	te.Others = nil
+	te.WinApp = &fakeWinApp{rec: rec}
+	must(t, os.MkdirAll(filepath.Dir(te.Dirs.InstallExe), 0o755))
+	must(t, os.WriteFile(te.Dirs.InstallExe, []byte("BIN"), 0o755))
+	te.Tray = func(ctx context.Context, c tray.Controller, u <-chan struct{}, notice string) error {
+		fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 1 })
+		return c.Remove() // then Quit
+	}
+	eq(t, te.main("run"), 0)
+	for _, p := range []string{te.Dirs.Data, te.Dirs.InstallExe} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s left", p)
+		}
+	}
+	calls := rec.list()
+	if !slices.Contains(calls, "main.unregister") || !slices.Contains(calls, "winapp.unregister") {
+		t.Fatalf("%v", calls)
+	}
 }

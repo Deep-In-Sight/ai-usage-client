@@ -47,3 +47,34 @@ func Notice(goos string) string {
 	}
 	return NoticeLinux
 }
+
+// install and uninstall.
+const (
+	InstalledWindows    = "The Claude Usage icon is under the ^ arrow on the taskbar. Drag it onto the taskbar to keep it in view."
+	InstalledDarwin     = "Look for the Claude Usage ring in the menu bar."
+	InstalledLinux      = "Look for the Claude Usage ring in the top bar."
+	GnomeExtensionNote  = "Note: the Claude Usage GNOME extension is also installed and makes its own requests. Turn it off with: gnome-extensions disable claude-usage@localhost"
+	NotLasting          = "autostart could not be registered; the agent runs until you log out or restart"
+	LingerOff           = "linger is not enabled: the agent runs only while %s is logged in. To keep it running, ask an administrator to run: loginctl enable-linger %s"
+	SignInFound         = "found"
+	SignInNotFound      = "not found yet (the agent starts collecting once you sign in)"
+	AlertInstalled      = "Claude Usage is installed and running.\n\nIts icon is under the ^ arrow on the taskbar."
+	AlertInstallFailed  = "Claude Usage could not be installed:\n"
+	AlertRemoved        = "Claude Usage has been removed."
+	CannotRemoveRunning = "Could not remove %s while it is running; delete it after this window closes."
+	Removed             = "removed"
+)
+
+// Installed is the line that says where to find the agent after install
+// ("" on a Linux without a desktop).
+func Installed(goos string, headless bool) string {
+	switch {
+	case goos == "windows":
+		return InstalledWindows
+	case goos == "darwin":
+		return InstalledDarwin
+	case headless:
+		return ""
+	}
+	return InstalledLinux
+}

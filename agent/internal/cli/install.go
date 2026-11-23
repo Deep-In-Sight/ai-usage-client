@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
+	"strings"
 
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/autostart"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/config"
@@ -14,6 +14,9 @@ import (
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/osinfo"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/paths"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/procs"
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/text"
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/version"
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/winapp"
 )
 
 // Exit codes of install (shared with the server's install scripts).
@@ -23,63 +26,82 @@ const (
 	exitNotLasting = 10 // installed and running, but not after logout/reboot
 )
 
+// installCmd installs, then, without a console (a Windows executable
+// double-clicked next to its config.json), says how it went in a message box.
 func installCmd(env Env, args []string) int {
+	code, problem := install(env, args)
+	if !env.hasConsole() {
+		if code == exitOK || code == exitNotLasting {
+			env.alert(text.App, text.AlertInstalled)
+		} else {
+			env.alert(text.App, text.AlertInstallFailed+problem)
+		}
+	}
+	return code
+}
+
+// install returns the exit code and, on failure, the first error line.
+func install(env Env, args []string) (int, string) {
+	goos := env.goos()
+	failWith := func(code int, msg string) (int, string) {
+		fmt.Fprintln(env.Stderr, "claude-usage install: "+msg)
+		return code, firstLine(msg)
+	}
+	fail := func(msg string) (int, string) { return failWith(exitFailed, msg) }
+
 	cfgPath := filepath.Join(filepath.Dir(env.Exe), paths.ConfigFile)
-	headless := isHeadless(env.Getenv)
+	headless := goos == "linux" && isHeadless(env.Getenv)
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--headless":
 			headless = true
 		case "--config":
 			if i+1 >= len(args) {
-				fmt.Fprintln(env.Stderr, "claude-usage install: --config needs a path")
-				return 2
+				return failWith(2, "--config needs a path")
 			}
 			i++
 			cfgPath = args[i]
 		default:
-			fmt.Fprintf(env.Stderr, "claude-usage install: unknown argument %q\n", args[i])
-			return 2
+			return failWith(2, fmt.Sprintf("unknown argument %q", args[i]))
 		}
+	}
+	runArgs := []string{"run"}
+	if headless {
+		runArgs = append(runArgs, "--headless")
 	}
 	ctx := background()
 
 	// 1-3: everything that can fail before anything is changed.
 	b, err := os.ReadFile(cfgPath)
 	if err != nil {
-		fmt.Fprintln(env.Stderr, "claude-usage install: cannot read the config file:", err)
-		return exitFailed
+		return fail("cannot read the config file: " + err.Error())
 	}
 	cfg, err := config.Parse(b)
 	if err != nil {
-		fmt.Fprintln(env.Stderr, "claude-usage install:", err)
-		return exitFailed
+		return fail(err.Error())
 	}
 	cfg.ClaudeConfigDir = ""
 	if d := env.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
 		abs, err := filepath.Abs(d)
 		if err != nil {
-			fmt.Fprintln(env.Stderr, "claude-usage install: CLAUDE_CONFIG_DIR:", err)
-			return exitFailed
+			return fail("CLAUDE_CONFIG_DIR: " + err.Error())
 		}
 		cfg.ClaudeConfigDir = abs
 	}
 	if err := cfg.Validate(); err != nil {
-		fmt.Fprintln(env.Stderr, "claude-usage install:", err)
-		return exitFailed
+		return fail(err.Error())
 	}
 	method, err := env.Autostart(headless)
 	if errors.Is(err, autostart.ErrUnsupported) {
-		fmt.Fprintf(env.Stderr, "claude-usage install: autostart on %s is not implemented yet\n", runtime.GOOS)
-		return exitFailed
+		return fail("autostart on " + goos + " is not supported")
 	}
 	if err != nil {
-		fmt.Fprintln(env.Stderr, "claude-usage install:", err)
-		return exitFailed
+		return fail(err.Error())
 	}
+	others := env.others(headless)
 	// Linger first on headless Linux: from "su -" or "sudo -u" there is no
 	// user manager yet, and enabling linger is what starts one.
-	lingerTried := headless && runtime.GOOS == "linux"
+	lingerTried := headless && goos == "linux"
 	var linger autostart.Linger
 	lingerDetail := ""
 	user := osinfo.Current().OSUser
@@ -93,16 +115,18 @@ func installCmd(env Env, args []string) int {
 	if !samePath(env.Exe, env.Dirs.InstallExe) {
 		staged, err = stageExe(env.Exe, env.Dirs.InstallExe)
 		if err != nil {
-			fmt.Fprintln(env.Stderr, "claude-usage install: copying the executable:", err)
-			return exitFailed
+			return fail("copying the executable: " + err.Error())
 		}
 		defer os.Remove(staged) // a no-op once renamed
 	}
 
-	// 4: stop what runs now (an upgrade).
-	hadUnit := method.State(ctx) != "not installed"
-	if err := method.Stop(ctx); err != nil {
-		fmt.Fprintln(env.Stderr, "claude-usage install: stopping the old service:", err)
+	// 4: stop what runs now (an upgrade), by every method and by path.
+	st := method.State(ctx)
+	hadEntry := st != "not installed" && st != "not registered"
+	for _, m := range append([]autostart.Method{method}, others...) {
+		if err := m.Stop(ctx); err != nil {
+			fmt.Fprintln(env.Stderr, "claude-usage install: stopping the old agent:", err)
+		}
 	}
 	killed := 0
 	if pids, err := procs.FindByExe(env.Dirs.InstallExe); err == nil {
@@ -115,30 +139,41 @@ func installCmd(env Env, args []string) int {
 			return
 		}
 		switch {
-		case hadUnit && available:
-			if err := method.Register(ctx, env.Dirs.InstallExe); err != nil {
+		case hadEntry && available:
+			if err := method.Register(ctx, env.Dirs.InstallExe); err != nil && !errors.Is(err, autostart.ErrStartFailed) {
 				fmt.Fprintln(env.Stderr, "claude-usage install: restarting the previous agent:", err)
 			}
 		case killed > 0:
-			_ = env.StartDetached(env.Dirs.InstallExe, "run", "--headless")
+			_ = env.StartDetached(env.Dirs.InstallExe, runArgs...)
 		}
 	}
 
 	// 5b: the executable.
 	if staged != "" {
 		if err := os.Rename(staged, env.Dirs.InstallExe); err != nil {
-			fmt.Fprintln(env.Stderr, "claude-usage install: replacing the executable:", err)
 			restore()
-			return exitFailed
+			return fail("replacing the executable: " + err.Error())
 		}
 	}
 
 	// 6: the config (device id, backlog and state stay as they are).
 	cfgDst := env.Dirs.File(paths.ConfigFile)
 	if err := config.Save(cfgDst, cfg); err != nil {
-		fmt.Fprintln(env.Stderr, "claude-usage install: writing the config:", err)
 		restore()
-		return exitFailed
+		return fail("writing the config: " + err.Error())
+	}
+	// The "Installed apps" entry, and the notice the next tray run shows once.
+	if goos == "windows" {
+		var size int64
+		if fi, err := os.Stat(env.Dirs.InstallExe); err == nil {
+			size = fi.Size()
+		}
+		if err := env.winApp().Register(winapp.EntryFor(env.Dirs.InstallExe, version.Version, size, env.Clock.Now())); err != nil {
+			fmt.Fprintln(env.Stderr, "claude-usage install: Installed apps entry:", err)
+		}
+	}
+	if err := os.WriteFile(env.Dirs.File(paths.NotifyFile), []byte(version.Version), 0o600); err != nil {
+		fmt.Fprintln(env.Stderr, "claude-usage install: notice marker:", err)
 	}
 
 	// 7: autostart and start.
@@ -146,26 +181,44 @@ func installCmd(env Env, args []string) int {
 	registered := false
 	autostartLine := ""
 	if available {
-		if err := method.Register(ctx, env.Dirs.InstallExe); err != nil {
-			fmt.Fprintln(env.Stderr, "claude-usage install:", err)
-		} else {
+		err := method.Register(ctx, env.Dirs.InstallExe)
+		switch {
+		case err == nil:
 			registered = true
 			autostartLine = fmt.Sprintf("%s (%s)", method.Name(), method.State(ctx))
+		case errors.Is(err, autostart.ErrStartFailed):
+			// The entry is there for the next login; start the agent now.
+			fmt.Fprintln(env.Stderr, "claude-usage install:", err)
+			if err := env.StartDetached(env.Dirs.InstallExe, runArgs...); err != nil {
+				return fail("starting the agent: " + err.Error())
+			}
+			registered = true
+			autostartLine = method.Name() + " (registered; started directly)"
+		case method.Name() == "systemd-user":
+			// As before the tray: run until logout and say so (exit 10).
+			fmt.Fprintln(env.Stderr, "claude-usage install:", err)
+		default:
+			return fail(err.Error())
 		}
 	}
-	if !registered {
-		if err := env.StartDetached(env.Dirs.InstallExe, "run", "--headless"); err != nil {
-			fmt.Fprintln(env.Stderr, "claude-usage install: starting the agent:", err)
-			return exitFailed
+	if registered {
+		for _, o := range others {
+			if err := o.Unregister(ctx); err != nil {
+				fmt.Fprintln(env.Stderr, "claude-usage install: removing", o.Name()+":", err)
+			}
 		}
-		fmt.Fprintln(env.Stdout, "autostart could not be registered; the agent runs until you log out or restart")
+	} else {
+		if err := env.StartDetached(env.Dirs.InstallExe, runArgs...); err != nil {
+			return fail("starting the agent: " + err.Error())
+		}
+		fmt.Fprintln(env.Stdout, text.NotLasting)
 		autostartLine = "none (started in the background)"
 		code = exitNotLasting
 	}
 
 	// 8: linger, so the service runs without a login.
 	if lingerTried && linger != autostart.LingerEnabled {
-		fmt.Fprintf(env.Stdout, "linger is not enabled: the agent runs only while %s is logged in. To keep it running, ask an administrator to run: loginctl enable-linger %s\n", user, user)
+		fmt.Fprintf(env.Stdout, text.LingerOff+"\n", user, user)
 		if lingerDetail != "" {
 			fmt.Fprintln(env.Stderr, "loginctl:", lingerDetail)
 		}
@@ -175,15 +228,30 @@ func installCmd(env Env, args []string) int {
 	// 9: summary.
 	ro := readerOptions(cfg, env.Dirs)
 	ro.Clock = env.Clock
-	signIn := "not found yet (the agent starts collecting once you sign in)"
+	signIn := text.SignInNotFound
 	if creds.NewReader(ro).Current(ctx).HasToken {
-		signIn = "found"
+		signIn = text.SignInFound
 	}
 	fmt.Fprintln(env.Stdout, "installed:", env.Dirs.InstallExe)
 	fmt.Fprintln(env.Stdout, "config:", cfgDst)
 	fmt.Fprintln(env.Stdout, "autostart:", autostartLine)
 	fmt.Fprintln(env.Stdout, "Claude Code sign-in:", signIn)
-	return code
+	if line := text.Installed(goos, headless); line != "" {
+		fmt.Fprintln(env.Stdout, line)
+	}
+	if goos == "linux" {
+		ext := filepath.Join(env.Dirs.Home, ".local", "share", "gnome-shell", "extensions", "claude-usage@localhost")
+		if _, err := os.Stat(ext); err == nil {
+			fmt.Fprintln(env.Stdout, text.GnomeExtensionNote)
+		}
+	}
+	return code, ""
+}
+
+// firstLine is s up to its first line break.
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
 }
 
 // stageExe copies src to a temporary file in dst's folder (mode 0755) and
