@@ -185,6 +185,7 @@ func install(env Env, args []string) (int, string) {
 	}
 	// The "Installed apps" entry, and the notice the next tray run shows once.
 	if goos == "windows" {
+		sweepRemoved(env)
 		var size int64
 		if fi, err := os.Stat(env.Dirs.InstallExe); err == nil {
 			size = fi.Size()

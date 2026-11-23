@@ -434,3 +434,38 @@ func TestFailedReplaceRestartsTheOldAgent(t *testing.T) {
 		t.Fatalf("old agent not started again: %v", calls)
 	}
 }
+
+func TestInstallSweepsRemovedExes(t *testing.T) {
+	te, _, _, _, _ := osEnv(t, "windows")
+	tmp := t.TempDir()
+	te.vars["TEMP"] = tmp
+	for _, n := range []string{"claude-usage-removed-123.exe", "claude-usage-removed-9.exe", "other.exe", "claude-usage-removed-x.exe", "claude-usage-removed-1.txt"} {
+		must(t, os.WriteFile(filepath.Join(tmp, n), []byte("x"), 0o644))
+	}
+	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
+	left, _ := os.ReadDir(tmp)
+	var names []string
+	for _, e := range left {
+		names = append(names, e.Name())
+	}
+	eq(t, names, []string{"claude-usage-removed-1.txt", "claude-usage-removed-x.exe", "other.exe"})
+}
+
+func TestUninstallKeepsEntryWhenExeCannotMove(t *testing.T) {
+	te, rec, _, _, _ := osEnv(t, "windows")
+	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
+	te.Exe = te.Dirs.InstallExe
+	te.vars["TEMP"] = filepath.Join(t.TempDir(), "missing", "deeper") // the move fails
+	rec.calls = nil
+	te.out.Reset()
+	eq(t, te.main("uninstall"), 0)
+	calls := rec.list()
+	un, re := slices.Index(calls, "winapp.unregister"), slices.Index(calls, "winapp.register")
+	if un < 0 || re < un {
+		t.Fatalf("entry not put back: %v", calls)
+	}
+	contains(t, te.out.String(), "Could not remove "+te.Dirs.InstallExe+" while it is running")
+	if _, err := os.Stat(te.Dirs.InstallExe); err != nil {
+		t.Fatal("executable gone although it could not be moved")
+	}
+}

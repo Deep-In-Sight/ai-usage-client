@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/autostart"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/procs"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/text"
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/version"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/winapp"
 )
 
@@ -90,6 +92,12 @@ func (r *remover) step(name string) error {
 			dst := filepath.Join(env.tempDir(), fmt.Sprintf("claude-usage-removed-%d.exe", os.Getpid()))
 			if err := os.Rename(exe, dst); err != nil {
 				fmt.Fprintf(env.Stdout, text.CannotRemoveRunning+"\n", exe)
+				// Keep it findable: put the "Installed apps" entry back.
+				var size int64
+				if fi, err := os.Stat(exe); err == nil {
+					size = fi.Size()
+				}
+				_ = env.winApp().Register(winapp.EntryFor(exe, version.Version, size, env.Clock.Now()))
 			}
 			return nil
 		}
@@ -134,3 +142,18 @@ type winAppFuncs struct{}
 
 func (winAppFuncs) Register(e winapp.Entry) error { return winapp.Register(e) }
 func (winAppFuncs) Unregister() error             { return winapp.Unregister() }
+
+// removedExe is the name a self-removing Windows executable is moved to.
+var removedExe = regexp.MustCompile(`^claude-usage-removed-[0-9]+\.exe$`)
+
+// sweepRemoved deletes executables an earlier uninstall moved to %TEMP%
+// (only names of exactly that form).
+func sweepRemoved(env Env) {
+	dir := env.tempDir()
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if removedExe.MatchString(e.Name()) {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+}

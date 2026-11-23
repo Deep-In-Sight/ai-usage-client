@@ -62,7 +62,7 @@ const (
 	AlertInstalled      = "Claude Usage is installed and running.\n\nIts icon is under the ^ arrow on the taskbar."
 	AlertInstallFailed  = "Claude Usage could not be installed:\n"
 	AlertRemoved        = "Claude Usage has been removed."
-	CannotRemoveRunning = "Could not remove %s while it is running; delete it after this window closes."
+	CannotRemoveRunning = "Could not remove %s while it is running; delete it after this window closes. It stays listed in Installed apps until then."
 	Removed             = "removed"
 )
 
