@@ -1,0 +1,59 @@
+{
+  "name": "05-unsupported-schema",
+  "description": "A schema other than 1 gives 400 unsupported_schema",
+  "ingest_key": "test-ingest-key-0123456789",
+  "server": {
+    "server_urls": [
+      "http://claude-usage.local",
+      "http://claude-usage.local:8700",
+      "http://192.0.2.10:8700"
+    ],
+    "client_latest_version": null
+  },
+  "steps": [
+    {
+      "at": "2026-01-05T09:00:00.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 2,
+          "client": {
+            "version": "1.0.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "headless"
+          },
+          "device": {
+            "id": "dev-a",
+            "hostname": "TEST-PC-A",
+            "os_user": "user-a"
+          },
+          "account": {
+            "uuid": "acc-1",
+            "email": "user-a@example.com",
+            "display_name": "User A",
+            "organization_name": "Example",
+            "organization_type": "claude_max",
+            "subscription_type": "max",
+            "rate_limit_tier": "default_claude_max_20x"
+          },
+          "auth": {
+            "state": "ok",
+            "token_expires_at": "2026-01-05T17:00:00.000Z"
+          },
+          "results": [],
+          "want_fresh": false
+        }
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "unsupported_schema"
+        }
+      }
+    }
+  ]
+}

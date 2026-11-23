@@ -1,0 +1,258 @@
+{
+  "name": "07-want-fresh",
+  "description": "When a standby device sends want_fresh (last fetch over 60 seconds ago), the poller is told to fetch on its next sync",
+  "ingest_key": "test-ingest-key-0123456789",
+  "server": {
+    "server_urls": [
+      "http://claude-usage.local",
+      "http://claude-usage.local:8700",
+      "http://192.0.2.10:8700"
+    ],
+    "client_latest_version": null
+  },
+  "steps": [
+    {
+      "at": "2026-01-05T09:00:00.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 1,
+          "client": {
+            "version": "1.0.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "headless"
+          },
+          "device": {
+            "id": "dev-a",
+            "hostname": "TEST-PC-A",
+            "os_user": "user-a"
+          },
+          "account": {
+            "uuid": "acc-1",
+            "email": "user-a@example.com",
+            "display_name": "User A",
+            "organization_name": "Example",
+            "organization_type": "claude_max",
+            "subscription_type": "max",
+            "rate_limit_tier": "default_claude_max_20x"
+          },
+          "auth": {
+            "state": "ok",
+            "token_expires_at": "2026-01-05T17:00:00.000Z"
+          },
+          "results": [],
+          "want_fresh": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "fetch_now": true
+        }
+      }
+    },
+    {
+      "at": "2026-01-05T09:00:05.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 1,
+          "client": {
+            "version": "1.0.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "headless"
+          },
+          "device": {
+            "id": "dev-a",
+            "hostname": "TEST-PC-A",
+            "os_user": "user-a"
+          },
+          "account": {
+            "uuid": "acc-1",
+            "email": "user-a@example.com",
+            "display_name": "User A",
+            "organization_name": "Example",
+            "organization_type": "claude_max",
+            "subscription_type": "max",
+            "rate_limit_tier": "default_claude_max_20x"
+          },
+          "auth": {
+            "state": "ok",
+            "token_expires_at": "2026-01-05T17:00:00.000Z"
+          },
+          "results": [
+            {
+              "account_uuid": "acc-1",
+              "fetched_at": "2026-01-05T09:00:04.000Z",
+              "http_status": 200,
+              "usage": {
+                "five_hour": null,
+                "seven_day": {
+                  "utilization": 42.0,
+                  "resets_at": "2026-01-08T21:00:00.000000+00:00"
+                },
+                "limits": [
+                  {
+                    "kind": "weekly_all",
+                    "group": "weekly",
+                    "percent": 42,
+                    "severity": "normal",
+                    "resets_at": "2026-01-08T21:00:00.000000+00:00",
+                    "scope": null,
+                    "is_active": true
+                  },
+                  {
+                    "kind": "weekly_scoped",
+                    "group": "weekly",
+                    "percent": 40,
+                    "severity": "normal",
+                    "resets_at": "2026-01-08T21:00:00.000000+00:00",
+                    "scope": {
+                      "model": {
+                        "id": null,
+                        "display_name": "Fable"
+                      },
+                      "surface": null
+                    },
+                    "is_active": false
+                  }
+                ],
+                "seven_day_breakdown": {
+                  "window_started_at": "2026-01-01T21:00:00.000000+00:00",
+                  "rows": [
+                    {
+                      "key": "claude_code",
+                      "percent": 50,
+                      "percent_of_limit": 21
+                    },
+                    {
+                      "key": "chat",
+                      "percent": 50,
+                      "percent_of_limit": 21
+                    }
+                  ]
+                },
+                "extra_usage": {
+                  "is_enabled": false
+                },
+                "spend": {
+                  "used": {
+                    "amount_minor": 0,
+                    "currency": "USD",
+                    "exponent": 2
+                  },
+                  "enabled": false
+                }
+              }
+            }
+          ],
+          "want_fresh": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "fetch_now": false
+        }
+      }
+    },
+    {
+      "at": "2026-01-05T09:01:05.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 1,
+          "client": {
+            "version": "1.0.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "headless"
+          },
+          "device": {
+            "id": "dev-b",
+            "hostname": "TEST-PC-B",
+            "os_user": "user-b"
+          },
+          "account": {
+            "uuid": "acc-1",
+            "email": "user-a@example.com",
+            "display_name": "User A",
+            "organization_name": "Example",
+            "organization_type": "claude_max",
+            "subscription_type": "max",
+            "rate_limit_tier": "default_claude_max_20x"
+          },
+          "auth": {
+            "state": "ok",
+            "token_expires_at": "2026-01-05T16:00:00.000Z"
+          },
+          "results": [],
+          "want_fresh": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "role": "standby",
+          "fetch_now": false
+        }
+      }
+    },
+    {
+      "at": "2026-01-05T09:01:10.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 1,
+          "client": {
+            "version": "1.0.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "headless"
+          },
+          "device": {
+            "id": "dev-a",
+            "hostname": "TEST-PC-A",
+            "os_user": "user-a"
+          },
+          "account": {
+            "uuid": "acc-1",
+            "email": "user-a@example.com",
+            "display_name": "User A",
+            "organization_name": "Example",
+            "organization_type": "claude_max",
+            "subscription_type": "max",
+            "rate_limit_tier": "default_claude_max_20x"
+          },
+          "auth": {
+            "state": "ok",
+            "token_expires_at": "2026-01-05T17:00:00.000Z"
+          },
+          "results": [],
+          "want_fresh": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "role": "poller",
+          "fetch_now": true
+        }
+      }
+    }
+  ]
+}
