@@ -77,20 +77,58 @@ func installCmd(env Env, args []string) int {
 		fmt.Fprintln(env.Stderr, "claude-usage install:", err)
 		return exitFailed
 	}
+	// Linger first on headless Linux: from "su -" or "sudo -u" there is no
+	// user manager yet, and enabling linger is what starts one.
+	lingerTried := headless && runtime.GOOS == "linux"
+	var linger autostart.Linger
+	lingerDetail := ""
+	user := osinfo.Current().OSUser
+	if lingerTried {
+		linger, lingerDetail = autostart.EnsureLinger(ctx, env.Run, user)
+	}
 	available := method.Available(ctx)
 
+	// 5a: stage the new executable next to its place before stopping anything.
+	staged := ""
+	if !samePath(env.Exe, env.Dirs.InstallExe) {
+		staged, err = stageExe(env.Exe, env.Dirs.InstallExe)
+		if err != nil {
+			fmt.Fprintln(env.Stderr, "claude-usage install: copying the executable:", err)
+			return exitFailed
+		}
+		defer os.Remove(staged) // a no-op once renamed
+	}
+
 	// 4: stop what runs now (an upgrade).
+	hadUnit := method.State(ctx) != "not installed"
 	if err := method.Stop(ctx); err != nil {
 		fmt.Fprintln(env.Stderr, "claude-usage install: stopping the old service:", err)
 	}
+	killed := 0
 	if pids, err := procs.FindByExe(env.Dirs.InstallExe); err == nil {
+		killed = len(pids)
 		procs.Kill(pids, os.Getpid())
 	}
+	// restore starts the agent that was running before, after a failure.
+	restore := func() {
+		if _, err := os.Stat(env.Dirs.InstallExe); err != nil {
+			return
+		}
+		switch {
+		case hadUnit && available:
+			if err := method.Register(ctx, env.Dirs.InstallExe); err != nil {
+				fmt.Fprintln(env.Stderr, "claude-usage install: restarting the previous agent:", err)
+			}
+		case killed > 0:
+			_ = env.StartDetached(env.Dirs.InstallExe, "run", "--headless")
+		}
+	}
 
-	// 5: the executable.
-	if !samePath(env.Exe, env.Dirs.InstallExe) {
-		if err := copyExe(env.Exe, env.Dirs.InstallExe); err != nil {
-			fmt.Fprintln(env.Stderr, "claude-usage install: copying the executable:", err)
+	// 5b: the executable.
+	if staged != "" {
+		if err := os.Rename(staged, env.Dirs.InstallExe); err != nil {
+			fmt.Fprintln(env.Stderr, "claude-usage install: replacing the executable:", err)
+			restore()
 			return exitFailed
 		}
 	}
@@ -99,6 +137,7 @@ func installCmd(env Env, args []string) int {
 	cfgDst := env.Dirs.File(paths.ConfigFile)
 	if err := config.Save(cfgDst, cfg); err != nil {
 		fmt.Fprintln(env.Stderr, "claude-usage install: writing the config:", err)
+		restore()
 		return exitFailed
 	}
 
@@ -125,15 +164,12 @@ func installCmd(env Env, args []string) int {
 	}
 
 	// 8: linger, so the service runs without a login.
-	if registered && headless && runtime.GOOS == "linux" {
-		user := osinfo.Current().OSUser
-		if l, detail := autostart.EnsureLinger(ctx, env.Run, user); l != autostart.LingerEnabled {
-			fmt.Fprintf(env.Stdout, "linger is not enabled: the agent runs only while %s is logged in. To keep it running, ask an administrator to run: loginctl enable-linger %s\n", user, user)
-			if detail != "" {
-				fmt.Fprintln(env.Stderr, "loginctl:", detail)
-			}
-			code = exitNotLasting
+	if lingerTried && linger != autostart.LingerEnabled {
+		fmt.Fprintf(env.Stdout, "linger is not enabled: the agent runs only while %s is logged in. To keep it running, ask an administrator to run: loginctl enable-linger %s\n", user, user)
+		if lingerDetail != "" {
+			fmt.Fprintln(env.Stderr, "loginctl:", lingerDetail)
 		}
+		code = exitNotLasting
 	}
 
 	// 9: summary.
@@ -150,39 +186,33 @@ func installCmd(env Env, args []string) int {
 	return code
 }
 
-// copyExe copies src to dst through a temporary file in dst's folder.
-func copyExe(src, dst string) error {
+// stageExe copies src to a temporary file in dst's folder (mode 0755) and
+// returns its path; the caller renames it into place.
+func stageExe(src, dst string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
+		return "", err
 	}
 	in, err := os.Open(src)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer in.Close()
 	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".new-*")
 	if err != nil {
-		return err
+		return "", err
 	}
-	ok := false
-	defer func() {
-		if !ok {
-			_ = os.Remove(tmp.Name())
-		}
-	}()
 	if _, err := io.Copy(tmp, in); err != nil {
 		tmp.Close()
-		return err
+		os.Remove(tmp.Name())
+		return "", err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		os.Remove(tmp.Name())
+		return "", err
 	}
 	if err := os.Chmod(tmp.Name(), 0o755); err != nil {
-		return err
+		os.Remove(tmp.Name())
+		return "", err
 	}
-	if err := os.Rename(tmp.Name(), dst); err != nil {
-		return err
-	}
-	ok = true
-	return nil
+	return tmp.Name(), nil
 }

@@ -189,3 +189,21 @@ func TestEnsureLinger(t *testing.T) {
 		t.Fatal(detail)
 	}
 }
+
+func TestUnitEscapesSpecifiers(t *testing.T) {
+	if !strings.Contains(UnitText("/h/50%/claude-usage"), `ExecStart="/h/50%%/claude-usage" run --headless`) {
+		t.Fatal(UnitText("/h/50%/claude-usage"))
+	}
+	for _, exe := range []string{`/h/a"b/claude-usage`, `/h/a\b/claude-usage`, "/h/a\nb/claude-usage"} {
+		f := &fakeRun{}
+		home := t.TempDir()
+		m, _ := For(true, home, f.run)
+		if err := m.Register(context.Background(), exe); err == nil {
+			t.Fatalf("%q accepted", exe)
+		}
+		eq(t, len(f.calls), 0)
+		if _, err := os.Stat(filepath.Join(home, ".config", "systemd", "user", UnitName)); !os.IsNotExist(err) {
+			t.Fatal("unit written")
+		}
+	}
+}

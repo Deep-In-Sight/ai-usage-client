@@ -266,3 +266,71 @@ func TestUninstallRemovesEverything(t *testing.T) {
 	// a second uninstall is harmless
 	eq(t, te.main("uninstall"), 0)
 }
+
+func TestInstallWithoutUserManagerTriesLingerFirst(t *testing.T) {
+	// e.g. run from "su -": no user manager until linger starts one
+	te := newEnv(t)
+	lingered := false
+	te.runner.reply = func(a []string) (string, error) {
+		switch {
+		case a[0] == "loginctl" && a[1] == "show-user":
+			if lingered {
+				return "yes\n", nil
+			}
+			return "no\n", nil
+		case a[0] == "loginctl" && a[1] == "enable-linger":
+			lingered = true
+			return "", nil
+		case a[0] == "systemctl" && !lingered:
+			return "Failed to connect to bus", errors.New("exit status 1")
+		case a[0] == "systemctl" && a[2] == "is-active":
+			return "active\n", nil
+		}
+		return "", nil
+	}
+	eq(t, te.main("install", "--config", writeCfg(t, validConfig), "--headless"), 0)
+	eq(t, len(te.detached), 0)
+	contains(t, te.out.String(), "autostart: systemd-user (active)")
+}
+
+func TestInstallCopyFailureLeavesOldAgentRunning(t *testing.T) {
+	te := newEnv(t)
+	te.runner.reply = systemdOK("yes", nil)
+	eq(t, te.main("install", "--config", writeCfg(t, validConfig), "--headless"), 0)
+	must(t, os.Remove(te.Exe)) // the new executable cannot be read
+	te.runner.calls = nil
+	eq(t, te.main("install", "--config", writeCfg(t, validConfig), "--headless"), 1)
+	for _, c := range te.runner.calls {
+		if c[0] == "systemctl" && (c[2] == "stop" || c[2] == "disable") {
+			t.Fatalf("stopped although nothing could be installed: %v", c)
+		}
+	}
+	eq(t, read(t, te.Dirs.InstallExe), "BIN")
+}
+
+func TestInstallFailureAfterStopRestartsOldAgent(t *testing.T) {
+	te := newEnv(t)
+	te.runner.reply = systemdOK("yes", nil)
+	eq(t, te.main("install", "--config", writeCfg(t, validConfig), "--headless"), 0)
+	// the config cannot be written: the data folder became read-only
+	must(t, os.Chmod(te.Dirs.Data, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(te.Dirs.Data, 0o700) })
+	if os.Getuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	must(t, os.WriteFile(te.Exe, []byte("BIN2"), 0o755))
+	te.runner.calls = nil
+	eq(t, te.main("install", "--config", writeCfg(t, validConfig), "--headless"), 1)
+	stopped, restarted := -1, -1
+	for i, c := range te.runner.calls {
+		if slices.Equal(c, []string{"systemctl", "--user", "stop", "claude-usage.service"}) {
+			stopped = i
+		}
+		if slices.Equal(c, []string{"systemctl", "--user", "restart", "claude-usage.service"}) {
+			restarted = i
+		}
+	}
+	if stopped < 0 || restarted < stopped {
+		t.Fatalf("old agent not started again: %v", te.runner.calls)
+	}
+}

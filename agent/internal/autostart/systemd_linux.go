@@ -51,6 +51,9 @@ func (s *Systemd) installed() bool {
 // Register writes the unit, enables it and starts it (restarts it when it
 // was already there, e.g. on an upgrade).
 func (s *Systemd) Register(ctx context.Context, exe string) error {
+	if err := ValidExePath(exe); err != nil {
+		return err
+	}
 	existed := s.installed()
 	if err := os.MkdirAll(filepath.Dir(s.unitPath()), 0o755); err != nil {
 		return err

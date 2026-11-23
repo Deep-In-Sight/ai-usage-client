@@ -52,8 +52,14 @@ func For(headless bool, home string, run Runner) (Method, error) {
 // UnitName is the systemd user unit.
 const UnitName = "claude-usage.service"
 
-// UnitText is the unit file for exe.
+// UnitText is the unit file for exe. "%" is doubled so systemd does not
+// expand it as a specifier; ValidExePath rejects what cannot be quoted.
+//
+// After=network-online.target has no effect in a user manager; it is kept
+// because the unit text is part of the shared plan, and the engine retries
+// the network anyway.
 func UnitText(exe string) string {
+	exe = strings.ReplaceAll(exe, "%", "%%")
 	return `[Unit]
 Description=Claude Usage agent
 After=network-online.target
@@ -66,6 +72,15 @@ RestartSec=30
 [Install]
 WantedBy=default.target
 `
+}
+
+// ValidExePath refuses paths that cannot be written inside the quoted
+// ExecStart= value.
+func ValidExePath(exe string) error {
+	if strings.ContainsAny(exe, "\"\\\n\r") {
+		return fmt.Errorf("autostart: the install path %q cannot be used in a systemd unit", exe)
+	}
+	return nil
 }
 
 // Linger is whether the user's services keep running without a login.
