@@ -38,21 +38,38 @@ server.
 
 ### What it sends
 
-To your team's server, and nowhere else:
+To your team's server, and nowhere else. (The server also sees this PC's IP
+address, as any server you connect to does.)
 
-- Anthropic's whole usage reply: the percentage of each limit, the reset
-  times, the per-product breakdown and the extra-usage spend
-- The account's email, display name, organization name and plan
-- The PC name, your OS user name, the OS and its version
-- When the Claude Code sign-in expires
+- Anthropic's whole usage reply for each fetch, with when it was fetched and
+  its HTTP status: the percentage of each limit, the reset times, the
+  per-product breakdown and the extra-usage spend
+- The account: its ID, email, display name, organization name and type,
+  plan and rate-limit tier
+- This PC: a random ID made at the first run, the PC name, your OS user
+  name, the OS and its version, and the CPU type
+- The agent: its version, and whether it shows a tray icon
+- The sign-in: whether Claude Code is signed in, and when the sign-in expires
+- Whether you asked for fresh numbers with **Refresh now**
+
+Field by field, every sync request carries `schema`, `client.version`,
+`client.os`, `client.os_version`, `client.arch`, `client.mode`, `device.id`,
+`device.hostname`, `device.os_user`, `account.uuid`, `account.email`,
+`account.display_name`, `account.organization_name`,
+`account.organization_type`, `account.subscription_type`,
+`account.rate_limit_tier`, `auth.state`, `auth.token_expires_at`,
+`results[].account_uuid`, `results[].fetched_at`, `results[].http_status`,
+`results[].usage` and `want_fresh`. Nothing else.
 
 ### What it never sends
 
 Your token, your conversations, your files.
 
 - It reads the sign-in Claude Code keeps and never refreshes or changes it.
-  The token goes only to `api.anthropic.com`, only from the one PC the server
-  picked, and redirects are refused.
+  The token goes only to `api.anthropic.com`, and redirects are refused.
+  Normally only the one PC the server picks for an account uses it; while
+  the server cannot be reached, each PC asks Anthropic on its own, every 30
+  minutes.
 - It never listens on a port. Every connection goes out, to your server over
   HTTP and to Anthropic over HTTPS, so there is no firewall prompt.
 
