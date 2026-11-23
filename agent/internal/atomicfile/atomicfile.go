@@ -5,6 +5,7 @@ package atomicfile
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // Write replaces path with data. The folder is created with mode 0700 if it
@@ -43,5 +44,18 @@ func Write(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	ok = true
+	syncDir(dir)
 	return nil
+}
+
+// syncDir makes the rename itself durable (unix); errors are ignored, the
+// file content is already on disk.
+func syncDir(dir string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
 }
