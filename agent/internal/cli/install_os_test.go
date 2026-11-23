@@ -14,6 +14,7 @@ import (
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/config"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/paths"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/procs"
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/status"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/version"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/winapp"
 )
@@ -320,3 +321,21 @@ func TestUninstallRemovesInstalledExeItselfOnWindows(t *testing.T) {
 	moved, _ := filepath.Glob(filepath.Join(tmp, "claude-usage-removed-*.exe"))
 	eq(t, len(moved), 1)
 }
+
+func TestStatusNamesTheMethodInUse(t *testing.T) {
+	te, _, main, other, _ := osEnv(t, "linux")
+	main.name, other.name = "systemd-user", "xdg-autostart"
+	te.Autostart = func(bool) (autostart.Method, error) { return &stateMethod{main, "not installed"}, nil }
+	te.Others = func(bool) []autostart.Method { return []autostart.Method{&stateMethod{other, "registered"}} }
+	must(t, status.Write(te.Dirs.File(paths.StatusFile), status.Snapshot{Mode: "coordinated", AuthState: "ok"}))
+	eq(t, te.main("status"), 0)
+	contains(t, te.out.String(), "Service:    registered (xdg-autostart)")
+}
+
+// stateMethod reports a fixed state.
+type stateMethod struct {
+	*fakeMethod
+	state string
+}
+
+func (s *stateMethod) State(context.Context) string { return s.state }

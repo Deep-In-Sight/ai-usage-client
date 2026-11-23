@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/autostart"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/paths"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/procs"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/status"
@@ -34,9 +35,22 @@ func statusCmd(env Env, args []string) int {
 		}
 		return 1
 	}
+	// The method in use: on Linux either the systemd service or XDG
+	// autostart, whichever is registered.
 	service, method := "unsupported", ""
+	var methods []autostart.Method
 	if m, err := env.Autostart(true); err == nil {
-		service, method = m.State(background()), m.Name()
+		methods = append(methods, m)
+	}
+	methods = append(methods, env.others(true)...)
+	for i, m := range methods {
+		st := m.State(background())
+		if i == 0 || st != "not installed" && st != "not registered" {
+			service, method = st, m.Name()
+		}
+		if st != "not installed" && st != "not registered" {
+			break
+		}
 	}
 	running := false
 	if pids, err := procs.FindByExe(env.Dirs.InstallExe); err == nil {
