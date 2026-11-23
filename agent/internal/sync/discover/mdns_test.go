@@ -100,3 +100,57 @@ func TestLiveQuery(t *testing.T) {
 	}
 	t.Logf("%s -> %v", Name, ipStrings(ips))
 }
+
+// customResponder answers each query with build(query).
+func customResponder(t *testing.T, build func(q *dns.Msg) *dns.Msg) *net.UDPAddr {
+	t.Helper()
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	must(t, err)
+	t.Cleanup(func() { pc.Close() })
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := pc.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			var q dns.Msg
+			if q.Unpack(buf[:n]) != nil || len(q.Question) != 1 {
+				continue
+			}
+			b, _ := build(&q).Pack()
+			_, _ = pc.WriteToUDP(b, from)
+		}
+	}()
+	return pc.LocalAddr().(*net.UDPAddr)
+}
+
+func answer(q *dns.Msg, ips ...string) *dns.Msg {
+	r := new(dns.Msg)
+	r.SetReply(q)
+	for _, ip := range ips {
+		rr, _ := dns.NewRR(q.Question[0].Name + " 10 IN A " + ip)
+		r.Answer = append(r.Answer, rr)
+	}
+	return r
+}
+
+func TestQueryAIgnoresWrongID(t *testing.T) {
+	addr := customResponder(t, func(q *dns.Msg) *dns.Msg {
+		r := answer(q, "192.0.2.10")
+		r.Id = q.Id + 1
+		return r
+	})
+	ips, err := QueryA(context.Background(), "claude-usage.local", addr, 500*time.Millisecond)
+	must(t, err)
+	eq(t, len(ips), 0)
+}
+
+func TestQueryAFiltersAddresses(t *testing.T) {
+	addr := customResponder(t, func(q *dns.Msg) *dns.Msg {
+		return answer(q, "127.0.0.1", "0.0.0.0", "224.0.0.9", "192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4", "192.0.2.5", "192.0.2.6")
+	})
+	ips, err := QueryA(context.Background(), "claude-usage.local", addr, time.Second)
+	must(t, err)
+	eq(t, ipStrings(ips), []string{"192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4"})
+}
