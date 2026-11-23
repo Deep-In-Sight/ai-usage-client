@@ -105,7 +105,7 @@ var errDown = errors.New("sync: connection refused")
 func okLogin() creds.Login {
 	return creds.Login{HasToken: true, ExpiresAt: t0.Add(8 * time.Hour), SubscriptionType: "max", RateLimitTier: "default_claude_max_20x",
 		Account: &creds.Account{UUID: "acc-1", Email: "user-a@example.com", DisplayName: "User A", OrganizationName: "Example", OrganizationType: "claude_max"},
-		Source: "file"}
+		Source:  "file"}
 }
 
 type rig struct {

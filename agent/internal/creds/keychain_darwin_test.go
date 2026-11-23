@@ -24,7 +24,9 @@ func TestKeychainIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add-generic-password: %v: %s", err, out)
 	}
-	t.Cleanup(func() { _ = exec.Command("/usr/bin/security", "delete-generic-password", "-s", service, "-a", user).Run() })
+	t.Cleanup(func() {
+		_ = exec.Command("/usr/bin/security", "delete-generic-password", "-s", service, "-a", user).Run()
+	})
 	b, err := ReadKeychain(context.Background(), service)
 	if err != nil {
 		t.Fatal(err)
