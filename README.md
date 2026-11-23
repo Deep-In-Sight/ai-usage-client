@@ -95,7 +95,10 @@ server's command writes the settings the agent needs (the server's address and
 its key).
 
 You need Claude Code signed in with your claude.ai subscription, now or
-later; the agent starts reporting once you sign in. It installs for the OS
+later; the agent starts reporting once you sign in. On a Mac, macOS may ask
+whether `claude-usage` may use the "Claude Code-credentials" keychain item;
+choose **Always Allow**. The agent is not code-signed, so macOS may ask again
+after an upgrade. It installs for the OS
 user who runs the command only, and needs no administrator rights.
 
 | OS | Installed in | Starts at login through |
@@ -149,12 +152,15 @@ The menu, from top to bottom:
 - From the tray: **Remove Claude Usage**, clicked twice.
 - Windows: Settings › Apps › Installed apps › Claude Usage › Uninstall, or in
   PowerShell:
-  `& "$env:LOCALAPPDATA\Programs\ClaudeUsage\claude-usage.exe" uninstall`
+  `Start-Process -Wait -NoNewWindow -FilePath "$env:LOCALAPPDATA\Programs\ClaudeUsage\claude-usage.exe" -ArgumentList uninstall`
 - macOS: `"$HOME/Library/Application Support/ClaudeUsage/claude-usage" uninstall`
 - Linux: `~/.local/bin/claude-usage uninstall`
 
 Removing takes the program, its settings and its start-at-login entry away.
-Linger, if the installer turned it on, is left as it is.
+Linger, if the installer turned it on, is left as it is. Windows cannot
+delete a program while it runs, so removing it from the tray or from
+Installed apps moves `claude-usage.exe` to your `TEMP` folder; the next
+install deletes it there, or you can delete it yourself.
 
 ### Security notes
 
