@@ -467,7 +467,7 @@ func (e *Engine) publish(login creds.Login, now time.Time) {
 		ServerURL: e.serverURL, LastSyncAt: e.lastSyncAt.UTC(), LastSyncOK: e.lastSyncOK,
 		SyncFailures: e.failures, SyncProblem: e.syncProblem,
 		LastFetchAt: e.lastFetchAt.UTC(), LastFetchStatus: e.lastFetchStatus,
-		AuthState: login.State(now), Backlog: e.d.Backlog.Len(),
+		AuthState: login.State(now), SignInProblem: login.Problem, Backlog: e.d.Backlog.Len(),
 	}
 	if e.mode == ModeStandalone {
 		s.NextStandaloneFetch = e.nextStandalone.UTC()

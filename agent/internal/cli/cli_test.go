@@ -184,3 +184,11 @@ func TestStatusJSON(t *testing.T) {
 	contains(t, out, "Weekly:     5%  Resets ")
 	contains(t, out, "Backlog:    0")
 }
+
+func TestStatusShowsSignInProblem(t *testing.T) {
+	te := newEnv(t)
+	snap := status.Snapshot{Version: "0.0.0-dev", PID: 1, Mode: "coordinated", AuthState: "ok", SignInProblem: "account file larger than 32 MiB"}
+	must(t, status.Write(te.Dirs.File(paths.StatusFile), snap))
+	eq(t, te.main("status"), 0)
+	contains(t, te.out.String(), "Sign-in:    ok (account file larger than 32 MiB)")
+}

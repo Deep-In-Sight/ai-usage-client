@@ -27,6 +27,7 @@ type Snapshot struct {
 	LastFetchStatus     *int      `json:"last_fetch_status,omitempty"`
 	NextStandaloneFetch time.Time `json:"next_standalone_fetch,omitzero"`
 	AuthState           string    `json:"auth_state"`
+	SignInProblem       string    `json:"sign_in_problem,omitempty"` // why the sign-in or account is missing; never file content
 	TokenExpiresAt      time.Time `json:"token_expires_at,omitzero"`
 	AccountEmail        string    `json:"account_email,omitempty"`
 	LatestFetchedAt     time.Time `json:"latest_fetched_at,omitzero"`

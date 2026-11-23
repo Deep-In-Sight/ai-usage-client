@@ -85,3 +85,17 @@ func TestLimiterClockSetBack(t *testing.T) {
 	eq(t, l.Allowed(back), false)
 	eq(t, l.Allowed(back.Add(backoffMax)), true)
 }
+
+func TestLimiterClockSetBackWithFullBudget(t *testing.T) {
+	var l Limiter
+	at := base
+	for i := 0; i < HourlyCap; i++ {
+		l.Record(Result{FetchedAt: at, HTTPStatus: 200})
+		at = at.Add(MinGap)
+	}
+	// the wall clock goes back a day with the hourly budget used up: the
+	// budget blocks for at most an hour from now, not for the day
+	back := base.Add(-24 * time.Hour)
+	eq(t, l.Allowed(back), false)
+	eq(t, l.Allowed(back.Add(time.Hour)), true)
+}

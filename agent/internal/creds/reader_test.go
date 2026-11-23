@@ -208,3 +208,24 @@ func TestMacReloginNoticedViaClaudeJSON(t *testing.T) {
 	r.Current(ctx)
 	eq(t, r.Reads(), 3)
 }
+
+func TestAccountFileOverCapExplainsMissingAccount(t *testing.T) {
+	old := maxAccountFile
+	maxAccountFile = 4096
+	t.Cleanup(func() { maxAccountFile = old })
+	h := t.TempDir()
+	writeCreds(t, filepath.Join(h, ".claude"), t0.Add(time.Hour))
+	// oauthAccount sits after a large projects value, past the cap
+	big := `{"projects":{"x":"` + strings.Repeat("a", 8192) + `"},"oauthAccount":{"accountUuid":"acc-1","emailAddress":"user-a@example.com"}}`
+	must(t, os.WriteFile(filepath.Join(h, ".claude.json"), []byte(big), 0o600))
+	l := NewReader(Options{Home: h, Clock: clock.NewFake(t0)}).Current(context.Background())
+	eq(t, l.Account == nil, true)
+	eq(t, l.State(t0), "ok")
+	eq(t, l.Problem, "account file larger than 4 KiB")
+
+	// the same layout under the cap is read in full
+	maxAccountFile = 1 << 20
+	l = NewReader(Options{Home: h, Clock: clock.NewFake(t0)}).Current(context.Background())
+	eq(t, l.Account != nil && l.Account.UUID == "acc-1", true)
+	eq(t, l.Problem, "")
+}

@@ -730,3 +730,15 @@ func TestShutdownDuringFetchDropsResult(t *testing.T) {
 	r.e.Step(ctx)
 	eq(t, r.fetcher.calls, 1)
 }
+
+func TestSignInProblemIsShown(t *testing.T) {
+	r := newRig(t, always(resp("standby", false, 60), nil))
+	l := okLogin()
+	l.Account, l.Problem = nil, "account file larger than 32 MiB"
+	r.logins.login = l
+	r.step()
+	eq(t, r.snap().SignInProblem, "account file larger than 32 MiB")
+	r.logins.login = okLogin()
+	r.step()
+	eq(t, r.snap().SignInProblem, "")
+}

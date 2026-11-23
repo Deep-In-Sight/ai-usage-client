@@ -24,10 +24,21 @@ type Options struct {
 }
 
 // Read caps: the credentials file is small; .claude.json can be large.
-const (
-	maxCredsFile   = 1 << 20
-	maxAccountFile = 32 << 20
-)
+const maxCredsFile = 1 << 20
+
+// maxAccountFile is a var so that tests can lower it.
+var maxAccountFile int64 = 32 << 20
+
+// capText is a byte count for a Problem line, e.g. "32 MiB".
+func capText(n int64) string {
+	switch {
+	case n >= 1<<20 && n%(1<<20) == 0:
+		return fmt.Sprintf("%d MiB", n>>20)
+	case n >= 1<<10 && n%(1<<10) == 0:
+		return fmt.Sprintf("%d KiB", n>>10)
+	}
+	return fmt.Sprintf("%d bytes", n)
+}
 
 func readCapped(path string, limit int64) ([]byte, error) {
 	f, err := os.Open(path)
@@ -215,8 +226,14 @@ func (r *Reader) read(ctx context.Context, now time.Time) (Login, string) {
 		r.retry = false
 		if l.HasToken {
 			if f, err := os.Open(r.accountPath()); err == nil {
-				l.Account = parseAccountFrom(io.LimitReader(f, maxAccountFile))
+				// One byte over the cap tells a file that is too large from
+				// one that is exactly the cap.
+				lr := &io.LimitedReader{R: f, N: maxAccountFile + 1}
+				l.Account = parseAccountFrom(lr)
 				f.Close()
+				if l.Account == nil && lr.N == 0 {
+					l.Problem = "account file larger than " + capText(maxAccountFile)
+				}
 			}
 		}
 	}

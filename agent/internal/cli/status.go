@@ -95,6 +95,9 @@ func statusCmd(env Env, args []string) int {
 	if !snap.TokenExpiresAt.IsZero() {
 		signIn += ", expires " + clockOf(snap.TokenExpiresAt)
 	}
+	if snap.SignInProblem != "" {
+		signIn += " (" + snap.SignInProblem + ")"
+	}
 	fmt.Fprintf(w, "Sign-in:    %s\n", signIn)
 	stale := ""
 	if !snap.LatestFetchedAt.IsZero() && usage.Stale(snap.LatestFetchedAt, now) {
