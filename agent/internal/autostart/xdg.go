@@ -54,7 +54,8 @@ func execQuote(p string) string {
 	return b.String()
 }
 
-// DesktopText is the autostart entry for exe.
+// DesktopText is the autostart entry for exe. It is visible in the
+// desktop's list of startup programs (no NoDisplay): nothing is hidden.
 func DesktopText(exe string) string {
 	return `[Desktop Entry]
 Type=Application
@@ -62,7 +63,6 @@ Name=Claude Usage
 Comment=Shows Claude plan usage and reports it to your team's server
 Exec=` + execQuote(exe) + ` run
 Terminal=false
-NoDisplay=true
 X-GNOME-Autostart-enabled=true
 `
 }

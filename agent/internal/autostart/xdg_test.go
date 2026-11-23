@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"runtime"
 	"testing"
 )
@@ -14,7 +15,6 @@ Name=Claude Usage
 Comment=Shows Claude plan usage and reports it to your team's server
 Exec=/h/a/.local/bin/claude-usage run
 Terminal=false
-NoDisplay=true
 X-GNOME-Autostart-enabled=true
 `
 
@@ -27,6 +27,14 @@ func TestDesktopTextQuoting(t *testing.T) {
 	want := `Exec="/h/a b/\\$x%%/.local/bin/claude-usage" run`
 	if !containsLine(got, want) {
 		t.Fatalf("%s", got)
+	}
+	// a space alone is enough to need quotes
+	got = DesktopText("/h/a b/.local/bin/claude-usage")
+	if !containsLine(got, `Exec="/h/a b/.local/bin/claude-usage" run`) {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(DesktopText("/h/a/claude-usage"), "NoDisplay") {
+		t.Fatal("the entry must be visible in Startup Applications")
 	}
 	got = DesktopText("/h/q\"`\\/claude-usage")
 	want = `Exec="/h/q\\"\\` + "`" + `\\\\/claude-usage" run`
