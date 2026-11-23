@@ -1,0 +1,65 @@
+/* Top bar: [robot] [ring] 72% */
+.claude-usage-panel {
+    spacing: 6px;
+}
+
+.claude-usage-panel-icon {
+    icon-size: 18px;
+}
+
+.claude-usage-ring {
+    width: 16px;
+    height: 16px;
+}
+
+/* Popup card */
+/* Side padding matches a menu item's, so the card lines up with "Quit". */
+.claude-usage-card {
+    padding: 12px 12px 10px 12px;
+    spacing: 16px;
+}
+
+.claude-usage-header {
+    spacing: 10px;
+}
+
+.claude-usage-title {
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+.claude-usage-row {
+    spacing: 8px;
+}
+
+.claude-usage-name {
+    font-weight: 500;
+}
+
+.claude-usage-percent {
+    font-weight: bold;
+}
+
+.claude-usage-small {
+    font-size: 0.88em;
+}
+
+.claude-usage-track {
+    height: 8px;
+    border-radius: 4px;
+    background-color: rgba(128, 128, 128, 0.32);
+}
+
+.claude-usage-fill {
+    height: 8px;
+    border-radius: 4px;
+    background-color: #d97757;      /* Claude terracotta */
+}
+
+.claude-usage-fill.warning {
+    background-color: #f5c211;
+}
+
+.claude-usage-fill.critical {
+    background-color: #f66151;
+}

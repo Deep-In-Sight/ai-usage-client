@@ -1,0 +1,6 @@
+{
+  "uuid": "claude-usage@localhost",
+  "name": "Claude Usage",
+  "description": "Weekly Claude plan usage in the top bar, with bars for the all-models and Fable limits.",
+  "shell-version": ["46"]
+}
