@@ -32,12 +32,6 @@ trap cleanup EXIT
 mkdir -p "$work/config" "$work/cache" "$work/data/gnome-shell/extensions" "$work/run"
 chmod 700 "$work/run"
 cp -r "$here/../claude-usage@localhost" "$work/data/gnome-shell/extensions/"
-# The robot icon is not in the source tree (see install.sh); borrow the
-# installed extension's copy so the preview looks like the real thing.
-installed_robot="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/claude-usage@localhost/clawd.svg"
-if [ -f "$installed_robot" ]; then
-    cp "$installed_robot" "$work/data/gnome-shell/extensions/claude-usage@localhost/"
-fi
 
 # PREVIEW_CACHE_FILE: start the preview with this file as the extension's
 # saved "last successful reply" (to see how old numbers are shown).

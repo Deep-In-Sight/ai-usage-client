@@ -29,24 +29,7 @@ fi
 
 mkdir -p "$ext_dir"
 install -m 644 "$src_dir"/metadata.json "$src_dir"/extension.js "$src_dir"/usage.js \
-    "$src_dir"/stylesheet.css "$ext_dir/"
-
-# The Claude Code robot icon is Anthropic's artwork, so it is not shipped
-# here. If a Claude Code editor extension is installed, use its copy (any
-# installed version will do); otherwise the indicator simply has no icon.
-robot=""
-for editor_dir in "$HOME/.vscode/extensions" "$HOME/.vscode-server/extensions" \
-        "$HOME/.cursor/extensions" "$HOME/.vscode-oss/extensions"; do
-    for candidate in "$editor_dir"/anthropic.claude-code-*/resources/clawd.svg; do
-        [[ -f "$candidate" ]] && robot="$candidate"
-    done
-    [[ -n "$robot" ]] && break
-done
-if [[ -n "$robot" ]]; then
-    install -m 644 "$robot" "$ext_dir/clawd.svg"
-elif [[ ! -f "$ext_dir/clawd.svg" ]]; then
-    echo "Note: no Claude Code editor extension found, so the indicator will show no robot icon."
-fi
+    "$src_dir"/stylesheet.css "$src_dir"/clawd.svg "$ext_dir/"
 
 if "$gnome_extensions" enable "$uuid" 2>/dev/null; then
     echo "Installed and enabled $uuid."

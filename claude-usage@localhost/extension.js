@@ -81,21 +81,16 @@ class UsageIndicator extends PanelMenu.Button {
         this._cancellable = new Gio.Cancellable();
         this._session = new Soup.Session({timeout: 20, user_agent: 'claude-usage-indicator/2.0'});
 
-        // The robot is Anthropic's artwork and is not shipped with this
-        // extension; install.sh copies it in from a local Claude Code editor
-        // extension when there is one. Without it the indicator has no icon.
-        const robotFile = extension.dir.get_child('clawd.svg');
-        const robot = robotFile.query_exists(null) ? Gio.FileIcon.new(robotFile) : null;
+        // Clawd, the Claude Code mascot: (c) Anthropic PBC, see README.
+        const robot = Gio.FileIcon.new(extension.dir.get_child('clawd.svg'));
 
         // -- top bar
         const box = new St.BoxLayout({style_class: 'claude-usage-panel'});
-        if (robot) {
-            box.add_child(new St.Icon({
-                gicon: robot,
-                style_class: 'claude-usage-panel-icon',
-                y_align: Clutter.ActorAlign.CENTER,
-            }));
-        }
+        box.add_child(new St.Icon({
+            gicon: robot,
+            style_class: 'claude-usage-panel-icon',
+            y_align: Clutter.ActorAlign.CENTER,
+        }));
         this._ring = new St.DrawingArea({
             style_class: 'claude-usage-ring',
             y_align: Clutter.ActorAlign.CENTER,
@@ -109,8 +104,7 @@ class UsageIndicator extends PanelMenu.Button {
         // -- popup card
         const card = new St.BoxLayout({vertical: true, style_class: 'claude-usage-card'});
         const header = new St.BoxLayout({style_class: 'claude-usage-header'});
-        if (robot)
-            header.add_child(new St.Icon({gicon: robot, icon_size: 24}));
+        header.add_child(new St.Icon({gicon: robot, icon_size: 24}));
         header.add_child(new St.Label({
             text: 'Weekly usage',
             style_class: 'claude-usage-title',

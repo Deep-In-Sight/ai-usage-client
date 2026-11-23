@@ -40,11 +40,6 @@ Then restart GNOME Shell once so it loads the extension:
 
 After that it starts by itself at every login.
 
-The Claude Code robot icon in the screenshot is Anthropic's artwork, so it is
-not included in this repository. `install.sh` copies it from the Claude Code
-extension for VS Code (or Cursor) if you have that installed. Without it the
-indicator works the same, just without the icon.
-
 ## Using it
 
 | To do this | Do this |
@@ -117,3 +112,11 @@ and prints the status and limits.
 
 `dev/xinput_fake.py` is a small stand-in for `xdotool` (clicks, key presses
 and an idle check on X11), used to click through the real indicator.
+
+## Credits
+
+The robot icon (`claude-usage@localhost/clawd.svg`) is Clawd, the Claude Code
+mascot. It is artwork by Anthropic, © Anthropic PBC, taken from the Claude
+Code extension for VS Code and used here only to identify the product this
+indicator reports on. All rights to it remain with Anthropic. "Claude" and
+"Claude Code" are Anthropic's names; this project is independent of Anthropic.
