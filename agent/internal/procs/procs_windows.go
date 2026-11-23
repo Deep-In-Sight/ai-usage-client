@@ -12,8 +12,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// longPath expands 8.3 short names (C:\Users\RUNNER~1\...) so that it can be
-// compared with what QueryFullProcessImageName returns.
+// longPath expands 8.3 short names (C:\Users\RUNNER~1\...) so that paths
+// can be compared.
 func longPath(p string) string {
 	if abs, err := filepath.Abs(p); err == nil {
 		p = abs
@@ -62,6 +62,9 @@ func FindByExe(exe string) ([]int, error) {
 			continue
 		}
 		p, ok := imagePath(e.ProcessID)
+		if ok && strings.Contains(p, "~") {
+			p = longPath(p) // the image path keeps the short names it was started with
+		}
 		if ok && strings.EqualFold(filepath.Clean(p), want) {
 			pids = append(pids, int(e.ProcessID))
 		}
