@@ -9,16 +9,17 @@ import (
 
 // File names inside the data folder.
 const (
-	ConfigFile   = "config.json"
-	DeviceIDFile = "device-id"
-	StateFile    = "state.json"
-	BacklogFile  = "backlog.json"
-	LatestFile   = "latest.json"
-	StatusFile   = "status.json"
-	LockFile     = "run.lock"
-	NotifyFile   = "notify-pending" // install writes it; the next tray run shows the notice once
-	LogFile      = "agent.log"      // where a run without a console writes its log
-	TrayIconsDir = "tray-icons"     // the Windows tray's icon files
+	ConfigFile       = "config.json"
+	DeviceIDFile     = "device-id"
+	StateFile        = "state.json"
+	BacklogFile      = "backlog.json"
+	LatestFile       = "latest.json"
+	StatusFile       = "status.json"
+	LockFile         = "run.lock"
+	NotifyFile       = "notify-pending" // install writes it; the next tray run shows the notice once
+	LogFile          = "agent.log"      // where a run without a console writes its log
+	TrayIconsDir     = "tray-icons"     // the Windows tray's icon files
+	AutostartOffFile = "autostart-off"  // "Start at login" was turned off in the tray
 )
 
 // Dirs are the agent's locations for the current OS user.

@@ -116,6 +116,7 @@ func runCmd(env Env, args []string) int {
 	ctrl := newController(cfg, initial, nil, toggle)
 	ctrl.exe = env.Dirs.InstallExe
 	ctrl.iconDir = env.Dirs.File(paths.TrayIconsDir)
+	ctrl.offFile = env.Dirs.File(paths.AutostartOffFile)
 	updates := make(chan struct{}, 1)
 
 	newSyncer := env.Syncer

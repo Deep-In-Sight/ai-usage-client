@@ -228,6 +228,14 @@ func install(env Env, args []string) (int, string) {
 		}
 	}
 	if registered {
+		// "Start at login" turned off in the tray stays off after an upgrade
+		// (the agent still runs now).
+		if _, err := os.Stat(env.Dirs.File(paths.AutostartOffFile)); err == nil {
+			if t, ok := method.(autostart.Toggler); ok && t.SetEnabled(ctx, env.Dirs.InstallExe, false) == nil {
+				fmt.Fprintln(env.Stdout, text.AutostartStaysOff)
+				autostartLine = method.Name() + " (off)"
+			}
+		}
 		for _, o := range others {
 			if err := o.Unregister(ctx); err != nil {
 				fmt.Fprintln(env.Stderr, "claude-usage install: removing", o.Name()+":", err)

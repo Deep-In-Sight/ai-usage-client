@@ -499,3 +499,22 @@ func TestUpgradeKeepsClaudeConfigDir(t *testing.T) {
 	eq(t, c.ClaudeConfigDir, dir)
 	contains(t, te.out.String(), "Claude Code folder: "+dir+" (kept from the previous install; set CLAUDE_CONFIG_DIR to change it)")
 }
+
+func TestUpgradeKeepsStartAtLoginOff(t *testing.T) {
+	te, _, main, _, _ := osEnv(t, "windows")
+	cfgPath := writeCfg(t, validConfig)
+	eq(t, te.main("install", "--config", cfgPath), 0)
+	// the user unticks "Start at login" in the tray
+	c := newController(mustParse(t, validConfig), status.Snapshot{}, nil, main)
+	c.exe, c.offFile = te.Dirs.InstallExe, te.Dirs.File(paths.AutostartOffFile)
+	must(t, c.SetAutostart(false))
+	eq(t, main.enabled, false)
+	te.out.Reset()
+	eq(t, te.main("install", "--config", cfgPath), 0)
+	eq(t, main.enabled, false)
+	contains(t, te.out.String(), "Start at login stays off, as set in the Claude Usage menu.")
+	// ticking it again clears the marker
+	must(t, c.SetAutostart(true))
+	eq(t, te.main("install", "--config", cfgPath), 0)
+	eq(t, main.enabled, true)
+}

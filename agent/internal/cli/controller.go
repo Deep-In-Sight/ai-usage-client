@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/autostart"
@@ -20,6 +21,7 @@ type controller struct {
 	toggle  autostart.Toggler
 	exe     string
 	iconDir string
+	offFile string // marker: start at login turned off here (install keeps it off)
 	remove  func() error
 }
 
@@ -68,7 +70,17 @@ func (c *controller) SetAutostart(on bool) error {
 	if c.toggle == nil {
 		return errors.New("start at login cannot be changed here")
 	}
-	return c.toggle.SetEnabled(context.Background(), c.exe, on)
+	if err := c.toggle.SetEnabled(context.Background(), c.exe, on); err != nil {
+		return err
+	}
+	if c.offFile != "" {
+		if on {
+			_ = os.Remove(c.offFile)
+		} else {
+			_ = os.WriteFile(c.offFile, nil, 0o600)
+		}
+	}
+	return nil
 }
 
 func (c *controller) Remove() error {

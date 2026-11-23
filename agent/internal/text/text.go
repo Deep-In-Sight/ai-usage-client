@@ -58,6 +58,7 @@ const (
 	AutostartFailed     = "Start at login could not be set up (%v). Claude Usage is running now, but it will not start by itself after you log out or restart."
 	LingerOff           = "linger is not enabled: the agent runs only while %s is logged in. To keep it running, ask an administrator to run: loginctl enable-linger %s"
 	SignInFound         = "found"
+	AutostartStaysOff   = "Start at login stays off, as set in the Claude Usage menu."
 	KeptClaudeDir       = "(kept from the previous install; set CLAUDE_CONFIG_DIR to change it)"
 	SignInNotFound      = "not found yet (the agent starts collecting once you sign in)"
 	AlertInstalled      = "Claude Usage is installed and running.\n\nIts icon is under the ^ arrow on the taskbar."
