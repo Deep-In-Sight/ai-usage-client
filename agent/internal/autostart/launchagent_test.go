@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -51,8 +52,10 @@ func TestLaunchAgentRegisterCalls(t *testing.T) {
 	b, err := os.ReadFile(la.PlistPath())
 	must(t, err)
 	eq(t, string(b), PlistText(exe, la.LogPath))
-	st, _ := os.Stat(la.PlistPath())
-	eq(t, st.Mode().Perm(), os.FileMode(0o644))
+	if runtime.GOOS != "windows" { // Windows has no such modes
+		st, _ := os.Stat(la.PlistPath())
+		eq(t, st.Mode().Perm(), os.FileMode(0o644))
+	}
 
 	// bootstrap fails: the plist stays and the caller starts the agent itself
 	f = &fakeRun{reply: func(a []string) (string, error) {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -71,8 +72,10 @@ func TestXDGRegisterToggleUnregister(t *testing.T) {
 	b, err := os.ReadFile(path)
 	must(t, err)
 	eq(t, string(b), wantDesktop)
-	st, _ := os.Stat(path)
-	eq(t, st.Mode().Perm(), os.FileMode(0o644))
+	if runtime.GOOS != "windows" { // Windows has no such modes
+		st, _ := os.Stat(path)
+		eq(t, st.Mode().Perm(), os.FileMode(0o644))
+	}
 	eq(t, x.State(bg), "registered")
 	eq(t, x.Enabled(bg), true)
 

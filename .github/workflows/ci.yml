@@ -31,7 +31,15 @@ jobs:
       - name: vet
         run: go vet ./...
       - name: test
-        run: go test -count=1 ./...
+        shell: bash
+        run: |
+          # Failures also become annotations, which can be read without a token.
+          set -o pipefail
+          go test -count=1 ./... 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+            grep -E -- '^[[:space:]]*(--- FAIL|panic:)|_test\.go:[0-9]+:' "$RUNNER_TEMP/test.log" |
+              head -10 | sed -E 's/^[[:space:]]*/::error title=go test::/'
+            exit 1
+          }
       - name: keychain integration
         if: runner.os == 'macOS' && hashFiles('agent/internal/creds/keychain_darwin_test.go') != ''
         env:
