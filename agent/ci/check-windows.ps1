@@ -61,7 +61,16 @@ function RunExe([string]$Path, [string]$Arguments, [int]$TimeoutSec = 60) {
     return @{ timeout = $false; code = $p.ExitCode; out = "$(Get-Content -Raw "$o.out" -ErrorAction SilentlyContinue)"; err = "$(Get-Content -Raw "$o.err" -ErrorAction SilentlyContinue)" }
 }
 function OneLiner([string]$LogName) {
-    $r = RunExe 'powershell.exe' "-NoProfile -ExecutionPolicy Bypass -Command `"irm $base/files/install-ci.ps1 | iex`"" 240
+    # Windows PowerShell started from pwsh inherits pwsh's PSModulePath and
+    # then cannot load its own modules (Get-FileHash is missing). A user's
+    # PowerShell window does not have this, so start it with its defaults.
+    $saved = $env:PSModulePath
+    [Environment]::SetEnvironmentVariable('PSModulePath', $null, 'Process')
+    try {
+        $r = RunExe 'powershell.exe' "-NoProfile -ExecutionPolicy Bypass -Command `"irm $base/files/install-ci.ps1 | iex`"" 240
+    } finally {
+        [Environment]::SetEnvironmentVariable('PSModulePath', $saved, 'Process')
+    }
     [IO.File]::WriteAllText((Join-Path $out $LogName), "$($r.out)`n--- stderr`n$($r.err)")
     return $r
 }
