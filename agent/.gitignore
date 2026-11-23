@@ -1,1 +1,3 @@
 dist/
+cmd/claude-usage/*.syso
+winres/.build.json

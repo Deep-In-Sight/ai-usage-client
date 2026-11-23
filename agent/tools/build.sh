@@ -1,19 +1,30 @@
 #!/bin/sh
-# Build the release executables into agent/dist/ with the docker Go wrapper.
-# Usage: agent/tools/build.sh [VERSION]   (default 0.0.0-dev)
+# Build the Linux and Windows release executables into agent/dist/, check
+# them and write dist/SHA256SUMS. Uses go when installed, else the docker
+# wrapper. Usage (in agent/): tools/build.sh [VERSION]   (default 0.0.0-dev)
 # Symbols are kept and nothing is packed: plain executables are what
 # antivirus heuristics expect from normal programs.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 ver="${1:-0.0.0-dev}"
-case "$ver" in
-  *[!A-Za-z0-9.+-]*|"") echo "bad version: $ver" >&2; exit 2 ;;
-esac
+. "$here/tools/version.sh"
+check_version "$ver"
 cd "$here"
-mkdir -p dist
+GO=$(go_cmd)
+filever="$(printf '%s' "$ver" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/').0"
 ld="-X github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/version.Version=$ver"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 tools/go.sh build -trimpath -ldflags "$ld" \
+mkdir -p dist
+
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $GO build -trimpath -ldflags "$ld" \
   -o dist/claude-usage-linux-amd64 ./cmd/claude-usage
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 tools/go.sh build -trimpath -ldflags "$ld" \
+
+# Windows: version information, manifest and icon as a .syso next to main.
+trap 'rm -f cmd/claude-usage/rsrc_windows_amd64.syso winres/.build.json' EXIT
+sed -e "s/@FILE_VERSION@/$filever/g" -e "s/@PRODUCT_VERSION@/$ver/g" winres/winres.json.in > winres/.build.json
+$GO tool go-winres make --in winres/.build.json --out cmd/claude-usage/rsrc --arch amd64
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $GO build -trimpath -ldflags "-H=windowsgui $ld" \
   -o dist/claude-usage-windows-amd64.exe ./cmd/claude-usage
-(cd dist && sha256sum claude-usage-linux-amd64 claude-usage-windows-amd64.exe > SHA256SUMS)
+
+tools/check-binary.sh dist/claude-usage-linux-amd64
+tools/check-binary.sh dist/claude-usage-windows-amd64.exe
+tools/sums.sh dist
