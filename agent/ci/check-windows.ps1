@@ -99,7 +99,7 @@ Check 'install.oneline' {
     $r = OneLiner 'install.log'
     $script:installAt = Get-Date
     if ($r.code -eq 0 -and (Test-Path -LiteralPath $exe) -and "$($r.out)" -match [regex]::Escape('under the ^ arrow')) { Pass 'install.oneline' 'exit 0' }
-    else { Fail 'install.oneline' "timeout=$($r.timeout) code=$($r.code) exe=$(Test-Path -LiteralPath $exe) $("$($r.out)".Trim() -split "`n" | Select-Object -Last 3)" }
+    else { Fail 'install.oneline' "timeout=$($r.timeout) code=$($r.code) exe=$(Test-Path -LiteralPath $exe) out: $("$($r.out)".Trim() -split "`n" | Select-Object -Last 3) err: $("$($r.err)".Trim() -split "`n" | Select-Object -First 4)" }
 }
 
 Check 'exe.version_info' {
