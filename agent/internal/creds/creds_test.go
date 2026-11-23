@@ -1,6 +1,7 @@
 package creds
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -84,4 +85,29 @@ func TestErrorTextsNeverContainContent(t *testing.T) {
 	if err == nil {
 		t.Fatal("empty token should fail")
 	}
+}
+
+func TestOddExpiresAtIsUnknownNotCorrupt(t *testing.T) {
+	l, tok, err := parseCreds([]byte(`{"claudeAiOauth":{"accessToken":"` + fakeToken + `","expiresAt":1.7e12}}`))
+	must(t, err)
+	eq(t, tok, fakeToken)
+	eq(t, l.ExpiresAt.Equal(time.UnixMilli(1700000000000)), true)
+	for _, v := range []string{`"soon"`, `null`, `-5`, `true`, `1e400`, `{"x":1}`} {
+		l, _, err := parseCreds([]byte(`{"claudeAiOauth":{"accessToken":"` + fakeToken + `","expiresAt":` + v + `}}`))
+		must(t, err)
+		eq(t, l.HasToken, true)
+		eq(t, l.ExpiresAt.IsZero(), true)
+	}
+}
+
+func TestHugeAccountFileIsCapped(t *testing.T) {
+	// only oauthAccount is decoded; other keys are skipped as they stream past
+	b := []byte(`{"projects":{"x":"` + strings.Repeat("a", 1<<20) + `"},"oauthAccount":{"accountUuid":"acc-1","emailAddress":"user-a@example.com"},"later":[1,2,3]}`)
+	a := parseAccountFrom(bytes.NewReader(b))
+	if a == nil || a.UUID != "acc-1" || a.Email != "user-a@example.com" {
+		t.Fatalf("%+v", a)
+	}
+	eq(t, parseAccountFrom(strings.NewReader(`{"oauthAccount":null}`)) == nil, true)
+	eq(t, parseAccountFrom(strings.NewReader(`[1]`)) == nil, true)
+	eq(t, parseAccountFrom(strings.NewReader(`{"a":`)) == nil, true)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -20,6 +21,21 @@ type Options struct {
 	UseKeychain     bool   // macOS: try the keychain before the file
 	Keychain        KeychainFunc
 	Clock           clock.Clock
+}
+
+// Read caps: the credentials file is small; .claude.json can be large.
+const (
+	maxCredsFile   = 1 << 20
+	maxAccountFile = 32 << 20
+)
+
+func readCapped(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, limit))
 }
 
 // macReloginGap limits keychain re-reads triggered by .claude.json changes.
@@ -163,7 +179,7 @@ func (r *Reader) read(ctx context.Context, now time.Time) (Login, string) {
 		}
 	}
 	if !got {
-		b, err := os.ReadFile(r.credPath())
+		b, err := readCapped(r.credPath(), maxCredsFile)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
 			l = Login{Problem: "no Claude Code sign-in found"}
@@ -198,8 +214,9 @@ func (r *Reader) read(ctx context.Context, now time.Time) (Login, string) {
 		r.bad = 0
 		r.retry = false
 		if l.HasToken {
-			if b, err := os.ReadFile(r.accountPath()); err == nil {
-				l.Account = parseAccount(b)
+			if f, err := os.Open(r.accountPath()); err == nil {
+				l.Account = parseAccountFrom(io.LimitReader(f, maxAccountFile))
+				f.Close()
 			}
 		}
 	}

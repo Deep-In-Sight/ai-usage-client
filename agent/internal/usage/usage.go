@@ -208,6 +208,8 @@ func FetchErrorText(httpStatus int) string {
 		return ""
 	case 401:
 		return "Sign-in expired: open Claude Code to renew it"
+	case 429:
+		return "Rate limited by Anthropic, retrying later"
 	case 0:
 		return "Offline: can't reach api.anthropic.com"
 	}

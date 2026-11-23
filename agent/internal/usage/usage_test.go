@@ -138,6 +138,7 @@ func TestFetchErrorText(t *testing.T) {
 	eq(t, FetchErrorText(401), "Sign-in expired: open Claude Code to renew it")
 	eq(t, FetchErrorText(0), "Offline: can't reach api.anthropic.com")
 	eq(t, FetchErrorText(503), "Usage request failed (HTTP 503)")
+	eq(t, FetchErrorText(429), "Rate limited by Anthropic, retrying later")
 	eq(t, FetchErrorText(200), "")
 	eq(t, NotSignedInText, "Not signed in: no Claude Code login found")
 }

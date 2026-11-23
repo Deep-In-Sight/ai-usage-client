@@ -13,6 +13,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
+	"strconv"
 	"time"
 )
 
@@ -65,10 +67,10 @@ func KeychainService(claudeConfigDir string) string {
 
 type rawCreds struct {
 	ClaudeAiOauth *struct {
-		AccessToken      string `json:"accessToken"`
-		ExpiresAt        int64  `json:"expiresAt"`
-		SubscriptionType string `json:"subscriptionType"`
-		RateLimitTier    string `json:"rateLimitTier"`
+		AccessToken      string          `json:"accessToken"`
+		ExpiresAt        json.RawMessage `json:"expiresAt"` // read leniently: an odd value is an unknown expiry
+		SubscriptionType string          `json:"subscriptionType"`
+		RateLimitTier    string          `json:"rateLimitTier"`
 	} `json:"claudeAiOauth"`
 }
 
@@ -89,8 +91,8 @@ func parseCreds(data []byte) (Login, string, error) {
 		return Login{Problem: errNoToken.Error()}, "", errNoToken
 	}
 	l := Login{HasToken: true, SubscriptionType: o.SubscriptionType, RateLimitTier: o.RateLimitTier}
-	if o.ExpiresAt > 0 {
-		l.ExpiresAt = time.UnixMilli(o.ExpiresAt).UTC()
+	if ms, err := strconv.ParseFloat(string(o.ExpiresAt), 64); err == nil && ms > 0 && ms < 1e15 {
+		l.ExpiresAt = time.UnixMilli(int64(ms)).UTC()
 	}
 	return l, o.AccessToken, nil
 }
@@ -105,9 +107,31 @@ type rawAccountFile struct {
 	} `json:"oauthAccount"`
 }
 
-func parseAccount(data []byte) *Account {
+// parseAccountFrom stream-decodes only the top-level oauthAccount key of
+// .claude.json (which can be many MB of project history).
+func parseAccountFrom(rd io.Reader) *Account {
+	dec := json.NewDecoder(rd)
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil
+	}
 	var r rawAccountFile
-	if json.Unmarshal(data, &r) != nil || r.OAuthAccount == nil || r.OAuthAccount.AccountUUID == "" {
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil
+		}
+		if key, _ := tok.(string); key == "oauthAccount" {
+			if dec.Decode(&r.OAuthAccount) != nil {
+				return nil
+			}
+			break
+		}
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return nil
+		}
+	}
+	if r.OAuthAccount == nil || r.OAuthAccount.AccountUUID == "" {
 		return nil
 	}
 	a := r.OAuthAccount
