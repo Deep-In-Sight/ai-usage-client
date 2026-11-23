@@ -16,6 +16,8 @@ import (
 	"math/rand/v2"
 	"os"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/anthropic"
@@ -38,6 +40,9 @@ const (
 	StandaloneMax        = 35 * time.Minute
 	MinNextSync          = 15 * time.Second
 	MaxNextSync          = 600 * time.Second
+	// FreshFollowUps is how many waits after a want_fresh sync are cut to
+	// MinNextSync while the shown numbers have not changed yet.
+	FreshFollowUps = 6
 
 	defaultBatch = backlog.MaxItems
 	minWait      = time.Second
@@ -109,6 +114,17 @@ type Engine struct {
 
 	latest      *protocol.Latest
 	latestSaved string
+
+	// Safe from any goroutine.
+	fresh      atomic.Bool   // a refresh was asked for and not yet sent with a 200
+	wake       chan struct{} // capacity 1: cuts Run's wait short
+	modeMu     sync.Mutex
+	clientMode string
+
+	// Engine goroutine only.
+	followUps    int    // short waits left after a want_fresh sync
+	freshBase    string // latest fetched_at when the refresh was sent
+	freshWaiting bool   // this step's wait is a follow-up wait
 }
 
 // New prepares an engine; it reads state.json and latest.json.
@@ -125,7 +141,7 @@ func New(d Deps) *Engine {
 	if d.Publish == nil {
 		d.Publish = func(status.Snapshot) {}
 	}
-	e := &Engine{d: d, mode: ModeStarting, batchLimit: defaultBatch}
+	e := &Engine{d: d, mode: ModeStarting, batchLimit: defaultBatch, wake: make(chan struct{}, 1), clientMode: d.Identity.Mode}
 	if d.StatePath != "" {
 		e.state = config.LoadState(d.StatePath)
 	}
@@ -144,7 +160,8 @@ func New(d Deps) *Engine {
 	return e
 }
 
-// Run steps until ctx ends, waiting on clk between steps.
+// Run steps until ctx ends, waiting on clk between steps, or less when
+// RequestFresh wakes it.
 func Run(ctx context.Context, e *Engine, clk clock.Clock) {
 	for ctx.Err() == nil {
 		d := e.Step(ctx)
@@ -152,14 +169,51 @@ func Run(ctx context.Context, e *Engine, clk clock.Clock) {
 		case <-ctx.Done():
 			return
 		case <-clk.After(d):
+		case <-e.wake:
 		}
 	}
 }
 
+// RequestFresh asks for new numbers: the next sync carries want_fresh once
+// (until a sync succeeds) and Run steps at once. In stand-alone mode it only
+// makes Run look for the server again; it never fetches directly.
+func (e *Engine) RequestFresh() {
+	e.fresh.Store(true)
+	select {
+	case e.wake <- struct{}{}:
+	default:
+	}
+}
+
+// SetClientMode sets what the next requests report as client.mode.
+func (e *Engine) SetClientMode(mode string) {
+	e.modeMu.Lock()
+	e.clientMode = mode
+	e.modeMu.Unlock()
+}
+
+func (e *Engine) currentClientMode() string {
+	e.modeMu.Lock()
+	defer e.modeMu.Unlock()
+	return e.clientMode
+}
+
+func (e *Engine) latestAt() string {
+	if e.latest == nil {
+		return ""
+	}
+	return e.latest.FetchedAt
+}
+
 // Step runs one round and returns how long to wait before the next.
 func (e *Engine) Step(ctx context.Context) time.Duration {
+	select { // a wake-up from before this step is answered by this step
+	case <-e.wake:
+	default:
+	}
 	now := e.d.Clock.Now()
 	login := e.d.Logins.Current(ctx)
+	before := e.latestAt()
 	if err := e.d.Backlog.Prune(now); err != nil {
 		e.d.Log.Printf("backlog: %v", err)
 	}
@@ -174,8 +228,12 @@ func (e *Engine) Step(ctx context.Context) time.Duration {
 	}
 
 	var wait time.Duration
-	resp, err := e.syncOnce(ctx, login, now)
+	wantFresh := e.fresh.Swap(false)
+	resp, err := e.syncOnce(ctx, login, now, wantFresh)
 	if err == nil {
+		if wantFresh {
+			e.followUps, e.freshBase = FreshFollowUps, before
+		}
 		wait = clampNextSync(resp.NextSyncSeconds)
 		ordered := resp.FetchNow && resp.Role == "poller"
 		if ordered && !e.canFetch(login, e.d.Clock.Now()) {
@@ -184,14 +242,30 @@ func (e *Engine) Step(ctx context.Context) time.Duration {
 		}
 		if ordered && e.canFetch(login, e.d.Clock.Now()) {
 			e.fetch(ctx, login)
-			if resp2, err2 := e.syncOnce(ctx, login, e.d.Clock.Now()); err2 == nil {
+			if resp2, err2 := e.syncOnce(ctx, login, e.d.Clock.Now(), false); err2 == nil {
 				wait = clampNextSync(resp2.NextSyncSeconds)
 			} else {
 				wait = e.failed(err2, now, login)
 			}
 		}
+		e.freshWaiting = false
+		if e.followUps > 0 {
+			if e.latestAt() != e.freshBase {
+				e.followUps = 0 // the new numbers are here
+			} else if e.lastSyncOK {
+				wait = min(wait, MinNextSync)
+				e.followUps--
+				e.freshWaiting = true
+			}
+		}
 	} else {
 		wait = e.failed(err, now, login)
+		if e.mode == ModeStandalone {
+			e.followUps = 0 // no server: nothing will come of the request
+		} else if wantFresh {
+			e.fresh.CompareAndSwap(false, true) // try again with the next sync
+		}
+		e.freshWaiting = e.followUps > 0
 	}
 	e.publish(login, e.d.Clock.Now())
 	return wait
@@ -256,8 +330,9 @@ func (e *Engine) setMode(m string) {
 }
 
 // syncOnce tries the candidate URLs in order; the first success wins.
-func (e *Engine) syncOnce(ctx context.Context, login creds.Login, now time.Time) (protocol.Response, error) {
+func (e *Engine) syncOnce(ctx context.Context, login creds.Login, now time.Time, wantFresh bool) (protocol.Response, error) {
 	req := e.request(login, now)
+	req.WantFresh = wantFresh
 	var lastErr, serverErr error
 	for _, base := range discover.Candidates(e.state.LastGoodURL, e.state.ServerURLs, e.d.Config.ServerURLs) {
 		if ctx.Err() != nil {
@@ -443,7 +518,7 @@ func (e *Engine) request(login creds.Login, now time.Time) protocol.Request {
 	req := protocol.Request{
 		Schema: protocol.Schema,
 		Client: protocol.ClientInfo{Version: clip(id.Version, capShort), OS: clip(id.OS, capShort),
-			OSVersion: opt(id.OSVersion, capText), Arch: opt(id.Arch, capShort), Mode: opt(id.Mode, capShort)},
+			OSVersion: opt(id.OSVersion, capText), Arch: opt(id.Arch, capShort), Mode: opt(e.currentClientMode(), capShort)},
 		Device:  protocol.DeviceInfo{ID: clip(id.DeviceID, capShort), Hostname: opt(id.Hostname, capText), OSUser: opt(id.OSUser, capText)},
 		Auth:    protocol.AuthInfo{State: login.State(now)},
 		Results: e.d.Backlog.Pending(e.batchLimit),
@@ -468,6 +543,7 @@ func (e *Engine) publish(login creds.Login, now time.Time) {
 		SyncFailures: e.failures, SyncProblem: e.syncProblem,
 		LastFetchAt: e.lastFetchAt.UTC(), LastFetchStatus: e.lastFetchStatus,
 		AuthState: login.State(now), SignInProblem: login.Problem, Backlog: e.d.Backlog.Len(),
+		ClientMode: e.currentClientMode(), FreshPending: e.fresh.Load() || e.freshWaiting,
 	}
 	if e.mode == ModeStandalone {
 		s.NextStandaloneFetch = e.nextStandalone.UTC()
@@ -496,6 +572,15 @@ func (e *Engine) publish(login creds.Login, now time.Time) {
 		s.WeeklyPercent, s.ScopedPercent = lim.Weekly.Percent, lim.Scoped.Percent
 		if lim.Weekly.ResetsAt != nil {
 			s.WeeklyResetsAt = lim.Weekly.ResetsAt.UTC()
+		}
+		if lim.Weekly.Percent != nil {
+			s.WeeklySeverity = lim.Weekly.Severity
+		}
+		if lim.Scoped.Percent != nil {
+			s.ScopedSeverity = lim.Scoped.Severity
+		}
+		if lim.Scoped.ResetsAt != nil {
+			s.ScopedResetsAt = lim.Scoped.ResetsAt.UTC()
 		}
 	}
 	e.d.Publish(s)

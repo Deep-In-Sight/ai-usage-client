@@ -14,6 +14,7 @@ import (
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/clock"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/config"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/creds"
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/osinfo"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/paths"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/procs"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/version"
@@ -125,15 +126,8 @@ func samePath(a, b string) bool {
 	return clean(a) == clean(b)
 }
 
-// isHeadless: no graphical session. DISPLAY is not looked at on purpose (SSH
-// X forwarding sets it on servers).
-func isHeadless(getenv func(string) string) bool {
-	switch getenv("XDG_SESSION_TYPE") {
-	case "x11", "wayland":
-		return false
-	}
-	return getenv("XDG_CURRENT_DESKTOP") == ""
-}
+// isHeadless: no graphical session (the rule is osinfo.Headless).
+func isHeadless(getenv func(string) string) bool { return osinfo.Headless(getenv) }
 
 // readerOptions builds the sign-in reader options from config.json only;
 // the CLAUDE_CONFIG_DIR environment variable is never read here.

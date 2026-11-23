@@ -1,5 +1,5 @@
 // Package status is the agent's status file (status.json), written after
-// every engine step. The status command, and later the tray, read it. It
+// every engine step. The status command and the tray read it. It
 // holds no token and no ingest key.
 package status
 
@@ -34,6 +34,11 @@ type Snapshot struct {
 	WeeklyPercent       *float64  `json:"weekly_percent,omitempty"`
 	ScopedPercent       *float64  `json:"scoped_percent,omitempty"`
 	WeeklyResetsAt      time.Time `json:"weekly_resets_at,omitzero"`
+	WeeklySeverity      string    `json:"weekly_severity,omitempty"`
+	ScopedResetsAt      time.Time `json:"scoped_resets_at,omitzero"`
+	ScopedSeverity      string    `json:"scoped_severity,omitempty"`
+	ClientMode          string    `json:"client_mode"`   // tray | headless: what this process shows
+	FreshPending        bool      `json:"fresh_pending"` // a refresh was asked for and its follow-up syncs are not over
 	Backlog             int       `json:"backlog"`
 	PeersDevices        int       `json:"peers_devices"`
 	PollerHostname      string    `json:"poller_hostname,omitempty"`

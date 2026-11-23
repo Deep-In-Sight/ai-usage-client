@@ -96,7 +96,9 @@ func TestOnlyAnthropicCallsWithToken(t *testing.T) {
 }
 
 func TestServerSideNeverImportsCredsOrAnthropic(t *testing.T) {
-	guarded := []string{"internal/sync/protocol/", "internal/sync/discover/", "internal/sync/backlog/", "internal/status/"}
+	guarded := []string{"internal/sync/protocol/", "internal/sync/discover/", "internal/sync/backlog/", "internal/status/",
+		// the tray side: packages that do not exist yet are simply not found
+		"internal/tray/", "internal/notify/", "internal/icon/", "internal/autostart/", "internal/winapp/", "internal/procs/"}
 	banned := []string{module + "/internal/creds", module + "/internal/anthropic"}
 	for _, f := range sources(t) {
 		in := false

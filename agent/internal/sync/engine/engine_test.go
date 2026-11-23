@@ -92,7 +92,15 @@ func (f *fakeSyncer) Sync(_ context.Context, base string, req protocol.Request) 
 	return f.fn(n, base, req)
 }
 
+func (f *fakeSyncer) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
 func (f *fakeSyncer) reqs() []protocol.Request {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var out []protocol.Request
 	for _, c := range f.calls {
 		out = append(out, c.req)

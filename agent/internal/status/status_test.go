@@ -57,3 +57,37 @@ func TestSnapshotHasNoSecretFields(t *testing.T) {
 		t.Fatal(string(b))
 	}
 }
+
+func TestTrayFieldsRoundTrip(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "status.json")
+	s := Snapshot{Mode: "coordinated", ClientMode: "tray", WeeklySeverity: "warning", ScopedSeverity: "normal",
+		ScopedResetsAt: time.Date(2026, 1, 9, 6, 0, 0, 0, time.UTC), FreshPending: true}
+	if err := Write(p, s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(p)
+	if err != nil || !reflect.DeepEqual(got, s) {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	raw, _ := os.ReadFile(p)
+	var buf bytes.Buffer
+	_ = json.Compact(&buf, raw)
+	for _, k := range []string{`"client_mode":"tray"`, `"weekly_severity":"warning"`, `"scoped_resets_at":"2026-01-09T06:00:00Z"`, `"scoped_severity":"normal"`, `"fresh_pending":true`} {
+		if !strings.Contains(buf.String(), k) {
+			t.Errorf("missing %s in %s", k, buf.String())
+		}
+	}
+	// empty values are left out, fresh_pending is always written
+	if err := Write(p, Snapshot{Mode: "starting"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(p)
+	for _, k := range []string{"weekly_severity", "scoped_resets_at", "scoped_severity"} {
+		if strings.Contains(string(raw), k) {
+			t.Errorf("%s written when empty", k)
+		}
+	}
+	if !strings.Contains(string(raw), `"fresh_pending": false`) {
+		t.Errorf("fresh_pending missing: %s", raw)
+	}
+}
