@@ -469,3 +469,18 @@ func TestUninstallKeepsEntryWhenExeCannotMove(t *testing.T) {
 		t.Fatal("executable gone although it could not be moved")
 	}
 }
+
+func TestRemoveDataRefusesAFolderThatIsNotOurs(t *testing.T) {
+	te, _, _, _, _ := osEnv(t, "linux")
+	other := filepath.Join(t.TempDir(), "Documents")
+	must(t, os.MkdirAll(other, 0o755))
+	must(t, os.WriteFile(filepath.Join(other, "keep.txt"), []byte("x"), 0o644))
+	te.Dirs.Data = other
+	err := newRemover(te.Env).run([]string{"remove-data"})
+	if err == nil {
+		t.Fatal("removed a folder that is not ours")
+	}
+	if _, err := os.Stat(filepath.Join(other, "keep.txt")); err != nil {
+		t.Fatal("file removed")
+	}
+}

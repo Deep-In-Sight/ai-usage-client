@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/anthropic"
 	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/sync/protocol"
 )
 
@@ -157,4 +158,21 @@ func waitFor(t *testing.T, limit time.Duration, cond func() bool) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+func TestRefreshCannotPassTheFetchLimit(t *testing.T) {
+	// the server orders a fetch on every sync; the hourly budget runs out
+	r := newRig(t, always(resp("poller", true, 15), nil))
+	for r.fetcher.calls < anthropic.HourlyCap {
+		r.step()
+		if r.clk.Now().Sub(t0) > 2*time.Hour {
+			t.Fatal("budget never used up")
+		}
+	}
+	calls := r.fetcher.calls
+	r.e.RequestFresh()
+	r.e.Step(ctx) // at once, want_fresh, fetch_now: still no fetch
+	eq(t, r.fetcher.calls, calls)
+	reqs := r.syncer.reqs()
+	eq(t, reqs[len(reqs)-1].WantFresh, true)
 }

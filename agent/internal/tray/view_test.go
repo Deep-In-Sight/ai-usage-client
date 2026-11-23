@@ -236,3 +236,10 @@ func TestTooltipLimit(t *testing.T) {
 		t.Fatalf("%d units", n)
 	}
 }
+
+func TestTooltipMaxIsWindowsLimit(t *testing.T) {
+	eq(t, tooltipMax, 127)
+	got := truncateUTF16(strings.Repeat("x", 300), tooltipMax)
+	eq(t, len(utf16.Encode([]rune(got))), 127)
+	eq(t, strings.HasSuffix(got, "…"), true)
+}

@@ -228,3 +228,19 @@ func TestClawdRejectsCurves(t *testing.T) {
 		t.Fatal("two paths accepted")
 	}
 }
+
+func TestLinuxTrayImageHasTheNumber(t *testing.T) {
+	img, err := png.Decode(bytes.NewReader(TrayImage("linux", Spec{Percent: p(42), Level: usage.LevelNormal})))
+	must(t, err)
+	white := 0
+	for y := 0; y < 48; y++ {
+		for x := 0; x < 48; x++ {
+			if r, g, b, a := img.At(x, y).RGBA(); a == 0xffff && r == 0xffff && g == 0xffff && b == 0xffff {
+				white++
+			}
+		}
+	}
+	if white == 0 {
+		t.Fatal("no digits drawn in the Ubuntu icon")
+	}
+}
