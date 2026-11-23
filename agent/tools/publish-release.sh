@@ -36,19 +36,27 @@ trap 'rm -f "$notes"' EXIT
 pre=""
 case "$tag" in *-*) pre="--prerelease" ;; esac
 files="$dir/claude-usage-linux-amd64 $dir/claude-usage-windows-amd64.exe $dir/claude-usage-macos-universal $dir/SHA256SUMS"
-shown="gh release create $tag --verify-tag --title \"Claude Usage $tag\" --notes-file $notes${pre:+ $pre} $files"
+# A draft first: it is published only once all four files are attached.
+shown="gh release create $tag --verify-tag --draft --title \"Claude Usage $tag\" --notes-file $notes${pre:+ $pre} $files"
+shown2="gh release edit $tag --draft=false"
 
 if [ "${DRY_RUN:-}" = "1" ]; then
   echo "DRY RUN: $shown"
+  echo "DRY RUN: (check the four attached files) then $shown2"
+  echo "DRY RUN: $shown2"
   cat "$notes"
   if [ -n "${GITHUB_ACTIONS:-}" ]; then
-    echo "::notice title=release dry run::$shown"
+    echo "::notice title=release dry run::$shown && $shown2"
   fi
   exit 0
 fi
 [ -n "${GH_TOKEN:-}" ] || fail "GH_TOKEN is not set"
 if gh release view "$tag" >/dev/null 2>&1; then
-  fail "release $tag already exists; it is left as it is"
+  fail "release $tag already exists (maybe a draft from a failed run); it is left as it is"
 fi
 # shellcheck disable=SC2086
-gh release create "$tag" --verify-tag --title "Claude Usage $tag" --notes-file "$notes" $pre $files
+gh release create "$tag" --verify-tag --draft --title "Claude Usage $tag" --notes-file "$notes" $pre $files
+want=$(for f in $files; do printf '%s %s\n' "$(basename "$f")" "$(wc -c < "$f" | tr -d ' ')"; done | sort)
+got=$(gh release view "$tag" --json assets --jq '.assets[] | "\(.name) \(.size)"' | sort)
+[ "$got" = "$want" ] || fail "the draft release $tag does not hold the four files as built; it stays a draft"
+gh release edit "$tag" --draft=false

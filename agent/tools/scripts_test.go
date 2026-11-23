@@ -111,7 +111,8 @@ func TestPublishDryRun(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("%d %s", code, out)
 	}
-	for _, want := range []string{"DRY RUN: gh release create v1.2.3 --verify-tag", `--title "Claude Usage v1.2.3"`,
+	for _, want := range []string{"DRY RUN: gh release create v1.2.3 --verify-tag --draft", `--title "Claude Usage v1.2.3"`,
+		"DRY RUN: gh release edit v1.2.3 --draft=false",
 		"Claude Usage agent v1.2.3.", "Install it from your team's Claude Usage server, not from this page"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("%q not in\n%s", want, out)
@@ -129,7 +130,7 @@ func TestPublishDryRun(t *testing.T) {
 		t.Fatal("annotation outside Actions")
 	}
 	out, _ = script(t, "publish-release.sh", []string{"DRY_RUN=1", "GITHUB_ACTIONS=true"}, dir, "v1.2.3")
-	if !strings.Contains(out, "::notice title=release dry run::gh release create v1.2.3 --verify-tag") {
+	if !strings.Contains(out, "::notice title=release dry run::gh release create v1.2.3 --verify-tag --draft") {
 		t.Fatalf("no annotation:\n%s", out)
 	}
 }
