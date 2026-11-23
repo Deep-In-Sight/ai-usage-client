@@ -69,6 +69,9 @@ X-GNOME-Autostart-enabled=true
 
 func (x *XDGAutostart) Available(context.Context) bool { return true }
 
+// Preflight checks that ~/.config/autostart is writable.
+func (x *XDGAutostart) Preflight(context.Context) error { return probeDir(filepath.Dir(x.path())) }
+
 func (x *XDGAutostart) write(exe string) error {
 	if strings.ContainsAny(exe, "\n\r") {
 		return fmt.Errorf("autostart: the install path %q cannot be used in a desktop entry", exe)

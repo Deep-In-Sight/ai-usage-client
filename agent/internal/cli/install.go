@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -121,9 +122,24 @@ func install(env Env, args []string) (int, string) {
 		defer os.Remove(staged) // a no-op once renamed
 	}
 
-	// 4: stop what runs now (an upgrade), by every method and by path.
+	// 4: stop what runs now (an upgrade), by every method and by path. First
+	// make sure the autostart entry can be written: if not, an upgrade leaves
+	// the installed agent alone, and a fresh install runs without one.
 	st := method.State(ctx)
 	hadEntry := st != "not installed" && st != "not registered"
+	wasRunning := false
+	if pids, err := procs.FindByExe(env.Dirs.InstallExe); err == nil {
+		wasRunning = slices.ContainsFunc(pids, func(p int) bool { return p != os.Getpid() })
+	}
+	var preflightErr error
+	if p, ok := method.(autostart.Preflighter); ok && available {
+		if preflightErr = p.Preflight(ctx); preflightErr != nil {
+			if _, err := os.Stat(env.Dirs.InstallExe); err == nil && staged != "" {
+				return fail(fmt.Sprintf("start at login cannot be set up (%v); the installed agent was left as it was", preflightErr))
+			}
+			available = false
+		}
+	}
 	for _, m := range append([]autostart.Method{method}, others...) {
 		if err := m.Stop(ctx); err != nil {
 			fmt.Fprintln(env.Stderr, "claude-usage install: stopping the old agent:", err)
@@ -139,13 +155,17 @@ func install(env Env, args []string) (int, string) {
 		if _, err := os.Stat(env.Dirs.InstallExe); err != nil {
 			return
 		}
-		switch {
-		case hadEntry && available:
-			if err := method.Register(ctx, env.Dirs.InstallExe); err != nil && !errors.Is(err, autostart.ErrStartFailed) {
-				fmt.Fprintln(env.Stderr, "claude-usage install: restarting the previous agent:", err)
+		if hadEntry && available {
+			err := method.Register(ctx, env.Dirs.InstallExe)
+			if err == nil {
+				return
 			}
-		case killed > 0:
-			_ = env.StartDetached(env.Dirs.InstallExe, runArgs...)
+			fmt.Fprintln(env.Stderr, "claude-usage install: restarting the previous agent:", err)
+		}
+		if hadEntry || wasRunning || killed > 0 {
+			if err := env.StartDetached(env.Dirs.InstallExe, runArgs...); err != nil {
+				fmt.Fprintln(env.Stderr, "claude-usage install: starting the previous agent:", err)
+			}
 		}
 	}
 
@@ -181,6 +201,7 @@ func install(env Env, args []string) (int, string) {
 	code := exitOK
 	registered := false
 	autostartLine := ""
+	autostartProblem := preflightErr
 	if available {
 		err := method.Register(ctx, env.Dirs.InstallExe)
 		switch {
@@ -195,11 +216,9 @@ func install(env Env, args []string) (int, string) {
 			}
 			registered = true
 			autostartLine = method.Name() + " (registered; started directly)"
-		case method.Name() == "systemd-user":
-			// As before the tray: run until logout and say so (exit 10).
-			fmt.Fprintln(env.Stderr, "claude-usage install:", err)
 		default:
-			return fail(err.Error())
+			// The agent still runs, until logout (exit 10).
+			autostartProblem = err
 		}
 	}
 	if registered {
@@ -212,7 +231,11 @@ func install(env Env, args []string) (int, string) {
 		if err := env.StartDetached(env.Dirs.InstallExe, runArgs...); err != nil {
 			return fail("starting the agent: " + err.Error())
 		}
-		fmt.Fprintln(env.Stdout, text.NotLasting)
+		if autostartProblem != nil {
+			fmt.Fprintf(env.Stdout, text.AutostartFailed+"\n", autostartProblem)
+		} else {
+			fmt.Fprintln(env.Stdout, text.NotLasting)
+		}
 		autostartLine = "none (started in the background)"
 		code = exitNotLasting
 	}

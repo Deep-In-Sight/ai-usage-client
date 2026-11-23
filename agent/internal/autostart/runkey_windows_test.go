@@ -35,3 +35,7 @@ func TestRunKeyRoundTrip(t *testing.T) {
 	must(t, r.Unregister(bg))
 	eq(t, len(started), 1)
 }
+
+func TestPreflightRunKey(t *testing.T) {
+	must(t, (&RunKey{}).Preflight(bg))
+}

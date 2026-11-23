@@ -55,6 +55,7 @@ const (
 	InstalledLinux      = "Look for the Claude Usage ring in the top bar."
 	GnomeExtensionNote  = "Note: the Claude Usage GNOME extension is also installed and makes its own requests. Turn it off with: gnome-extensions disable claude-usage@localhost"
 	NotLasting          = "autostart could not be registered; the agent runs until you log out or restart"
+	AutostartFailed     = "Start at login could not be set up (%v). Claude Usage is running now, but it will not start by itself after you log out or restart."
 	LingerOff           = "linger is not enabled: the agent runs only while %s is logged in. To keep it running, ask an administrator to run: loginctl enable-linger %s"
 	SignInFound         = "found"
 	SignInNotFound      = "not found yet (the agent starts collecting once you sign in)"

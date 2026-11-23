@@ -148,8 +148,9 @@ func TestInstallStartFailedFallsBackToDetached(t *testing.T) {
 
 	te, _, main, _, _ = osEnv(t, "windows")
 	main.registerErr = errors.New("registry: access denied")
-	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 1)
-	contains(t, te.err.String(), "access denied")
+	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 10) // running, without start at login
+	eq(t, te.detached, [][]string{{te.Dirs.InstallExe, "run"}})
+	contains(t, te.out.String(), "Start at login could not be set up (registry: access denied)")
 }
 
 func TestInstallLinuxDesktopRemovesSystemdUnit(t *testing.T) {
@@ -359,5 +360,77 @@ func TestReplaceRetriesOnWindows(t *testing.T) {
 	calls = -100 // always fails on Windows: gives up
 	if err := replaceFile("windows", "a", "b", func(string, string) error { calls++; return errors.New("denied") }, 0); err == nil {
 		t.Fatal("no error")
+	}
+}
+
+// preflightMethod is a fakeMethod whose Preflight fails.
+type preflightMethod struct {
+	*fakeMethod
+	err error
+}
+
+func (p *preflightMethod) Preflight(context.Context) error {
+	p.rec.add(p.name + ".preflight")
+	return p.err
+}
+
+func TestUpgradeWhenRegisterFailsKeepsAnAgentRunning(t *testing.T) {
+	for _, goos := range []string{"windows", "darwin", "linux"} {
+		te, rec, main, _, _ := osEnv(t, goos)
+		cfgPath := writeCfg(t, validConfig)
+		eq(t, te.main("install", "--config", cfgPath), 0)
+		must(t, os.WriteFile(te.Exe, []byte("BIN2"), 0o755))
+		main.registerErr = errors.New("permission denied")
+		rec.calls, te.detached = nil, nil
+		te.out.Reset()
+		eq(t, te.main("install", "--config", cfgPath), 10)
+		eq(t, te.detached, [][]string{{te.Dirs.InstallExe, "run"}}) // the new agent runs
+		eq(t, read(t, te.Dirs.InstallExe), "BIN2")
+		contains(t, te.out.String(), "Start at login could not be set up (permission denied). Claude Usage is running now, but it will not start by itself after you log out or restart.")
+	}
+}
+
+func TestPreflightFailureLeavesTheOldInstall(t *testing.T) {
+	te, rec, main, _, _ := osEnv(t, "darwin")
+	pm := &preflightMethod{fakeMethod: main}
+	te.Autostart = func(bool) (autostart.Method, error) { return pm, nil }
+	cfgPath := writeCfg(t, validConfig)
+	eq(t, te.main("install", "--config", cfgPath), 0)
+
+	// upgrade: the LaunchAgents folder became read-only
+	pm.err = errors.New("LaunchAgents: permission denied")
+	must(t, os.WriteFile(te.Exe, []byte("BIN2"), 0o755))
+	rec.calls = nil
+	eq(t, te.main("install", "--config", cfgPath), 1)
+	eq(t, rec.list(), []string{"main.preflight"}) // nothing stopped
+	eq(t, read(t, te.Dirs.InstallExe), "BIN")
+	contains(t, te.err.String(), "LaunchAgents: permission denied")
+	contains(t, te.err.String(), "the installed agent was left as it was")
+
+	// a fresh install still gets a running agent, without start at login
+	te, rec, main, _, _ = osEnv(t, "darwin")
+	pm = &preflightMethod{fakeMethod: main, err: errors.New("LaunchAgents: permission denied")}
+	te.Autostart = func(bool) (autostart.Method, error) { return pm, nil }
+	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 10)
+	eq(t, te.detached, [][]string{{te.Dirs.InstallExe, "run"}})
+	if slices.Contains(rec.list(), "main.register:BIN") {
+		t.Fatal("registered although the preflight failed")
+	}
+	contains(t, te.out.String(), "Start at login could not be set up (LaunchAgents: permission denied)")
+}
+
+func TestFailedReplaceRestartsTheOldAgent(t *testing.T) {
+	te, rec, _, _, _ := osEnv(t, "linux")
+	cfgPath := writeCfg(t, validConfig)
+	eq(t, te.main("install", "--config", cfgPath), 0)
+	// the installed executable cannot be replaced: a non-empty folder is in its place
+	must(t, os.Remove(te.Dirs.InstallExe))
+	must(t, os.MkdirAll(filepath.Join(te.Dirs.InstallExe, "x"), 0o755))
+	must(t, os.WriteFile(te.Exe, []byte("BIN2"), 0o755))
+	rec.calls = nil
+	eq(t, te.main("install", "--config", cfgPath), 1)
+	calls := rec.list()
+	if len(calls) == 0 || !strings.HasPrefix(calls[len(calls)-1], "main.register") {
+		t.Fatalf("old agent not started again: %v", calls)
 	}
 }

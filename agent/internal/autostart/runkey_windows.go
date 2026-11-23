@@ -28,6 +28,15 @@ func (r *RunKey) value() string {
 
 func (r *RunKey) Available(context.Context) bool { return true }
 
+// Preflight checks that the Run key can be written.
+func (r *RunKey) Preflight(context.Context) error {
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, runKeyPath, registry.SET_VALUE)
+	if err != nil {
+		return fmt.Errorf("autostart: Run key: %w", err)
+	}
+	return k.Close()
+}
+
 func (r *RunKey) write(exe string) error {
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, runKeyPath, registry.SET_VALUE)
 	if err != nil {

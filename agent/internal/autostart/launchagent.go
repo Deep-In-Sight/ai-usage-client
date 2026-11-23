@@ -55,6 +55,9 @@ func PlistText(exe, logPath string) string {
 
 func (l *LaunchAgent) Available(context.Context) bool { return true }
 
+// Preflight checks that ~/Library/LaunchAgents is writable.
+func (l *LaunchAgent) Preflight(context.Context) error { return probeDir(filepath.Dir(l.PlistPath())) }
+
 func (l *LaunchAgent) writePlist(exe string) error {
 	if err := os.MkdirAll(filepath.Dir(l.PlistPath()), 0o755); err != nil {
 		return err
