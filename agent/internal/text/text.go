@@ -51,8 +51,8 @@ func Notice(goos string) string {
 // install and uninstall.
 const (
 	InstalledWindows    = "The AI Usage icon is under the ^ arrow on the taskbar. Drag it onto the taskbar to keep it in view."
-	InstalledDarwin     = "Look for the AI Usage ring in the menu bar."
-	InstalledLinux      = "Look for the AI Usage ring in the top bar."
+	InstalledDarwin     = "Look for the AI Usage icon in the menu bar: Clawd, or a grey ring until Claude Code is signed in."
+	InstalledLinux      = "Look for the AI Usage icon in the top bar: Clawd, or a grey ring until Claude Code is signed in."
 	GnomeExtensionNote  = "Note: the Claude Usage GNOME extension is also installed and makes its own requests. Turn it off with: gnome-extensions disable claude-usage@localhost"
 	NotLasting          = "autostart could not be registered; the agent runs until you log out or restart"
 	AutostartFailed     = "Start at login could not be set up (%v). AI Usage is running now, but it will not start by itself after you log out or restart."

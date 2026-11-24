@@ -132,20 +132,23 @@ The menu, from top to bottom:
 
 | You see | It means |
 | --- | --- |
-| Terracotta ring | Normal. |
+| Clawd, the Claude Code mascot | Claude Code is signed in on this PC. The bar or number with it is that account's weekly usage. |
+| A grey ring, no Clawd | Claude Code is not signed in, or the agent is just starting. |
+| Terracotta bar or number | Normal. |
 | Yellow | 75% or more, or Anthropic flags the limit as being used up fast. |
 | Red | 90% or more. |
-| `⚠` after the percentage, or a faded ring | The numbers are more than 15 minutes old. |
-| `–%` | No numbers yet, or Claude Code sign-in needed. |
+| `⚠` after the percentage, a faded bar, or a faded Clawd (Windows) | The numbers are more than 15 minutes old. |
+| `–%`, or `-` under Clawd | No numbers yet, or Claude Code sign-in needed. |
 
-- **Windows:** the icon draws the percentage inside the ring. New icons go
-  under the `^` arrow on the taskbar; drag it onto the taskbar to keep it in
-  view.
-- **macOS:** the ring and the percentage in the menu bar.
-- **Ubuntu:** the ring with the percentage inside it and the percentage as
-  text next to it, in the top bar (through the AppIndicator extension Ubuntu
-  has on by default). Desktops that show only tray icons, such as KDE, show
-  the ring with the percentage inside it.
+- **Windows:** Clawd with the percentage under it, in the colour above. New
+  icons go under the `^` arrow on the taskbar; drag it onto the taskbar to
+  keep it in view.
+- **macOS:** Clawd over a usage bar, and the percentage next to it, in the
+  menu bar.
+- **Ubuntu:** Clawd over a usage bar, and the percentage as text next to it,
+  in the top bar (through the AppIndicator extension Ubuntu has on by
+  default). Desktops that show only tray icons, such as KDE, show Clawd with
+  the percentage under it, as on Windows.
 - Without a tray, such as a server with no desktop, it runs without an icon.
   Ask it what it is doing with `~/.local/bin/ai-usage status`.
 
@@ -173,6 +176,8 @@ install deletes it there, or you can delete it yourself.
 - Every release carries `SHA256SUMS`, and the install commands check the
   file they download against it.
 - All the source is in this repository, under `agent/`.
+- `ai-usage licenses` prints the licences of the third-party code inside the
+  program.
 
 ### Building and releases
 
@@ -183,6 +188,10 @@ install deletes it there, or you can delete it yourself.
   release would publish.
 - Releases are made only from a `v*` tag on a commit of `main`. The release
   workflow attaches the three files and `SHA256SUMS`.
+- `agent/third_party/systray` is a patched copy of `fyne.io/systray` v1.12.2
+  (its `PATCHED.md` lists the changes). CI checks that it differs from
+  upstream by exactly `agent/third_party/systray.patch`
+  (`agent/tools/systray-patch.sh`).
 
 ## GNOME Shell extension
 
@@ -292,4 +301,5 @@ Code extension for VS Code and used here only to identify the product this
 indicator reports on. All rights to it remain with Anthropic. "Claude" and
 "Claude Code" are Anthropic's names; this project is independent of Anthropic.
 
-The agent uses Clawd as its application icon.
+The agent uses Clawd as its application icon and, while Claude Code is
+signed in, in its tray icon.

@@ -144,7 +144,7 @@ func TestInstallStartFailedFallsBackToDetached(t *testing.T) {
 	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
 	eq(t, te.detached, [][]string{{te.Dirs.InstallExe, "run"}})
 	eq(t, rec.list()[len(rec.list())-1], "detached:run")
-	contains(t, te.out.String(), "Look for the AI Usage ring in the menu bar.")
+	contains(t, te.out.String(), "Look for the AI Usage icon in the menu bar: Clawd, or a grey ring until Claude Code is signed in.")
 
 	te, _, main, _, _ = osEnv(t, "windows")
 	main.registerErr = errors.New("registry: access denied")
@@ -158,7 +158,7 @@ func TestInstallLinuxDesktopRemovesSystemdUnit(t *testing.T) {
 	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
 	eq(t, rec.list(), []string{"main.stop:none", "other.stop:none", "main.register:BIN", "other.unregister"})
 	eq(t, len(wa.entries), 0)
-	contains(t, te.out.String(), "Look for the AI Usage ring in the top bar.")
+	contains(t, te.out.String(), "Look for the AI Usage icon in the top bar: Clawd, or a grey ring until Claude Code is signed in.")
 	for _, c := range te.runner.calls {
 		if c[0] == "loginctl" {
 			t.Fatalf("linger touched on a desktop: %v", c)
