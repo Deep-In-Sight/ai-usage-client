@@ -80,19 +80,36 @@ one_helper() { [ "$(helper_count)" -eq 1 ] && [ "$(children "$pid")" -eq 1 ]; }
 if wait_for 30 one_helper; then pass tray.one_helper "agent $pid, helper $(pgrep -f "^$exe tray-helper")"
 else fail tray.one_helper "helpers=$(helper_count) children_of_$pid=$(children "$pid")"; fi
 
+# tray.helper_cmdline: the helper's command line names nothing but the
+# subcommand (its provider and icon folder come over its standard input)
+hcmd=$(ps -ww -o command= -p "$(pgrep -f "^$exe tray-helper" | head -n 1)" 2>/dev/null)
+if [ "$hcmd" = "$exe tray-helper" ]; then pass tray.helper_cmdline "[$hcmd]"; else fail tray.helper_cmdline "[$hcmd]"; fi
+
 # tray.two_helpers: the CI build's test switch shows a second helper; the
 # agent is started by hand for this (the LaunchAgent is stopped
 # meanwhile), then the LaunchAgent is started again
 launchctl bootout "gui/$(id -u)/$label" > /dev/null 2>&1
 none() { [ "$(agent_count)" -eq 0 ] && [ "$(helper_count)" -eq 0 ]; }
 wait_for 15 none
-AI_USAGE_TEST_FAKE_PROVIDERS=claude,codex "$exe" run > "$out/run-two-helpers.log" 2>&1 &
+CI_SECRET_CANARY=not-for-the-helper AI_USAGE_TEST_FAKE_PROVIDERS=claude,codex "$exe" run > "$out/run-two-helpers.log" 2>&1 &
 pid2h=$!
 two() { [ "$(children "$pid2h")" -eq 2 ]; }
 if wait_for 60 two; then
   sleep 5
   screencapture -x "$out/menubar-two-helpers.png" 2>/dev/null
   pass tray.two_helpers "agent $pid2h, helpers $(pgrep -f "^$exe tray-helper" | tr '\n' ' '); menubar-two-helpers.png in the artifact"
+  # the helpers get an allow-list of the agent's environment: the canary
+  # the agent has stays with it (when ps can show environments here)
+  leaked=0
+  for hp in $(pgrep -f "^$exe tray-helper"); do
+    ps -E -ww -o command= -p "$hp" 2>/dev/null | grep -q 'CI_SECRET_CANARY=' && leaked=$((leaked + 1))
+  done
+  if ps -E -ww -o command= -p "$pid2h" 2>/dev/null | grep -q 'CI_SECRET_CANARY='; then
+    if [ "$leaked" -eq 0 ]; then pass tray.helper_env "the agent's canary is not in its helpers' environment"
+    else fail tray.helper_env "the canary is in $leaked helpers' environment"; fi
+  else
+    info tray.helper_env "ps shows no environment here (agent's canary not visible); not checked"
+  fi
 else fail tray.two_helpers "helpers=$(helper_count) children=$(children "$pid2h")"; fi
 kill -9 "$pid2h" 2>/dev/null
 nohelper() { [ "$(helper_count)" -eq 0 ]; }

@@ -32,7 +32,7 @@ lc_autostart() { env "$@" setsid "$exe" run < /dev/null >> "$out/autostart-run.l
 lc_log="$data/agent.log"
 lc_pids() { pgrep -f "^$exe run" | tr '\n' ' ' | sed 's/ $//'; }
 lc_count() { pgrep -f "^$exe run" | wc -l; }
-# the tray helpers (design 6.4): "$exe tray-helper --provider …"
+# the tray helpers (design 6.4): "$exe tray-helper"
 lc_hpids() { pgrep -f "^$exe tray-helper" | tr '\n' ' ' | sed 's/ $//'; }
 lc_hcount() { pgrep -f "^$exe tray-helper" | wc -l; }
 # lc_children PID: the helpers whose parent is PID

@@ -147,8 +147,9 @@ func newHarness(t *testing.T) *harness {
 			h.spawns <- fp
 			return fp, nil
 		},
-		Clock: h.clk,
-		Log:   log.New(h.logBuf, "", 0),
+		IconDir: func(p provider.ID) string { return "/icons/" + name(p) },
+		Clock:   h.clk,
+		Log:     log.New(h.logBuf, "", 0),
 	})
 	t.Cleanup(func() {
 		done := make(chan struct{})
@@ -219,6 +220,28 @@ func TestSpawnArguments(t *testing.T) {
 	}
 	if a.token == b.token || len(a.token) < 32 {
 		t.Fatalf("tokens %q %q", a.token, b.token)
+	}
+}
+
+// What a helper is for comes in its first line, not on its command line
+// (stage-2 review m-4).
+func TestHelloSaysWhatTheHelperIsFor(t *testing.T) {
+	h := newHarness(t)
+	h.sup.Want([]provider.ID{provider.Claude, provider.Codex})
+	for _, want := range []trayproto.Msg{
+		{Provider: "claude", UID: 100, IconDir: "/icons/claude"},
+		{Provider: "codex", UID: 101, IconDir: "/icons/codex"},
+	} {
+		p := <-h.spawns
+		m := p.next(t)
+		if m.Type != trayproto.TypeHello || m.Provider != want.Provider || m.UID != want.UID || m.IconDir != want.IconDir {
+			t.Fatalf("hello %+v, want %+v", m, want)
+		}
+	}
+	h.sup.Want(nil)
+	p := <-h.spawns
+	if m := p.next(t); m.Type != trayproto.TypeHello || m.Provider != "" || m.UID != 100 || m.IconDir != "/icons/none" {
+		t.Fatalf("neutral hello %+v", m)
 	}
 }
 

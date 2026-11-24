@@ -272,12 +272,14 @@ func (env Env) helperSpawner(lg *log.Logger) func(p provider.ID, uid uint32, tok
 	if env.Helper != nil {
 		return env.Helper
 	}
-	iconDir := func(p provider.ID) string {
-		n := string(p)
-		if n == "" {
-			n = "none"
-		}
-		return filepath.Join(env.Dirs.File(paths.TrayIconsDir), n)
+	return supervisor.ExecSpawner(env.Exe, lg, env.HelperEnv...)
+}
+
+// iconDir is the folder for p's Windows icon files.
+func (env Env) iconDir(p provider.ID) string {
+	n := string(p)
+	if n == "" {
+		n = "none"
 	}
-	return supervisor.ExecSpawner(env.Exe, iconDir, lg)
+	return filepath.Join(env.Dirs.File(paths.TrayIconsDir), n)
 }

@@ -53,6 +53,9 @@ type Env struct {
 	// Helper starts a tray helper (nil means this executable as
 	// "tray-helper", supervisor.ExecSpawner).
 	Helper func(p provider.ID, uid uint32, token string) (supervisor.Proc, error)
+	// HelperEnv names variables a helper started from Exe gets besides
+	// its allow-list (tests' own switches).
+	HelperEnv []string
 	// OpenURL opens a web page (nil means tray.OpenURL).
 	OpenURL func(u string) error
 	// Notify shows a one-off OS notification (nil means notify.Show).

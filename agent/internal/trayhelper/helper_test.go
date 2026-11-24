@@ -161,6 +161,8 @@ func (i *fakeItem) Clicked() <-chan struct{} {
 type run struct {
 	t       *testing.T
 	ui      *fakeUI
+	iconDir string
+	opts    chan Options // what the tray was started for
 	inW     *io.PipeWriter
 	out     *bufio.Reader
 	code    chan int
@@ -192,18 +194,17 @@ func startRun(t *testing.T, ro runOpts) *run {
 	}
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
-	r := &run{t: t, ui: ro.ui, inW: inW, out: bufio.NewReader(outR), code: make(chan int, 1), notices: make(chan string, 4)}
+	r := &run{t: t, ui: ro.ui, iconDir: t.TempDir(), opts: make(chan Options, 1), inW: inW, out: bufio.NewReader(outR), code: make(chan int, 1), notices: make(chan string, 4)}
 	d := deps{
 		goos: ro.goos, getenv: func(k string) string { return map[string]string{"XDG_CURRENT_DESKTOP": "ubuntu:GNOME"}[k] },
-		ui: ro.ui, available: ro.available, waitHost: ro.waitHost,
+		newUI: func(o Options) ui { r.opts <- o; return ro.ui }, available: ro.available, waitHost: ro.waitHost,
 		notify:       func(title, text string) error { r.notices <- title + ": " + text; return nil },
 		tick:         20 * time.Millisecond,
 		readyTimeout: 2 * time.Second,
 		giveUp:       func() { r.gaveUp.Store(true); ro.ui.Quit() },
 	}
-	o := Options{Provider: "claude", UID: 100, IconDir: t.TempDir(), Token: "tok-0123456789"}
 	go func() {
-		r.code <- runWith(context.Background(), inR, outW, o, d)
+		r.code <- runWith(context.Background(), inR, outW, "tok-0123456789", d)
 		outW.Close()
 		inR.Close()
 	}()
@@ -219,7 +220,9 @@ func (r *run) send(m trayproto.Msg) {
 	}
 }
 
-func (r *run) hello() { r.send(trayproto.Msg{Type: trayproto.TypeHello, Token: "tok-0123456789"}) }
+func (r *run) hello() {
+	r.send(trayproto.Msg{Type: trayproto.TypeHello, Token: "tok-0123456789", Provider: "claude", UID: 100, IconDir: r.iconDir})
+}
 
 // next is the helper's next line.
 func (r *run) next() trayproto.Msg {
@@ -308,6 +311,24 @@ func TestHelperRefusesWithoutToken(t *testing.T) {
 	r := startRun(t, runOpts{})
 	r.inW.Close()
 	eq(t, r.exitCode(), trayproto.ExitRefused)
+}
+
+// What the helper is for comes in its first line (stage-2 review m-4):
+// its command line names nothing.
+func TestHelperTakesItsJobFromTheFirstLine(t *testing.T) {
+	r := startRun(t, runOpts{goos: "windows"})
+	dir := t.TempDir()
+	r.send(trayproto.Msg{Type: trayproto.TypeHello, Token: "tok-0123456789", Provider: "codex", UID: 101, IconDir: dir})
+	select {
+	case o := <-r.opts:
+		eq(t, o, Options{Provider: "codex", UID: 101, IconDir: dir})
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tray was not started")
+	}
+	r.send(view("42%", false))
+	eq(t, r.next().Type, trayproto.TypeReady)
+	r.send(trayproto.Msg{Type: trayproto.TypeQuit})
+	eq(t, r.exitCode(), trayproto.ExitOK)
 }
 
 func TestHelperExitsOnStdinEOF(t *testing.T) {

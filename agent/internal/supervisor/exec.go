@@ -6,28 +6,27 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"strconv"
+	"runtime"
 	"sync"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
 )
 
-// HelperArgs are a helper's arguments after the executable: the hidden
-// subcommand, its provider ("none" for the neutral helper), its Windows
-// icon id and the folder for its Windows icon files.
-func HelperArgs(p provider.ID, uid uint32, iconDir string) []string {
-	return []string{"tray-helper", "--provider", name(p), "--uid", strconv.FormatUint(uint64(uid), 10), "--icon-dir", iconDir}
-}
+// HelperArgs are every helper's arguments after the executable: the
+// hidden subcommand only. What a helper is for comes in its first line
+// (trayproto hello): other users of the PC can read command lines.
+var HelperArgs = []string{"tray-helper"}
 
-// ExecSpawner starts helpers as `exe tray-helper …` (the agent's own
-// executable, design D3) with the agent's environment plus the one-time
-// token. The helper's standard error goes to lg line by line, each line
-// starting with "[tray <provider>] ".
-func ExecSpawner(exe string, iconDir func(provider.ID) string, lg *log.Logger) func(p provider.ID, uid uint32, token string) (Proc, error) {
+// ExecSpawner starts helpers as `exe tray-helper` (the agent's own
+// executable, design D3) with an allow-list of the agent's environment
+// (helperEnviron; keep names more, for tests) and the one-time token. The
+// helper's standard error goes to lg line by line, each line starting
+// with "[tray <provider>] ".
+func ExecSpawner(exe string, lg *log.Logger, keep ...string) func(p provider.ID, uid uint32, token string) (Proc, error) {
 	return func(p provider.ID, uid uint32, token string) (Proc, error) {
-		cmd := exec.Command(exe, HelperArgs(p, uid, iconDir(p))...)
-		cmd.Env = append(withoutToken(os.Environ()), trayproto.EnvToken+"="+token)
+		cmd := exec.Command(exe, HelperArgs...)
+		cmd.Env = append(helperEnviron(runtime.GOOS, os.Environ(), keep), trayproto.EnvToken+"="+token)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return nil, err
@@ -49,16 +48,6 @@ func ExecSpawner(exe string, iconDir func(provider.ID) string, lg *log.Logger) f
 		w.Close()
 		return &execProc{cmd: cmd, stdin: stdin, stdout: r, lw: lw}, nil
 	}
-}
-
-func withoutToken(env []string) []string {
-	out := env[:0:0]
-	for _, kv := range env {
-		if len(kv) < len(trayproto.EnvToken)+1 || kv[:len(trayproto.EnvToken)+1] != trayproto.EnvToken+"=" {
-			out = append(out, kv)
-		}
-	}
-	return out
 }
 
 type execProc struct {

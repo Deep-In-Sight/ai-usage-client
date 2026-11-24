@@ -52,6 +52,7 @@ func TestHelperOutputReachesAgentLogScrubbed(t *testing.T) {
 	te.vars["XDG_SESSION_TYPE"] = "wayland"
 	te.Helper = nil
 	te.Exe = os.Args[0]
+	te.HelperEnv = []string{actAsHelperEnv, "CLI_TEST_HOME"}
 	t.Setenv(actAsHelperEnv, "1")
 	t.Setenv("CLI_TEST_HOME", te.home)
 	eq(t, te.main("run"), 0)
@@ -70,11 +71,12 @@ func TestTrayHelperCommandNeedsTheAgent(t *testing.T) {
 	te := newEnv(t)
 	te.Stdin = strings.NewReader(`{"v":1,"type":"hello","token":"guess"}` + "\n")
 	te.vars[trayproto.EnvToken] = "the-real-one"
-	eq(t, te.main("tray-helper", "--provider", "claude", "--uid", "100", "--icon-dir", t.TempDir()), trayproto.ExitRefused)
+	eq(t, te.main("tray-helper"), trayproto.ExitRefused)
 	contains(t, te.err.String(), "started by the agent itself")
 	te.Stdin = strings.NewReader("")
-	eq(t, te.main("tray-helper", "--provider", "none", "--uid", "100", "--icon-dir", t.TempDir()), trayproto.ExitRefused)
-	for _, bad := range [][]string{{"--uid", "x"}, {"--provider"}, {"--colour", "red"}} {
+	eq(t, te.main("tray-helper"), trayproto.ExitRefused)
+	// it takes no arguments: what it is for comes in the agent's first line
+	for _, bad := range [][]string{{"--uid", "x"}, {"--provider"}, {"--provider", "claude"}, {"--colour", "red"}} {
 		eq(t, te.main(append([]string{"tray-helper"}, bad...)...), 2)
 	}
 	// not in the usage text

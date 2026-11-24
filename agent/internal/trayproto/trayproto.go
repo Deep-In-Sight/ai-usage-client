@@ -3,7 +3,9 @@
 // per line, both ways (design 6.4). The main process sends what to show;
 // a helper sends back whether its icon is up and what was clicked. Nothing
 // else crosses: no sign-in, no token, no file names beyond the helper's
-// own icon folder (given on its command line).
+// own icon folder. What a helper is for (its provider, icon id and
+// folder) comes in its first line, not on its command line, which other
+// users of the PC can read.
 package trayproto
 
 import (
@@ -50,16 +52,21 @@ const (
 
 // Msg is one line.
 type Msg struct {
-	V       int    `json:"v"`
-	Type    string `json:"type"`
-	Token   string `json:"token,omitempty"`   // hello
-	Icon    *Icon  `json:"icon,omitempty"`    // view: the tray icon
-	Title   string `json:"title,omitempty"`   // view: the text next to the icon (Linux label, macOS title)
-	Tooltip string `json:"tooltip,omitempty"` // view
-	Items   []Item `json:"items,omitempty"`   // view: the menu, every item of ItemIDs in order
-	Text    string `json:"text,omitempty"`    // notice
-	ID      string `json:"id,omitempty"`      // click: the item's id
-	Why     string `json:"why,omitempty"`     // waiting: "no StatusNotifierWatcher", "no taskbar", …
+	V     int    `json:"v"`
+	Type  string `json:"type"`
+	Token string `json:"token,omitempty"` // hello
+	// hello: the helper's provider ("" for the neutral one), its Windows
+	// notification icon id and the folder for its Windows icon files
+	Provider string `json:"provider,omitempty"`
+	UID      uint32 `json:"uid,omitempty"`
+	IconDir  string `json:"icon_dir,omitempty"`
+	Icon     *Icon  `json:"icon,omitempty"`    // view: the tray icon
+	Title    string `json:"title,omitempty"`   // view: the text next to the icon (Linux label, macOS title)
+	Tooltip  string `json:"tooltip,omitempty"` // view
+	Items    []Item `json:"items,omitempty"`   // view: the menu, every item of ItemIDs in order
+	Text     string `json:"text,omitempty"`    // notice
+	ID       string `json:"id,omitempty"`      // click: the item's id
+	Why      string `json:"why,omitempty"`     // waiting: "no StatusNotifierWatcher", "no taskbar", …
 }
 
 // Icon is what the tray icon shows; the helper draws it (icon.TrayImage).

@@ -196,7 +196,10 @@ section each, in the same menu under every icon.
   Activity Monitor or `ps` show two `ai-usage` processes. If the desktop's
   tray goes away, only the helper ends; the agent goes on collecting and
   starts it again. The helper gets nothing but what to draw: no sign-in,
-  no file, no network.
+  no file, no network, and of the agent's environment only what a tray
+  icon needs to reach the desktop (display, session bus, locale, the OS's
+  own settings). Its command line is just `ai-usage tray-helper`, so other
+  users of the PC cannot see which service it shows.
 - The agent keeps a log, `agent.log` in its settings folder (`status`
   prints where); the previous one is `agent.log.1`. It never holds sign-in
   tokens or the team key, and your home folder is written as `~`. A crash

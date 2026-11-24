@@ -27,25 +27,26 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
 )
 
-// Options are a helper's command line and its token.
+// Options are what a helper is for, from its first line (not its command
+// line, which other users of the PC can read).
 type Options struct {
 	Provider string // "claude", "codex", or "" for the neutral helper
 	UID      uint32 // the Windows notification icon id
 	IconDir  string // Windows: where its icon files go (in the data folder)
-	Token    string // the value its first line must carry (from trayproto.EnvToken)
 }
 
 // ExitNoTray: this build has no tray (macOS without cgo).
 const ExitNoTray = 3
 
 // Run shows one tray icon and blocks until quit, the end of standard
-// input, or the loss or end of the session; it returns the exit code. It
-// must run on the main goroutine (macOS draws there).
-func Run(ctx context.Context, in io.Reader, out io.Writer, o Options) int {
-	return runWith(ctx, in, out, o, deps{
+// input, or the loss or end of the session; it returns the exit code. Its
+// first line must carry token (from trayproto.EnvToken). It must run on
+// the main goroutine (macOS draws there).
+func Run(ctx context.Context, in io.Reader, out io.Writer, token string) int {
+	return runWith(ctx, in, out, token, deps{
 		goos:         runtime.GOOS,
 		getenv:       os.Getenv,
-		ui:           newUI(o),
+		newUI:        newUI,
 		available:    func(ctx context.Context) (bool, string) { return Available(ctx, os.Getenv) },
 		waitHost:     func(ctx context.Context) bool { return WaitForHost(ctx, 0) },
 		notify:       notify.Show,
@@ -57,9 +58,12 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, o Options) int {
 
 // deps are what a helper run depends on; tests replace them.
 type deps struct {
-	goos      string
-	getenv    func(string) string
-	ui        ui // nil: no tray in this build
+	goos   string
+	getenv func(string) string
+	// newUI makes the tray for what the first line said (nil: no tray in
+	// this build).
+	newUI     func(Options) ui
+	ui        ui
 	available func(ctx context.Context) (bool, string)
 	waitHost  func(ctx context.Context) bool
 	notify    func(title, text string) error
@@ -99,13 +103,18 @@ type helper struct {
 	waitingFor string
 }
 
-func runWith(ctx context.Context, in io.Reader, out io.Writer, o Options, d deps) int {
+func runWith(ctx context.Context, in io.Reader, out io.Writer, token string, d deps) int {
 	br := bufio.NewReader(in)
 	first, err := trayproto.Decode(br)
-	if err != nil || first.Type != trayproto.TypeHello || first.V != trayproto.Version || o.Token == "" || first.Token != o.Token {
+	if err != nil || first.Type != trayproto.TypeHello || first.V != trayproto.Version || token == "" || first.Token != token {
 		log.Print("tray-helper: this command is started by the agent itself")
 		return trayproto.ExitRefused
 	}
+	o := Options{Provider: first.Provider, UID: first.UID, IconDir: first.IconDir}
+	if d.goos == "windows" {
+		log.Printf("notification icon id %d", o.UID)
+	}
+	d.ui = d.newUI(o)
 	if d.ui == nil {
 		log.Print("tray-helper: this build has no tray")
 		return ExitNoTray

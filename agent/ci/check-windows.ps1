@@ -197,6 +197,13 @@ Check 'tray.one_helper' {
     else { Fail 'tray.one_helper' "helpers=$($h.Count) with_window=$((HelpersWithWindow $script:agentPid).Count) cmd=$($h.CommandLine -join ' | ')" }
 }
 
+# The helper's command line names nothing but the subcommand: its
+# provider, icon id and icon folder come over its standard input.
+Check 'tray.helper_cmdline' {
+    $c = "$((HelperProcs | Select-Object -First 1).CommandLine)"
+    if ($c -match '(^|[\s"])tray-helper\s*$' -and $c -notmatch '--') { Pass 'tray.helper_cmdline' $c } else { Fail 'tray.helper_cmdline' "[$c]" }
+}
+
 Check 'status.json' {
     $r = RunExe $exe 'status --json' 30
     [IO.File]::WriteAllText((Join-Path $out 'status.json'), "$($r.out)")
@@ -245,10 +252,15 @@ Check 'tray.two_helpers' {
     try { $p2 = Start-Process -FilePath $exe -ArgumentList 'run' -PassThru } finally { Remove-Item Env:AI_USAGE_TEST_FAKE_PROVIDERS }
     $ok = WaitFor 60 { (HelpersWithWindow $p2.Id).Count -eq 2 }
     $h = @(HelperProcs | Where-Object { $_.ParentProcessId -eq $p2.Id })
-    $uids = ($h | ForEach-Object { if ("$($_.CommandLine)" -match '--uid (\d+)') { $Matches[1] } }) -join ','
+    # each helper logs its notification icon id (it is no longer on the
+    # command line)
+    $log = Get-Content -LiteralPath (Join-Path $data 'agent.log') -Raw -ErrorAction SilentlyContinue
+    $ids = @{}
+    foreach ($m in [regex]::Matches("$log", '\[tray (claude|codex)\] notification icon id (\d+)')) { $ids[$m.Groups[1].Value] = $m.Groups[2].Value }
+    $uids = (@($ids.Keys | Sort-Object | ForEach-Object { "$_=$($ids[$_])" })) -join ','
     Info 'tray.two_helpers.measured' "helpers=$($h.Count) with SystrayClass window=$((HelpersWithWindow $p2.Id).Count) uids=$uids"
     if ($Desktop) { Info 'tray.screenshot.two' (Shot 'tray-two.png') }
-    if ($ok -and $uids -match '100' -and $uids -match '101') { Pass 'tray.two_helpers' "agent $($p2.Id): helpers $($h.ProcessId -join ',') uids $uids" }
+    if ($ok -and $ids['claude'] -eq '100' -and $ids['codex'] -eq '101') { Pass 'tray.two_helpers' "agent $($p2.Id): helpers $($h.ProcessId -join ',') uids $uids" }
     else { Fail 'tray.two_helpers' "helpers=$($h.Count) with_window=$((HelpersWithWindow $p2.Id).Count) uids=$uids" }
     if ($env:GITHUB_STEP_SUMMARY) {
         Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY "Two tray helpers on $($env:RUNNER_OS) ($((Get-CimInstance Win32_OperatingSystem).Caption)): $($h.Count) helper processes, $((HelpersWithWindow $p2.Id).Count) with a SystrayClass window, uIDs $uids."

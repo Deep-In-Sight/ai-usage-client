@@ -41,8 +41,11 @@ type Options struct {
 	// Spawn starts the helper for p (provider "" is the neutral one) with
 	// its Windows icon id and the one-time token (real: ExecSpawner).
 	Spawn func(p provider.ID, uid uint32, token string) (Proc, error)
-	Clock clock.Clock
-	Log   *log.Logger
+	// IconDir is the folder for p's Windows icon files, sent in its first
+	// line (nil: none).
+	IconDir func(p provider.ID) string
+	Clock   clock.Clock
+	Log     *log.Logger
 }
 
 // Event is what happened to a helper.
@@ -273,7 +276,11 @@ func (s *Supervisor) start(sl *slot) {
 	sl.proc = p
 	sl.exited = make(chan struct{})
 	sl.out = newSender(p.Stdin())
-	sl.out.send(trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeHello, Token: token})
+	hello := trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeHello, Token: token, Provider: string(sl.id), UID: UIDFor(sl.id)}
+	if s.o.IconDir != nil {
+		hello.IconDir = s.o.IconDir(sl.id)
+	}
+	sl.out.send(hello)
 	s.sendNotice() // before the view: shown as soon as the icon is up
 	s.sendView(sl)
 	exited := sl.exited

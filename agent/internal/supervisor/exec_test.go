@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +42,14 @@ func actAsHelper() int {
 	if os.Getenv(helperModeEnv) == "die" {
 		return 3
 	}
-	fmt.Fprintf(os.Stderr, "args %s\nsecond line\npartial", strings.Join(os.Args[1:], " "))
+	var env []string
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		env = append(env, k)
+	}
+	slices.Sort(env)
+	fmt.Fprintf(os.Stderr, "args %s\nfor %q %d %s\nenv %s\nsecond line\npartial",
+		strings.Join(os.Args[1:], " "), first.Provider, first.UID, first.IconDir, strings.Join(env, " "))
 	_ = trayproto.Encode(os.Stdout, trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeReady})
 	_ = trayproto.Encode(os.Stdout, trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeClick, ID: "refresh"})
 	for {
@@ -56,11 +65,16 @@ func actAsHelper() int {
 
 func TestExecSpawnerRunsTheHelper(t *testing.T) {
 	t.Setenv(helperEnv, "1")
+	// what the helper needs from the session it gets; nothing else
+	t.Setenv("DISPLAY", ":7")
+	t.Setenv("CLAUDE_CONFIG_DIR", "/the/sign-in/folder")
+	t.Setenv("SUPERVISOR_TEST_SECRET", "not-for-the-helper")
 	logBuf := &syncBuffer{}
 	sup := New(Options{
-		Spawn: ExecSpawner(os.Args[0], func(p provider.ID) string { return "/icons/" + string(p) }, log.New(logBuf, "", 0)),
-		Clock: clock.Real{},
-		Log:   log.New(logBuf, "", 0),
+		Spawn:   ExecSpawner(os.Args[0], log.New(logBuf, "", 0), helperEnv),
+		IconDir: func(p provider.ID) string { return "/icons/" + string(p) },
+		Clock:   clock.Real{},
+		Log:     log.New(logBuf, "", 0),
 	})
 	defer sup.Stop()
 	sup.Want([]provider.ID{provider.Codex})
@@ -89,7 +103,9 @@ func TestExecSpawnerRunsTheHelper(t *testing.T) {
 	}
 	logged := logBuf.String()
 	for _, want := range []string{
-		"[tray codex] args tray-helper --provider codex --uid 101 --icon-dir /icons/codex\n",
+		// the command line names neither the provider nor a folder
+		"[tray codex] args tray-helper\n",
+		"[tray codex] for \"codex\" 101 /icons/codex\n",
 		"[tray codex] second line\n",
 		"[tray codex] partial\n",
 	} {
@@ -97,11 +113,27 @@ func TestExecSpawnerRunsTheHelper(t *testing.T) {
 			t.Fatalf("log lacks %q:\n%s", want, logged)
 		}
 	}
+	_, envLine, _ := strings.Cut(logged, "[tray codex] env ")
+	envLine, _, _ = strings.Cut(envLine, "\n")
+	names := strings.Fields(envLine)
+	for _, want := range []string{trayproto.EnvToken, helperEnv} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("the helper lacks %s: %v", want, names)
+		}
+	}
+	if runtime.GOOS == "linux" && !slices.Contains(names, "DISPLAY") {
+		t.Fatalf("the helper lacks DISPLAY: %v", names)
+	}
+	for _, bad := range []string{"CLAUDE_CONFIG_DIR", "SUPERVISOR_TEST_SECRET"} {
+		if slices.Contains(names, bad) {
+			t.Fatalf("the helper got %s: %v", bad, names)
+		}
+	}
 }
 
 func TestExecSpawnerRefusedWithoutToken(t *testing.T) {
 	t.Setenv(helperEnv, "1")
-	spawn := ExecSpawner(os.Args[0], func(provider.ID) string { return "" }, log.New(&syncBuffer{}, "", 0))
+	spawn := ExecSpawner(os.Args[0], log.New(&syncBuffer{}, "", 0), helperEnv)
 	p, err := spawn("", 100, "the-right-token")
 	if err != nil {
 		t.Fatal(err)
@@ -116,9 +148,10 @@ func TestExecSpawnerRefusedWithoutToken(t *testing.T) {
 	}
 }
 
+// A helper's command line is the same for every helper: other users of
+// the PC can read it (stage-2 review m-4).
 func TestHelperArgs(t *testing.T) {
-	got := strings.Join(HelperArgs("", 100, "x"), " ")
-	if got != "tray-helper --provider none --uid 100 --icon-dir x" {
+	if got := strings.Join(HelperArgs, " "); got != "tray-helper" {
 		t.Fatal(got)
 	}
 }
@@ -170,9 +203,10 @@ func TestDeadHelpersLeaveNoOpenFiles(t *testing.T) {
 	clk := clock.NewFake(time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC))
 	logBuf := &syncBuffer{}
 	sup := New(Options{
-		Spawn: ExecSpawner(os.Args[0], func(provider.ID) string { return t.TempDir() }, log.New(logBuf, "", 0)),
-		Clock: clk,
-		Log:   log.New(logBuf, "", 0),
+		Spawn:   ExecSpawner(os.Args[0], log.New(logBuf, "", 0), helperEnv, helperModeEnv),
+		IconDir: func(provider.ID) string { return t.TempDir() },
+		Clock:   clk,
+		Log:     log.New(logBuf, "", 0),
 	})
 	defer sup.Stop()
 	died := func() {

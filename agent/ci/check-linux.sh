@@ -143,6 +143,27 @@ print("ok" if head and rows else "missing: " + " | ".join(l for l, _ in items))
   else fail tray.menu "$got"; fi
 }
 
+# tray.helper_private: the helper's command line names nothing but the
+# subcommand (its provider and icon folder come over its standard input),
+# and it gets the desktop session's variables but not the rest of the
+# agent's environment (a canary the agent has).
+helper_private_check() {
+  local hp ap cmd names problems=""
+  hp=$(pgrep -f "^$exe tray-helper" | head -n 1)
+  ap=$(pgrep -f "^$exe run" | head -n 1)
+  if [ -z "$hp" ] || [ -z "$ap" ]; then fail tray.helper_private "helper=[$hp] agent=[$ap]"; return; fi
+  cmd=$(tr '\0' ' ' < "/proc/$hp/cmdline")
+  names=$(tr '\0' '\n' < "/proc/$hp/environ" | cut -d= -f1 | sort | tr '\n' ' ')
+  [ "$cmd" = "$exe tray-helper " ] || problems="$problems cmdline=[$cmd]"
+  tr '\0' '\n' < "/proc/$ap/environ" | grep -q '^CI_SECRET_CANARY=' || problems="$problems canary_not_in_agent"
+  case " $names " in *" CI_SECRET_CANARY "*) problems="$problems canary_in_helper" ;; esac
+  for v in DBUS_SESSION_BUS_ADDRESS XDG_CURRENT_DESKTOP XDG_SESSION_TYPE HOME PATH AI_USAGE_HELPER_TOKEN; do
+    case " $names " in *" $v "*) ;; *) problems="$problems no_$v" ;; esac
+  done
+  if [ -z "$problems" ]; then pass tray.helper_private "command line [$cmd], environment: $names"
+  else fail tray.helper_private "$problems; environment: $names"; fi
+}
+
 tray_label_check() {
   local bus_addr="" bus_pid="" wpid="" svc="" label="" guide="" label2="" rc problems=""
   : > "$out/bus.addr"; : > "$out/bus.pid"
@@ -155,7 +176,7 @@ tray_label_check() {
   wpid=$!
   watcher_ready() { grep -q '^ready$' "$out/watcher.log"; }
   if wait_for 10 watcher_ready; then
-    XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS="$bus_addr" oneliner > "$out/install-tray.log" 2>&1
+    CI_SECRET_CANARY=not-for-the-helper XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS="$bus_addr" oneliner > "$out/install-tray.log" 2>&1
     rc=$?
     [ $rc -eq 0 ] || problems="$problems rc=$rc"
     registered() { svc=$(awk '$1 == "registered" { s = $2 } END { print s }' "$out/watcher.log") && [ -n "$svc" ]; }
@@ -174,6 +195,7 @@ tray_label_check() {
       [ "$n_items" = 1 ] && [ "$n_helpers" -eq 1 ] || problems="$problems items=$n_items helpers=$n_helpers"
       # tray.menu: the menu as the tray host reads it (dbusmenu GetLayout)
       menu_check
+      helper_private_check
       curl -fsS --max-time 10 -X POST "$BASE/weekly?percent=57" || problems="$problems set_weekly_failed"
       signalled() { grep -q "^label $svc \"57%\" " "$out/watcher.log"; }
       wait_for 60 signalled || problems="$problems no_signal_57"
