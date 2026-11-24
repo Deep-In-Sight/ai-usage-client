@@ -1,5 +1,9 @@
 //go:build windows
 
+//Modified from fyne.io/systray v1.12.2: the tray icon is loaded at the
+//notification area's size (through internal/trayicon), and loaded icons are
+//cached per file and size (see PATCHED.md).
+
 package systray
 
 import (

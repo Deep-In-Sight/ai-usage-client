@@ -18,7 +18,8 @@ mode 100644, nothing executable).
 
 Added files: this `PATCHED.md`, `systray_patch_test.go` (tests of the
 Linux and BSD changes) and `internal/trayicon/` (`trayicon_windows.go` and
-its test, see Windows below).
+its test, see Windows below). Each added Go file starts with a comment saying it
+is not upstream code.
 
 ### `systray_unix.go` (Linux and BSD)
 
@@ -64,6 +65,7 @@ extra properties.
   v1.12.2, so a test inside package `systray` could not run on Windows.
 - Menu item icons go through the same function, so they too are loaded
   at the small-icon size (they are drawn at that size anyway).
+- The header comment says the file was modified.
 
 ### Everything else
 

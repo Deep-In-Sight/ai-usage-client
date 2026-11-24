@@ -1,6 +1,8 @@
 //go:build windows
 
-// Added to the upstream v1.12.2 code; see PATCHED.md.
+// Not upstream code: this file was added to the copy of fyne.io/systray
+// v1.12.2 in agent/third_party/systray of the AI Usage client (see
+// PATCHED.md).
 
 package trayicon
 

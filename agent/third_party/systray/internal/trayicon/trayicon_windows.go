@@ -1,5 +1,9 @@
 //go:build windows
 
+// Not upstream code: this file was added to the copy of fyne.io/systray
+// v1.12.2 in agent/third_party/systray of the AI Usage client (see
+// PATCHED.md).
+
 // Package trayicon loads the Windows tray icon at the size the notification
 // area draws it. Added to the upstream v1.12.2 code; see PATCHED.md.
 package trayicon
