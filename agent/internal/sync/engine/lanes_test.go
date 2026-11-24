@@ -201,3 +201,20 @@ func TestLatestFilesAfterADowngradeKeepTheNewer(t *testing.T) {
 		}
 	}
 }
+
+// Results of a provider this build has no lane for (a downgrade from a
+// build that had one) take no place in the batch (review m-B).
+func TestBacklogWithoutALaneTakesNoSlot(t *testing.T) {
+	r := newRig(t, always(resp("standby", false, 60), nil))
+	for i := range 3 {
+		must(t, r.backlog.Add(codexItem(t0.Add(time.Duration(-30+i)*time.Minute))))
+	}
+	must(t, r.backlog.Add(backlog.Item{Provider: "claude", AccountKey: "acc-1", FetchedAt: protocol.Time{Time: t0.Add(-time.Minute)}, HTTPStatus: 200}))
+	r.e.batchLimit = 2
+	r.e.Step(ctx)
+	req := r.syncer.calls[0].v2
+	eq(t, len(req.Providers), 1)
+	eq(t, len(req.Providers[0].Results), 1)
+	eq(t, len(r.backlog.Pending(10, "claude")), 0)
+	eq(t, len(r.backlog.Pending(10, "codex")), 3) // kept for a build that has the lane
+}

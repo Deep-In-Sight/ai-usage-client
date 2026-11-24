@@ -847,7 +847,13 @@ func (e *Engine) requestV2(wantFresh bool) (protocol.RequestV2, map[provider.ID]
 	req := protocol.RequestV2{Schema: protocol.SchemaV2}
 	req.Client, req.Device, req.Machine = e.d.Identity.clientV2(e.currentClientMode())
 	byProvider := map[provider.ID][]backlog.Item{}
-	for _, it := range e.d.Backlog.Pending(e.batchLimit) {
+	ids := make([]string, 0, len(e.lanes))
+	for _, l := range e.lanes {
+		ids = append(ids, string(l.id))
+	}
+	// only providers with a lane: others' results wait for a build that
+	// has one, without taking batch slots (review m-B)
+	for _, it := range e.d.Backlog.Pending(e.batchLimit, ids...) {
 		byProvider[provider.ID(it.Provider)] = append(byProvider[provider.ID(it.Provider)], it)
 	}
 	sent := map[provider.ID][]backlog.Item{}
