@@ -262,16 +262,26 @@ func FormatReset(resetsAt *time.Time, now time.Time) string {
 	if resetsAt == nil {
 		return "No reset time reported"
 	}
+	when, left, due := ResetParts(*resetsAt, now)
+	if due {
+		return "Reset due " + when
+	}
+	return "Resets " + when + " · in " + left
+}
+
+// ResetParts are the pieces of a reset time as FormatReset shows them:
+// when ("Sun 01:00", in now's location, to the nearest minute) and how long
+// until then ("1d 6h", "2h 20m", "35m"); due when it has passed.
+func ResetParts(resetsAt, now time.Time) (when, left string, due bool) {
 	// The API's reset timestamps jitter around the minute, so round to the
 	// nearest minute.
 	reset := resetsAt.Round(time.Minute).In(now.Location())
-	when := days[reset.Weekday()] + " " + FormatClock(reset)
+	when = days[reset.Weekday()] + " " + FormatClock(reset)
 	minutes := int(math.Floor(float64(reset.Sub(now)) / float64(time.Minute)))
 	if minutes <= 0 {
-		return "Reset due " + when
+		return when, "", true
 	}
 	d, h, m := minutes/1440, (minutes%1440)/60, minutes%60
-	var left string
 	switch {
 	case d > 0:
 		left = fmt.Sprintf("%dd %dh", d, h)
@@ -280,7 +290,7 @@ func FormatReset(resetsAt *time.Time, now time.Time) string {
 	default:
 		left = fmt.Sprintf("%dm", m)
 	}
-	return "Resets " + when + " · in " + left
+	return when, left, false
 }
 
 // Stale reports whether numbers fetched at fetchedAt are too old to trust.

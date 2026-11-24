@@ -386,7 +386,7 @@ func (h *helper) apply(v trayproto.Msg) {
 		h.shown[id] = it
 	}
 	h.setIcon(v)
-	if t, ok := tray.NextToIcon(h.d.goos, tray.View{Title: v.Title}); ok && (h.lastTitle == nil || *h.lastTitle != t) {
+	if t := v.Title; tray.ShowsTitle(h.d.goos) && (h.lastTitle == nil || *h.lastTitle != t) {
 		h.d.ui.SetNextToIcon(t)
 		h.lastTitle = &t
 	}
@@ -413,5 +413,10 @@ func (h *helper) setIcon(v trayproto.Msg) {
 }
 
 // menuImage is the 16 px picture for an item's Image ("" or a provider
-// without one: none). None yet.
-func menuImage(goos, provider string) []byte { return nil }
+// without artwork: none).
+func menuImage(goos, provider string) []byte {
+	if provider == "" {
+		return nil
+	}
+	return icon.MenuImage(goos, icon.Provider(provider))
+}

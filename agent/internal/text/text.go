@@ -2,21 +2,24 @@
 // run commands show to people, in one place. All of it is English.
 package text
 
-// Tray menu, title and tooltip.
+// Tray menu, title and tooltip (design D4, 6.5).
 const (
 	App             = "AI Usage"
-	SignInNeeded    = "Claude Code sign-in needed"
 	ReplyUnreadable = "Usage reply could not be read"
-	AllModels       = "All models"
 	Connecting      = "Connecting to the server…"
 	Connected       = "Server connected"
 	NoUsageYet      = "no usage yet"
-	Unreachable     = "Server not reachable  ·  this PC fetches every 30 min"
-	ThisPCFetches   = "this PC fetches"
-	Poller          = "poller "
-	Account         = "Account "
-	OnePC           = "1 PC on this account"
-	PCsSuffix       = " PCs on this account"
+	Unreachable     = "Server not reachable · this PC fetches every 30 min"
+	ThisPCFetches   = "this PC fetches " // + provider names
+	Fetching        = "fetching: "       // + the poller's host name (one section)
+	FetchedFrom     = " from "           // "<provider> from <host>" (several sections)
+	OnePC           = "1 PC"
+	PCsSuffix       = " PCs"
+	Blocked         = " blocked"
+	ResetDue        = "due"
+	MoreLimits      = "More limits on the dashboard"
+	SignInClaude    = "Sign in to Claude Code"
+	SignInAny       = "Sign in to Claude Code or Codex"
 	NewVersion      = "New version available: "
 	Dashboard       = "Open dashboard"
 	Refresh         = "Refresh now"
@@ -26,7 +29,17 @@ const (
 	RemoveArmed     = "Click again to remove AI Usage"
 	Quit            = "Quit"
 	StaleMark       = " ⚠"
-	Sep             = "  ·  "
+	Sep             = " · "
+)
+
+// Problem lines of a provider's section (design 6.5).
+const (
+	ClaudeExpired = "Sign-in expired: open Claude Code to renew it"
+	CodexExpired  = "Codex sign-in expired: run Codex once to renew it"
+	CodexKeychain = "Codex sign-in is stored in the keychain: not supported"
+	CodexAPIKey   = "Codex API-key sign-in has no plan limits"
+	CodexBaseURL  = "Codex server address in config.toml is not supported"
+	ServerNoCodex = "Server does not support Codex yet"
 )
 
 // Notices shown once after an install or upgrade (Linux and Windows as an

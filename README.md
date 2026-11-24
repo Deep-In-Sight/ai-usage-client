@@ -146,17 +146,24 @@ The menu, from top to bottom:
 | Item | What it is |
 | --- | --- |
 | New version available: 1.1.0 | Shown when your server has a newer agent. Opens the server's install page. |
-| All models  71%  Resets Sun 01:00 · in 1d 6h | Weekly usage across all models, and when it resets. |
-| Fable  76%  Resets Sun 01:00 · in 1d 6h | The weekly limit for Fable. |
-| Claude Code sign-in needed | Claude Code is not signed in on this PC. "Sign-in expired: open Claude Code to renew it" means the sign-in ran out. |
-| Account team-a@…  ·  3 PCs on this account | The signed-in account, and how many PCs report for it. |
-| Server connected  ·  Updated 18:58  ·  poller TEST-PC-03 | When the numbers were fetched, and which PC fetches them (`this PC fetches` when it is this one). |
-| Server not reachable  ·  this PC fetches every 30 min | The server cannot be reached; this PC asks Anthropic itself, every 30 minutes, until it can. |
+| Clawd · Claude · team-a@… · 3 PCs | The signed-in account, and how many PCs report for it. |
+| `████▌░░░░░  45%  5-hour · Fri 21:20 (2h 20m)` | The 5-hour limit, when the account has one: a bar of ten cells (each `█` is 10 %, `▌` half a cell), the percentage, and when it resets (in how long). |
+| `███████░░░  71%  Weekly · Sun 01:00 (1d 6h)` | Weekly usage across all models. Always shown; `░░░░░░░░░░  –%` until there are numbers. |
+| `███████▌░░  76%  Fable · Sun 01:00 (1d 6h)` | The weekly limit for Fable, when the account has one. |
+| Sign-in expired: open Claude Code to renew it | Under the rows when the sign-in ran out; the last numbers stay. "Usage reply could not be read" means Anthropic's reply had no weekly number. |
+| Sign in to Claude Code | Nobody is signed in on this PC (the only line above the server's). |
+| Server connected · Updated 18:58 · fetching: TEST-PC-03 | When the numbers were fetched, and which PC fetches them (`this PC fetches Claude` when it is this one). |
+| Server not reachable · this PC fetches every 30 min | The server cannot be reached; this PC asks Anthropic itself, every 30 minutes, until it can. |
 | Open dashboard | Opens your server's dashboard. |
 | Refresh now | Asks the server for fresh numbers. |
 | Start at login | Turns starting at login on or off. |
 | Remove AI Usage | Removes the agent. Click it twice within 10 seconds. |
 | Quit | Stops the agent until the next login. |
+
+Clicking a usage row opens that account's page on the dashboard. The bars
+start at the left edge so they line up whatever the menu's font; the
+percentages are padded to the same width. More providers (planned) get a
+section each, in the same menu under every icon.
 
 | You see | It means |
 | --- | --- |

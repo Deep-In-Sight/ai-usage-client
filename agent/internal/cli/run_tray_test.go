@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -522,4 +523,20 @@ func freshAfter(r []protocol.Request, n int) bool {
 		}
 	}
 	return false
+}
+
+// A click on a usage row opens that account's page on the dashboard; the
+// header and the server line open nothing.
+func TestRowClickOpensTheAccountPage(t *testing.T) {
+	te := newEnv(t)
+	var opened []string
+	te.OpenURL = func(u string) error { opened = append(opened, u); return nil }
+	cfg := mustParse(t, `{"server_urls":["http://ai-usage.local"],"ingest_key":"k-0123456789"}`)
+	snap := status.Snapshot{Mode: "coordinated", ServerURL: "http://192.0.2.10:8700", Providers: claudeSnap(status.ProviderStatus{
+		State: "ok", AccountKey: "acc-0001", MainKey: "weekly_all", Rows: []provider.Row{{Key: "weekly_all", Label: "Weekly", Percent: pf(5)}}})}
+	l := &trayLoop{env: te.Env, ctrl: newController(cfg, snap, nil, nil), log: log.New(io.Discard, "", 0)}
+	for _, id := range []string{"r.claude.0", "h.claude", "server", "r.claude.3"} {
+		eq(t, l.click(id), false)
+	}
+	eq(t, opened, []string{"http://192.0.2.10:8700/accounts/acc-0001"})
 }

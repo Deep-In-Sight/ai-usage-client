@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/icon"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
 )
 
@@ -402,6 +403,9 @@ func TestHelperMenuOnlyChanges(t *testing.T) {
 	eq(t, items["h.claude"].enabled, false)
 	eq(t, items["r.claude.1"].visible, false)
 	eq(t, items["quit"].title, "Quit")
+	// the provider's header has its mascot picture (Clawd)
+	eq(t, string(items["h.claude"].image), string(icon.MenuImage("linux", icon.Claude)))
+	eq(t, items["quit"].image == nil, true)
 	eq(t, [3]int{icons, titles, tips}, [3]int{1, 1, 1})
 	before := items["quit"].titles
 

@@ -925,7 +925,7 @@ func (e *Engine) publish(now time.Time) {
 			s.NextStandaloneFetch = l.nextStandalone.UTC()
 		}
 		ps := status.ProviderStatus{
-			State: l.login.State, Problem: l.login.Problem, AccountEmail: l.login.Email, Plan: l.login.Plan,
+			State: l.login.State, Problem: l.login.Problem, AccountEmail: l.login.Email, AccountKey: l.login.AccountKey, Plan: l.login.Plan,
 			Role: l.role, PollerHostname: l.poller, PeersPCs: l.pcs, ServerProblem: l.serverProblem,
 			LastFetchAt: l.lastFetchAt.UTC(), LastFetchStatus: l.lastFetchStatus, FreshPending: s.FreshPending,
 		}

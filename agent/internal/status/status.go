@@ -44,6 +44,7 @@ type ProviderStatus struct {
 	State           string         `json:"state"`             // provider.Login.State
 	Problem         string         `json:"problem,omitempty"` // why the sign-in or account is missing; never file content
 	AccountEmail    string         `json:"account_email,omitempty"`
+	AccountKey      string         `json:"account_key,omitempty"` // the dashboard's account page (menu rows)
 	Plan            string         `json:"plan,omitempty"`
 	ExpiresAt       time.Time      `json:"expires_at,omitzero"`
 	Role            string         `json:"role,omitempty"` // poller | standby

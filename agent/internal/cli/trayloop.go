@@ -108,28 +108,24 @@ func testHelpers(env Env) []provider.ID {
 	return out
 }
 
-func (l *trayLoop) inputs() tray.Inputs {
-	return tray.Inputs{Snap: l.ctrl.Snapshot(), Now: l.env.Clock.Now(), Version: version.Version, HasToggle: l.ctrl.HasToggle(),
+func (l *trayLoop) inputs() tray.MenuInputs {
+	return tray.MenuInputs{Snap: l.ctrl.Snapshot(), Now: l.env.Clock.Now(), Version: version.Version, HasToggle: l.ctrl.HasToggle(),
 		AutostartOn: l.ctrl.HasToggle() && l.ctrl.AutostartOn(), RemoveArmed: l.armed, DashboardURL: l.ctrl.DashboardURL()}
 }
 
-// draw sends the current view to the helpers.
+// draw sends the current view to the helpers: one menu for all, each its
+// provider's icon (design 6.5, 6.6).
 func (l *trayLoop) draw() {
-	v := tray.Build(l.inputs())
-	if l.title != "" {
-		v.Title = l.title
-	}
-	iv := tray.IconView(v)
-	icons := map[provider.ID]supervisor.IconView{"": iv}
-	for _, id := range l.wanted {
-		icons[id] = iv
-		if string(id) != iv.Icon.Provider { // a test helper (testHelpers): the neutral ring
-			n := iv
-			n.Icon.Provider = ""
-			icons[id] = n
+	in := l.inputs()
+	icons := map[provider.ID]supervisor.IconView{}
+	for _, id := range append(slices.Clone(l.wanted), "") {
+		v := tray.BuildIcon(id, in)
+		if l.title != "" {
+			v.Title = l.title
 		}
+		icons[id] = v
 	}
-	l.sup.Show(tray.Menu(v), icons)
+	l.sup.Show(tray.BuildMenu(in), icons)
 }
 
 // run shows the tray until Quit, Remove or the end of ctx. notice is the
@@ -251,6 +247,8 @@ func (l *trayLoop) click(id string) bool {
 		return true
 	case "quit":
 		return true
+	default:
+		l.open(tray.RowURL(l.inputs(), id)) // a usage row: its account's page
 	}
 	return false
 }
@@ -265,7 +263,7 @@ func (l *trayLoop) failureNotice(msg string) {
 	defer s.Stop()
 	s.Notice(msg)
 	s.Want(nil)
-	s.Show(tray.Menu(tray.Build(l.inputs())), nil)
+	s.Show(tray.BuildMenu(l.inputs()), map[provider.ID]supervisor.IconView{"": tray.BuildIcon("", l.inputs())})
 	deadline := l.env.Clock.After(15 * time.Second)
 	for {
 		select {
