@@ -14,12 +14,19 @@ fails unless this folder is upstream plus exactly that patch (compared as
 text, binary files included) and every file in it is a plain file (git
 mode 100644, nothing executable).
 
+## Licence
+
+Upstream's code in this folder, and the changes made to upstream's files
+(listed below), are under the Apache License 2.0 in `LICENSE`. The added
+files listed below are not upstream code; they are under the AI Usage
+client's MIT licence (`LICENSE` at the repository's root).
+
 ## Changes
 
 Added files: this `PATCHED.md`, `systray_patch_test.go` (tests of the
 Linux and BSD changes) and `trayicon/` (`trayicon_windows.go` and its
 test, see Windows below). Each added Go file starts with a comment saying it
-is not upstream code.
+is not upstream code and is under the AI Usage client's MIT licence.
 
 ### `systray_unix.go` (Linux and BSD)
 

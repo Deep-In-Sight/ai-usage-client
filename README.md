@@ -311,8 +311,8 @@ parts are not covered by it:
   `fyne.io/systray` v1.12.2. It stays under its own Apache License 2.0
   (`agent/third_party/systray/LICENSE`), changes to its files included; each
   changed file says so at the top, and `PATCHED.md` lists the changes. Only
-  the files added to the copy, which start with "Not upstream code", are
-  under the MIT licence.
+  the files added to the copy, which `PATCHED.md` lists (each added Go file
+  starts with "Not upstream code"), are under the MIT licence.
 - **Other third-party code** compiled into the program keeps its own
   licence: Go (BSD 3-Clause), `github.com/godbus/dbus/v5` (BSD 2-Clause),
   `github.com/miekg/dns`, `golang.org/x/net` and `golang.org/x/sys` (BSD

@@ -1,7 +1,7 @@
 diff -aruN a/PATCHED.md b/PATCHED.md
 --- a/PATCHED.md
 +++ b/PATCHED.md
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,84 @@
 +# fyne.io/systray, patched copy
 +
 +This folder is a copy of [fyne.io/systray](https://github.com/fyne-io/systray)
@@ -18,12 +18,19 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 +text, binary files included) and every file in it is a plain file (git
 +mode 100644, nothing executable).
 +
++## Licence
++
++Upstream's code in this folder, and the changes made to upstream's files
++(listed below), are under the Apache License 2.0 in `LICENSE`. The added
++files listed below are not upstream code; they are under the AI Usage
++client's MIT licence (`LICENSE` at the repository's root).
++
 +## Changes
 +
 +Added files: this `PATCHED.md`, `systray_patch_test.go` (tests of the
 +Linux and BSD changes) and `trayicon/` (`trayicon_windows.go` and its
 +test, see Windows below). Each added Go file starts with a comment saying it
-+is not upstream code.
++is not upstream code and is under the AI Usage client's MIT licence.
 +
 +### `systray_unix.go` (Linux and BSD)
 +
@@ -82,12 +89,13 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 diff -aruN a/systray_patch_test.go b/systray_patch_test.go
 --- a/systray_patch_test.go
 +++ b/systray_patch_test.go
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,139 @@
 +//go:build (linux || freebsd || openbsd || netbsd) && !android
 +
 +// Not upstream code: this file was added to the copy of fyne.io/systray
 +// v1.12.2 in agent/third_party/systray of the AI Usage client (see
-+// PATCHED.md).
++// PATCHED.md). It is under the AI Usage client's MIT licence (LICENSE at
++// the repository's root), not the Apache License 2.0 of the copied code.
 +
 +package systray
 +
@@ -428,12 +436,13 @@ diff -aruN a/systray_windows.go b/systray_windows.go
 diff -aruN a/trayicon/trayicon_windows.go b/trayicon/trayicon_windows.go
 --- a/trayicon/trayicon_windows.go
 +++ b/trayicon/trayicon_windows.go
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,77 @@
 +//go:build windows
 +
 +// Not upstream code: this file was added to the copy of fyne.io/systray
 +// v1.12.2 in agent/third_party/systray of the AI Usage client (see
-+// PATCHED.md).
++// PATCHED.md). It is under the AI Usage client's MIT licence (LICENSE at
++// the repository's root), not the Apache License 2.0 of the copied code.
 +
 +// Package trayicon loads the Windows tray icon at the size the notification
 +// area draws it. It is a public package so that the AI Usage agent can see
@@ -508,12 +517,13 @@ diff -aruN a/trayicon/trayicon_windows.go b/trayicon/trayicon_windows.go
 diff -aruN a/trayicon/trayicon_windows_test.go b/trayicon/trayicon_windows_test.go
 --- a/trayicon/trayicon_windows_test.go
 +++ b/trayicon/trayicon_windows_test.go
-@@ -0,0 +1,151 @@
+@@ -0,0 +1,152 @@
 +//go:build windows
 +
 +// Not upstream code: this file was added to the copy of fyne.io/systray
 +// v1.12.2 in agent/third_party/systray of the AI Usage client (see
-+// PATCHED.md).
++// PATCHED.md). It is under the AI Usage client's MIT licence (LICENSE at
++// the repository's root), not the Apache License 2.0 of the copied code.
 +
 +package trayicon
 +

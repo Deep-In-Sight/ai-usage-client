@@ -2,7 +2,8 @@
 
 // Not upstream code: this file was added to the copy of fyne.io/systray
 // v1.12.2 in agent/third_party/systray of the AI Usage client (see
-// PATCHED.md).
+// PATCHED.md). It is under the AI Usage client's MIT licence (LICENSE at
+// the repository's root), not the Apache License 2.0 of the copied code.
 
 // Package trayicon loads the Windows tray icon at the size the notification
 // area draws it. It is a public package so that the AI Usage agent can see
