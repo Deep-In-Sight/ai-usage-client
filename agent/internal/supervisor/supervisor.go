@@ -27,6 +27,8 @@ import (
 // Proc is one running helper.
 type Proc interface {
 	Stdin() io.WriteCloser
+	// Stdout is closed by the supervisor once it stops reading, when it
+	// is an io.Closer.
 	Stdout() io.Reader
 	// Wait returns the exit code once the process ended (-1 when it was
 	// killed by a signal or the code is unknown).
@@ -379,9 +381,14 @@ func (s *Supervisor) retry(sl *slot, ev Event, code int, lived time.Duration, no
 	s.queue.put(ev)
 }
 
-// read turns the helper's lines into events.
+// read turns the helper's lines into events. Once it stops reading (the
+// helper ended, or wrote what it may not) it closes the helper's output.
 func (s *Supervisor) read(id provider.ID, gen int, p Proc) {
-	r := bufio.NewReader(p.Stdout())
+	out := p.Stdout()
+	if c, ok := out.(io.Closer); ok {
+		defer c.Close()
+	}
+	r := bufio.NewReader(out)
 	for {
 		m, err := trayproto.Decode(r)
 		if err != nil {

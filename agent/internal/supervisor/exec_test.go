@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,10 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
 )
 
-const helperEnv = "SUPERVISOR_TEST_ACT_AS_HELPER"
+const (
+	helperEnv     = "SUPERVISOR_TEST_ACT_AS_HELPER"
+	helperModeEnv = "SUPERVISOR_TEST_HELPER_MODE" // "die": end with 3 right after the first line
+)
 
 // TestMain lets this test binary stand in for a helper process.
 func TestMain(m *testing.M) {
@@ -32,6 +36,9 @@ func actAsHelper() int {
 	first, err := trayproto.Decode(r)
 	if err != nil || first.Type != trayproto.TypeHello || first.Token != os.Getenv(trayproto.EnvToken) {
 		return trayproto.ExitRefused
+	}
+	if os.Getenv(helperModeEnv) == "die" {
+		return 3
 	}
 	fmt.Fprintf(os.Stderr, "args %s\nsecond line\npartial", strings.Join(os.Args[1:], " "))
 	_ = trayproto.Encode(os.Stdout, trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeReady})
@@ -123,5 +130,81 @@ func TestLineLoggerCutsLongLines(t *testing.T) {
 	lines := strings.Split(strings.TrimSuffix(b.String(), "\n"), "\n")
 	if len(lines) != 2 || len(lines[0]) != 4+maxLogLine || lines[1] != "[p] b" { // empty lines are left out
 		t.Fatalf("%d lines: %q", len(lines), lines)
+	}
+}
+
+// openFiles is how many files this process has open (Linux).
+func openFiles(t *testing.T) int {
+	t.Helper()
+	fds, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(fds)
+}
+
+// settledOpenFiles waits until the count stays the same for a while.
+func settledOpenFiles(t *testing.T) int {
+	t.Helper()
+	last := openFiles(t)
+	for range 20 {
+		time.Sleep(50 * time.Millisecond)
+		n := openFiles(t)
+		if n == last {
+			return n
+		}
+		last = n
+	}
+	return last
+}
+
+// A dead helper's pipes are closed by the agent, not left to the garbage
+// collector (stage-2 review m-1).
+func TestDeadHelpersLeaveNoOpenFiles(t *testing.T) {
+	if _, err := os.ReadDir("/proc/self/fd"); err != nil {
+		t.Skip("counts open files through /proc/self/fd")
+	}
+	t.Setenv(helperEnv, "1")
+	t.Setenv(helperModeEnv, "die")
+	defer debug.SetGCPercent(debug.SetGCPercent(-1)) // only what the agent closes counts
+	clk := clock.NewFake(time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC))
+	logBuf := &syncBuffer{}
+	sup := New(Options{
+		Spawn: ExecSpawner(os.Args[0], func(provider.ID) string { return t.TempDir() }, log.New(logBuf, "", 0)),
+		Clock: clk,
+		Log:   log.New(logBuf, "", 0),
+	})
+	defer sup.Stop()
+	died := func() {
+		t.Helper()
+		deadline := time.After(20 * time.Second)
+		for {
+			select {
+			case e := <-sup.Events():
+				if e.Exit != nil {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("the helper did not end; log: %s", logBuf.String())
+			}
+		}
+	}
+	sup.Want([]provider.ID{provider.Claude})
+	died() // the first death opens what the runtime keeps open
+	before := settledOpenFiles(t)
+	for range 4 {
+		clk.Advance(time.Minute) // its restart
+		died()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		n := openFiles(t)
+		if n <= before {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d files open after four more helpers died, %d before", n, before)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
