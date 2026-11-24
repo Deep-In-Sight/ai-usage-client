@@ -152,6 +152,13 @@ The menu, from top to bottom:
   the percentage under it, as on Windows.
 - Without a tray, such as a server with no desktop, it runs without an icon.
   Ask it what it is doing with `~/.local/bin/ai-usage status`.
+- If the top bar's tray appears late after login, or Ubuntu restarts the
+  session at logout while the agent keeps running, the icon comes back by
+  itself; the numbers are collected all the while. At login, the agent the
+  new session starts replaces one left over from the old session.
+- The agent keeps a log, `agent.log` in its settings folder (`status`
+  prints where); the previous one is `agent.log.1`. It never holds sign-in
+  tokens or the team key, and your home folder is written as `~`.
 
 ### Remove
 

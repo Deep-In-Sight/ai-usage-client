@@ -2,8 +2,10 @@
 # Linux runner checks: one-line install (headless, systemd user service),
 # sync, status, no listening port, no token leak, in-place upgrade,
 # uninstall, a desktop session without a tray host (falls back to
-# headless with XDG autostart), and one with a fake tray host (the
-# top-bar label over D-Bus). Results as annotations; exit 1 if a
+# headless with XDG autostart), one with a fake tray host (the
+# top-bar label over D-Bus), and the session lifecycle: the bus restarted
+# at logout, a login with a second run, a late tray host and the agent's
+# log file (lifecycle-linux.sh). Results as annotations; exit 1 if a
 # required check failed.
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
@@ -145,6 +147,18 @@ tray_label_check() {
   if [ -z "$problems" ]; then pass tray.label "label 42% -> 57% (signal), guide [$guide]"; else fail tray.label "$problems"; fi
 }
 tray_label_check
+
+# The session lifecycle across a logout and login (lifecycle-linux.sh):
+# tray.bus_restart, tray.relogin, tray.late_host and agent.log.
+# shellcheck source=lifecycle-linux.sh
+. "$here/lifecycle-linux.sh"
+start_agent() { (export "$@"; oneliner) >> "$out/install-lifecycle.log" 2>&1; }
+stop_agents() {
+  "$exe" uninstall >> "$out/uninstall-lifecycle.log" 2>&1
+  none_left() { [ "$(agent_count)" -eq 0 ]; }
+  wait_for 15 none_left
+}
+lifecycle_checks
 
 info linger "$(loginctl show-user "$USER" -p Linger 2>&1)"
 finish
