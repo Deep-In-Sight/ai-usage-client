@@ -10,7 +10,8 @@ import (
 )
 
 // WatcherWait is how long Linux waits for a StatusNotifierWatcher (the
-// desktop's tray host) to appear after login.
+// desktop's tray host) to appear after login before it runs without an
+// icon (and keeps watching for one, see WaitForHost).
 const WatcherWait = 60 * time.Second
 
 const watcherPoll = 2 * time.Second
@@ -18,13 +19,13 @@ const watcherPoll = 2 * time.Second
 var errNoBus = errors.New("tray: no session bus")
 
 // availableWith is the Linux rule with its inputs replaced: no desktop
-// session, no session bus (hasOwner fails) or no watcher within WatcherWait
-// means no tray.
+// session, no session bus (hasOwner fails) or no watcher within
+// WatcherWaitFrom(getenv) means no tray.
 func availableWith(ctx context.Context, getenv func(string) string, hasOwner func() (bool, error), clk clock.Clock) (bool, string) {
 	if osinfo.Headless(getenv) {
 		return false, "no desktop session"
 	}
-	deadline := clk.Now().Add(WatcherWait)
+	deadline := clk.Now().Add(WatcherWaitFrom(getenv))
 	for {
 		ok, err := hasOwner()
 		if err != nil {

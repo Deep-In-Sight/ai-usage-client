@@ -103,6 +103,14 @@ func trayEnv(t *testing.T, fs *fakeServer) *testEnv {
 		return onlyTo{base: fs.URL, next: protocol.NewClient(cfg.IngestKey, ua, nil)}
 	}
 	te.TrayAvailable = func(context.Context) (bool, string) { return true, "" }
+	// No tray host ever appears by itself (never the real session bus).
+	te.TrayWait = func(ctx context.Context, limit time.Duration) bool {
+		select {
+		case <-ctx.Done():
+		case <-time.After(limit):
+		}
+		return false
+	}
 	return te
 }
 

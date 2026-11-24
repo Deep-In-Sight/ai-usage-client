@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/autostart"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
@@ -45,6 +46,9 @@ type Env struct {
 	// TrayAvailable and Tray default to tray.Available and tray.Run.
 	TrayAvailable func(ctx context.Context) (bool, string)
 	Tray          func(ctx context.Context, c tray.Controller, updates <-chan struct{}, notice string) error
+	// TrayWait waits up to limit for a tray host to appear (nil means
+	// tray.WaitForHost).
+	TrayWait func(ctx context.Context, limit time.Duration) bool
 	// Syncer makes the sync client (nil means the real one).
 	Syncer func(cfg config.Config, userAgent string) engine.Syncer
 	// HasConsole (nil means true) and Alert (nil means none): a Windows GUI
@@ -151,7 +155,8 @@ func DefaultEnv() Env {
 		TrayAvailable: func(ctx context.Context) (bool, string) {
 			return tray.Available(ctx, os.Getenv)
 		},
-		Tray: tray.Run,
+		Tray:     tray.Run,
+		TrayWait: tray.WaitForHost,
 	}
 }
 

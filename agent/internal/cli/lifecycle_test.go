@@ -7,10 +7,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
 )
 
@@ -75,4 +79,59 @@ func TestStatusNamesTheLogFile(t *testing.T) {
 		want = "Log:        ~/" + filepath.ToSlash(rel)
 	}
 	contains(t, te.out.String(), want+"\n")
+}
+
+// A tray host that comes after the start-up wait (the extension loads late)
+// is noticed when it appears, not at the next 5-minute recheck.
+func TestLateTrayHostIsNoticedWhenItAppears(t *testing.T) {
+	fs := newFakeServer(t)
+	te := trayEnv(t, fs)
+	var hostUp atomic.Bool
+	appear := make(chan struct{})
+	te.TrayAvailable = func(context.Context) (bool, string) {
+		if hostUp.Load() {
+			return true, ""
+		}
+		return false, "no StatusNotifierWatcher"
+	}
+	var limits []time.Duration
+	var mu sync.Mutex
+	te.TrayWait = func(ctx context.Context, limit time.Duration) bool {
+		mu.Lock()
+		limits = append(limits, limit)
+		mu.Unlock()
+		select {
+		case <-appear:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	shown := make(chan time.Time, 1)
+	te.Tray = func(ctx context.Context, c tray.Controller, u <-chan struct{}, notice string) error {
+		shown <- time.Now()
+		<-ctx.Done()
+		return nil
+	}
+	cancel, code := te.mainAsync("run")
+	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) > 0 && modeOf(r[len(r)-1]) == "headless" })
+	hostUp.Store(true)
+	at := time.Now()
+	close(appear)
+	select {
+	case s := <-shown:
+		if d := s.Sub(at); d > 2*time.Second {
+			t.Fatalf("tray shown %v after the host appeared", d)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tray was not shown when the host appeared")
+	}
+	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) > 0 && modeOf(r[len(r)-1]) == "tray" })
+	cancel()
+	eq(t, waitCode(t, code), 0)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(limits) == 0 || limits[0] != trayRecheck {
+		t.Fatalf("waits %v", limits)
+	}
 }

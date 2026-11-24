@@ -212,12 +212,16 @@ func runCmd(env Env, args []string) int {
 		logger.Printf("no tray (%s): running without an icon", reason)
 		_ = os.Remove(marker)
 		// The tray host can come later (an extension switched on after
-		// login): look again now and then.
+		// login): wait for it to appear on the bus, checking again at
+		// least every trayRecheck.
+		wait := env.TrayWait
+		if wait == nil {
+			wait = tray.WaitForHost
+		}
 		for !ok {
-			select {
-			case <-ctx.Done():
+			wait(ctx, trayRecheck)
+			if ctx.Err() != nil {
 				return finish()
-			case <-time.After(trayRecheck):
 			}
 			ok, _ = available(ctx)
 			if ctx.Err() != nil {
@@ -245,7 +249,8 @@ func runCmd(env Env, args []string) int {
 	return finish()
 }
 
-// trayRecheck is how often a run without a tray looks for one again.
+// trayRecheck is how often a run without a tray looks for one again even
+// when no tray host appeared on the bus.
 var trayRecheck = 5 * time.Minute
 
 // logOutput is where run logs, every line scrubbed: the data folder's
