@@ -41,3 +41,20 @@ func TestFakeSetAndZeroAfter(t *testing.T) {
 		t.Fatalf("Now = %v", f.Now())
 	}
 }
+
+func TestFakeNextIsTheEarliestWaiter(t *testing.T) {
+	t0 := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+	f := NewFake(t0)
+	if _, ok := f.Next(); ok {
+		t.Fatal("a waiter without any After")
+	}
+	f.After(time.Hour)
+	f.After(time.Minute)
+	if n, ok := f.Next(); !ok || !n.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("Next = %v %v", n, ok)
+	}
+	f.Advance(time.Minute)
+	if n, ok := f.Next(); !ok || !n.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("Next after the first fired = %v %v", n, ok)
+	}
+}

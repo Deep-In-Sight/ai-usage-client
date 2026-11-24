@@ -62,6 +62,20 @@ func (f *Fake) Advance(d time.Duration) {
 	f.Set(t)
 }
 
+// Next is the earliest deadline still waited for (false: none), so a test
+// can step the time from one timer to the next.
+func (f *Fake) Next() (time.Time, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var next time.Time
+	for _, w := range f.waiters {
+		if next.IsZero() || w.at.Before(next) {
+			next = w.at
+		}
+	}
+	return next, !next.IsZero()
+}
+
 // Set moves the fake time to t and fires every waiter that is due.
 func (f *Fake) Set(t time.Time) {
 	f.mu.Lock()

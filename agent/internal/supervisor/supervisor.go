@@ -247,21 +247,28 @@ func (s *Supervisor) Stop() {
 	}
 }
 
-// start starts sl's helper (s.mu held).
+// start starts sl's helper (s.mu held). It never starts one again by
+// itself: a failed start is a failure exit (retry), whose new start waits
+// for a timer.
 func (s *Supervisor) start(sl *slot) {
 	if s.stop || !sl.wanted {
 		return
 	}
 	sl.gen++
 	gen := sl.gen
+	// a new process: what was asked of the last one is over
+	sl.proc, sl.ready, sl.quitSent, sl.sentView = nil, false, false, false
+	now := s.o.Clock.Now()
+	sl.started = now
 	token := newToken()
 	p, err := s.o.Spawn(sl.id, UIDFor(sl.id), token)
 	if err != nil {
 		s.o.Log.Printf("tray helper %s: %v", name(sl.id), err)
-		s.ended(sl, -1, s.o.Clock.Now())
+		code := -1
+		s.retry(sl, Event{Provider: sl.id, Exit: &code, RestartIn: -1}, code, 0, now)
 		return
 	}
-	sl.proc, sl.ready, sl.quitSent, sl.started, sl.sentView = p, false, false, s.o.Clock.Now(), false
+	sl.proc = p
 	sl.exited = make(chan struct{})
 	sl.out = newSender(p.Stdin())
 	sl.out.send(trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeHello, Token: token})
@@ -285,9 +292,6 @@ func (s *Supervisor) start(sl *slot) {
 // ended handles the end of sl's process (s.mu held).
 func (s *Supervisor) ended(sl *slot, code int, now time.Time) {
 	lived := now.Sub(sl.started)
-	if sl.proc == nil {
-		lived = 0 // it never started
-	}
 	sl.proc, sl.ready = nil, false
 	if sl.out != nil {
 		sl.out.close()
@@ -298,13 +302,26 @@ func (s *Supervisor) ended(sl *slot, code int, now time.Time) {
 	case s.stop:
 		s.queue.put(ev)
 		return
-	case sl.quitSent && sl.wanted:
+	case !sl.wanted:
+		delete(s.slots, sl.id)
+		s.queue.put(ev)
+		return
+	case sl.quitSent:
 		// asked to quit, then wanted again before it ended: start anew
+		// (start resets quitSent before it spawns; a failed start goes to
+		// retry, which only sets a timer)
 		s.queue.put(ev)
 		s.start(sl)
 		return
-	case !sl.wanted:
-		delete(s.slots, sl.id)
+	}
+	s.retry(sl, ev, code, lived, now)
+}
+
+// retry plans the next start after an exit (or a failed start) of a
+// wanted helper, and delivers ev with that plan (s.mu held). It never
+// starts a helper itself.
+func (s *Supervisor) retry(sl *slot, ev Event, code int, lived time.Duration, now time.Time) {
+	if s.stop || !sl.wanted {
 		s.queue.put(ev)
 		return
 	}
