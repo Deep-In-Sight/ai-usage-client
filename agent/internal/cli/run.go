@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -371,6 +372,33 @@ func restartsFrom(getenv func(string) string) int {
 		return 0
 	}
 	return n
+}
+
+// restartEnviron is the environment of the restarted run: environ with
+// restartsEnv set to n, and the session bus address moved to the runtime
+// folder's bus when the old one no longer answers and that one does (a
+// desktop that gives each session its own bus address; review m4).
+func restartEnviron(environ []string, n int, reachable func(addr string) bool) []string {
+	get := func(k string) string {
+		for _, kv := range environ {
+			if v, ok := strings.CutPrefix(kv, k+"="); ok {
+				return v
+			}
+		}
+		return ""
+	}
+	bus, moved := tray.SessionBusFallback(get, reachable)
+	out := make([]string, 0, len(environ)+1)
+	for _, kv := range environ {
+		switch {
+		case strings.HasPrefix(kv, restartsEnv+"="):
+		case moved && strings.HasPrefix(kv, "DBUS_SESSION_BUS_ADDRESS="):
+			out = append(out, "DBUS_SESSION_BUS_ADDRESS="+bus)
+		default:
+			out = append(out, kv)
+		}
+	}
+	return append(out, restartsEnv+"="+strconv.Itoa(n))
 }
 
 // restartsEnv carries the count of quick restarts to the new run.

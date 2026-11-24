@@ -56,8 +56,10 @@ type dbusHost struct {
 func dialHost() (hostConn, error) {
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
+		sessionBus.failed()
 		return nil, err
 	}
+	sessionBus.ok()
 	if err := conn.AddMatchSignal(
 		dbus.WithMatchObjectPath("/org/freedesktop/DBus"),
 		dbus.WithMatchInterface("org.freedesktop.DBus"),

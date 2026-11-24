@@ -208,16 +208,16 @@ func TestScrubberTakesOutJWTsAndOpaqueTokens(t *testing.T) {
 	key := "fake/ingest+key=0123456789"
 	s := NewScrubber(Personal{}, key)
 	cases := map[string]string{
-		"id_token eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.c2lnLXBhcnQ_1 read":         "id_token [token] read",
-		"claims eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0. end":                         "claims [token] end",
-		`{"access_token":"abcdef0123456789abcdef","x":1}`:                          `{"access_token":"[token]","x":1}`,
-		"refresh_token=rt_AbCdEf0123456789xyz&a=b":                                "refresh_token=[token]&a=b",
-		"api_key: Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MA== sent":                          "api_key: [token] sent",
-		"Authorization: bearer\tabc.def":                                          "Authorization: bearer\t[token]",
-		"url ?key=fake%2Fingest%2Bkey%3D0123456789 refused":                       "url ?key=[ingest key] refused",
-		"path /k/fake%2Fingest+key=0123456789/x":                                  "path /k/[ingest key]/x",
-		"token expired; key file missing; access_token: short":                    "token expired; key file missing; access_token: short",
-		"sync: bad ingest key: HTTP 401 (machine key not shown)":                  "sync: bad ingest key: HTTP 401 (machine key not shown)",
+		"id_token eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.c2lnLXBhcnQ_1 read": "id_token [token] read",
+		"claims eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0. end":                 "claims [token] end",
+		`{"access_token":"abcdef0123456789abcdef","x":1}`:                 `{"access_token":"[token]","x":1}`,
+		"refresh_token=rt_AbCdEf0123456789xyz&a=b":                        "refresh_token=[token]&a=b",
+		"api_key: Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MA== sent":                  "api_key: [token] sent",
+		"Authorization: bearer\tabc.def":                                  "Authorization: bearer\t[token]",
+		"url ?key=fake%2Fingest%2Bkey%3D0123456789 refused":               "url ?key=[ingest key] refused",
+		"path /k/fake%2Fingest+key=0123456789/x":                          "path /k/[ingest key]/x",
+		"token expired; key file missing; access_token: short":            "token expired; key file missing; access_token: short",
+		"sync: bad ingest key: HTTP 401 (machine key not shown)":          "sync: bad ingest key: HTTP 401 (machine key not shown)",
 	}
 	for in, want := range cases {
 		in, want = strings.ReplaceAll(in, `\t`, "\t"), strings.ReplaceAll(want, `\t`, "\t")
@@ -234,12 +234,12 @@ func TestScrubberTakesOutJWTsAndOpaqueTokens(t *testing.T) {
 func TestScrubberLeavesOrdinaryWordsAlone(t *testing.T) {
 	s := NewScrubber(Personal{Home: "/srv/u/x", User: "user", Host: "ubuntu"})
 	cases := map[string]string{
-		"systray error: dbus: connection closed by user":         "systray error: dbus: connection closed by user",
-		"desktop ubuntu:GNOME, session x11":                      "desktop ubuntu:GNOME, session x11",
-		"open /media/user/disk and C:\\Users\\user\\x": "open /media/[user]/disk and C:\\Users\\[user]\\x",
-		"user=user host=ubuntu":                                  "user=[user] host=[host]",
-		`{"os_user":"user","hostname":"ubuntu"}`:                 `{"os_user":"[user]","hostname":"[host]"}`,
-		"Hostname: ubuntu, user: user":                           "Hostname: [host], user: [user]",
+		"systray error: dbus: connection closed by user": "systray error: dbus: connection closed by user",
+		"desktop ubuntu:GNOME, session x11":              "desktop ubuntu:GNOME, session x11",
+		"open /media/user/disk and C:\\Users\\user\\x":   "open /media/[user]/disk and C:\\Users\\[user]\\x",
+		"user=user host=ubuntu":                          "user=[user] host=[host]",
+		`{"os_user":"user","hostname":"ubuntu"}`:         `{"os_user":"[user]","hostname":"[host]"}`,
+		"Hostname: ubuntu, user: user":                   "Hostname: [host], user: [user]",
 	}
 	for in, want := range cases {
 		if got := s.Scrub(in); got != want {
