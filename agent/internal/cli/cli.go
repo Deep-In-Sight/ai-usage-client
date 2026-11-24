@@ -1,5 +1,5 @@
-// Package cli is the agent's command line: run, install, uninstall, status
-// and version.
+// Package cli is the agent's command line: run, install, uninstall, status,
+// version and licenses.
 package cli
 
 import (
@@ -14,6 +14,7 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/creds"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/notices"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/osinfo"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
@@ -161,6 +162,7 @@ const usageText = `usage: ai-usage <command>
   run [--headless]                                run the agent (the service does this)
   status [--json]                                 show what the agent is doing
   version                                         print the version
+  licenses                                        print the third-party licence notices
 `
 
 // Main runs one command and returns the exit code.
@@ -192,6 +194,9 @@ func Main(env Env) int {
 	case "help", "-h", "--help":
 		fmt.Fprint(env.Stdout, usageText)
 		return 0
+	case "licenses", "licences":
+		notices.Write(env.Stdout, notices.BuildVersions(), runtime.Version())
+		return 0
 	}
 	fmt.Fprintf(env.Stderr, "ai-usage: unknown command %q\n%s", cmd, usageText)
 	return 2
@@ -203,7 +208,7 @@ func printsOutput(args []string) bool {
 		return true
 	}
 	switch args[0] {
-	case "status", "version", "--version", "uninstall", "help", "-h", "--help":
+	case "status", "version", "--version", "uninstall", "help", "-h", "--help", "licenses", "licences":
 		return true
 	}
 	return false

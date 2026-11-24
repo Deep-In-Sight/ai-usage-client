@@ -116,6 +116,21 @@ func TestVersion(t *testing.T) {
 	eq(t, te.out.String(), "ai-usage 0.0.0-dev "+runtime.GOOS+"/"+runtime.GOARCH+" "+word+"\n")
 }
 
+// The third-party licence notices ship inside the binary.
+func TestLicenses(t *testing.T) {
+	for _, cmd := range []string{"licenses", "licences"} {
+		te := newEnv(t)
+		eq(t, te.main(cmd), 0)
+		contains(t, te.out.String(), "fyne.io/systray")
+		contains(t, te.out.String(), "Apache License")
+		contains(t, te.out.String(), runtime.Version())
+	}
+	eq(t, printsOutput([]string{"licenses"}), true) // Windows: to the console it was started from
+	te := newEnv(t)
+	te.main("help")
+	contains(t, te.out.String(), "licenses")
+}
+
 func TestUnknownCommandAndNoArgsUsage(t *testing.T) {
 	te := newEnv(t)
 	eq(t, te.main("frobnicate"), 2)
