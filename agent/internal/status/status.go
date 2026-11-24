@@ -31,6 +31,10 @@ type Snapshot struct {
 	Backlog             int       `json:"backlog"`
 	ClientLatestVersion string    `json:"client_latest_version,omitempty"`
 	SchemaFallback      bool      `json:"schema_fallback,omitempty"` // the server does not speak schema 2: schema 1, Claude only
+	// Machine is what the agent sends as the machine key: its source
+	// ("os"), MachineNone or MachineNotSent; never the key ("" from an
+	// agent before v0.8.2).
+	Machine string `json:"machine,omitempty"`
 
 	Providers map[provider.ID]ProviderStatus `json:"providers"`
 }
@@ -55,6 +59,12 @@ type ProviderStatus struct {
 	FreshPending    bool           `json:"fresh_pending,omitempty"`
 	ServerProblem   string         `json:"server_problem,omitempty"` // the server's problem for this provider's block
 }
+
+// Machine values besides a source.
+const (
+	MachineNone    = "none"     // the OS gives no machine identifier: no key
+	MachineNotSent = "not_sent" // schema 1 (fallback) has no machine key
+)
 
 // Provider returns p's part (the zero value when there is none).
 func (s Snapshot) Provider(p provider.ID) ProviderStatus { return s.Providers[p] }

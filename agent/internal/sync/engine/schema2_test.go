@@ -13,6 +13,7 @@ import (
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/backlog"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
 )
@@ -67,6 +68,7 @@ func TestFallbackToSchema1KeepsCodexBacklog(t *testing.T) {
 	eq(t, r.syncer.calls[1].req.Schema, 1)
 	eq(t, len(r.syncer.calls[1].req.Results), 1) // Claude's only
 	eq(t, r.snap().SchemaFallback, true)
+	eq(t, r.snap().Machine, status.MachineNotSent) // schema 1 has no machine key
 	eq(t, r.snap().Mode, "coordinated")
 	eq(t, len(r.backlog.Pending(10, "claude")), 0)
 	eq(t, len(r.backlog.Pending(10, "codex")), 1)

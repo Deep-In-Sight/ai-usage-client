@@ -373,12 +373,14 @@ func TestRequestV2Fields(t *testing.T) {
 			t.Fatalf("no %s in %s", want, b)
 		}
 	}
+	eq(t, r.snap().Machine, "os") // status says what was sent (review m-M)
 	// without a machine key the part is null
 	d := r.e.d
 	d.Identity.MachineKey, d.Identity.MachineSource = "", ""
 	r.e = New(d)
 	r.e.Step(ctx)
 	eq(t, r.syncer.calls[1].v2.Machine == nil, true)
+	eq(t, r.snap().Machine, status.MachineNone)
 }
 
 func TestLongTextsAreClipped(t *testing.T) {

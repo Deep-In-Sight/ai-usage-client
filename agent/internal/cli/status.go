@@ -98,10 +98,9 @@ func statusCmd(env Env, args []string) int {
 		clientMode = " (" + snap.ClientMode + ")"
 	}
 	fmt.Fprintf(w, "Mode:       %s%s\n", strings.Join(mode, ", "), clientMode)
-	// whether the PC is identified, and how; never the key (design D8)
-	_, source := env.machine()
-	fmt.Fprintf(w, "Machine:    %s\n", map[string]string{machine.SourceOS: "identified (OS machine id)",
-		"": "not identified (this OS gives no machine identifier; a reinstall counts as a new PC)"}[source])
+	// whether the running agent identifies the PC, and how; never the key
+	// (design D8), and from what the agent wrote, not read here (review m-M)
+	fmt.Fprintf(w, "Machine:    %s\n", machineWords(snap.Machine))
 	syncState := "ok"
 	if !snap.LastSyncOK {
 		syncState = "failing"
@@ -124,6 +123,21 @@ func statusCmd(env Env, args []string) int {
 	fmt.Fprintf(w, "Backlog:    %d\n", snap.Backlog)
 	fmt.Fprintf(w, "Log:        %s\n", displayPath(env, env.Dirs.File(paths.LogFile)))
 	return 0
+}
+
+// machineWords is the status text for status.Snapshot.Machine.
+func machineWords(m string) string {
+	switch m {
+	case machine.SourceOS:
+		return "identified (OS machine id)"
+	case status.MachineNone:
+		return "not identified (this OS gives no machine identifier; a reinstall counts as a new PC)"
+	case status.MachineNotSent:
+		return "not sent (the server speaks the older protocol)"
+	case "":
+		return "not reported (the running agent is older)"
+	}
+	return m
 }
 
 // signInWords are the status text of the sign-in states.

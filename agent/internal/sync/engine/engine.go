@@ -884,7 +884,13 @@ func (e *Engine) publish(now time.Time) {
 		SyncFailures: e.failures, SyncProblem: e.syncProblem, Backlog: e.d.Backlog.Len(),
 		ClientMode: e.currentClientMode(), FreshPending: e.fresh.Load() || e.freshWaiting,
 		ClientLatestVersion: e.clientLatest, Providers: map[provider.ID]status.ProviderStatus{},
-		SchemaFallback: e.fallback,
+		SchemaFallback: e.fallback, Machine: e.d.Identity.MachineSource,
+	}
+	switch {
+	case e.fallback:
+		s.Machine = status.MachineNotSent
+	case e.d.Identity.MachineKey == "":
+		s.Machine = status.MachineNone
 	}
 	for _, l := range e.lanes {
 		if e.mode == ModeStandalone && (s.NextStandaloneFetch.IsZero() || l.nextStandalone.Before(s.NextStandaloneFetch)) {

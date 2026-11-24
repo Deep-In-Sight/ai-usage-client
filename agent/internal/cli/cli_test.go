@@ -242,7 +242,7 @@ func TestStatusGolden(t *testing.T) {
 	ptr := func(v time.Time) *time.Time { return &v }
 	st := 200
 	snap := status.Snapshot{Version: "0.0.0-dev", PID: 1, Mode: "coordinated", ServerURL: "http://ai-usage.local", ClientMode: "tray",
-		LastSyncAt: at(8, 59), LastSyncOK: true, Backlog: 2,
+		LastSyncAt: at(8, 59), LastSyncOK: true, Backlog: 2, Machine: "os",
 		Providers: claudeSnap(status.ProviderStatus{State: "ok", Role: "standby", PollerHostname: "TEST-PC-03", ExpiresAt: at(17, 30),
 			LatestFetchedAt: at(8, 58), LastFetchAt: at(8, 40), LastFetchStatus: &st, MainKey: "weekly_all",
 			Rows: []provider.Row{
@@ -285,25 +285,25 @@ Backlog:    2
 
 func pf(v float64) *float64 { return &v }
 
-// status says whether the PC is identified and how, never the key.
+// status says whether the running agent sends a machine key, from what it
+// wrote to status.json (never the key, and nothing read by the status
+// process itself; review m-M).
 func TestStatusNamesTheMachineKeySource(t *testing.T) {
 	te := newEnv(t)
-	must(t, status.Write(te.Dirs.File(paths.StatusFile), status.Snapshot{Mode: "coordinated"}))
-	for src, want := range map[string]string{"os": "identified (OS machine id)", "": "not identified (this OS gives no machine identifier; a reinstall counts as a new PC)"} {
-		te.Machine = func() (string, string) {
-			if src == "" {
-				return "", ""
-			}
-			return fakeMachineKey, src
-		}
+	te.Machine = func() (string, string) {
+		t.Fatal("status read the machine identifier itself")
+		return "", ""
+	}
+	for sent, want := range map[string]string{
+		"os":                  "identified (OS machine id)",
+		status.MachineNone:    "not identified (this OS gives no machine identifier; a reinstall counts as a new PC)",
+		status.MachineNotSent: "not sent (the server speaks the older protocol)",
+		"":                    "not reported (the running agent is older)",
+	} {
+		must(t, status.Write(te.Dirs.File(paths.StatusFile), status.Snapshot{Mode: "coordinated", Machine: sent}))
 		te.out.Reset()
 		eq(t, te.main("status"), 0)
 		contains(t, te.out.String(), "Machine:    "+want+"\n")
-		te.out.Reset()
-		eq(t, te.main("status", "--json"), 0)
-		if strings.Contains(te.out.String(), fakeMachineKey) {
-			t.Fatal("the machine key is printed")
-		}
 	}
 }
 
