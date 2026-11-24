@@ -5,7 +5,8 @@
 // PATCHED.md).
 
 // Package trayicon loads the Windows tray icon at the size the notification
-// area draws it. Added to the upstream v1.12.2 code; see PATCHED.md.
+// area draws it. It is a public package so that the AI Usage agent can see
+// when that size changes (a display-scale change) and set its icon again.
 package trayicon
 
 import (

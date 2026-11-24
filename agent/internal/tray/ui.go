@@ -3,7 +3,6 @@
 package tray
 
 import (
-	"bytes"
 	"context"
 	"log"
 	"os"
@@ -37,10 +36,11 @@ func Run(ctx context.Context, c Controller, updates <-chan struct{}, notice stri
 }
 
 type shown struct {
-	icon    []byte
-	title   string
-	tooltip string
-	items   []Item
+	icon     []byte
+	iconSize int // Windows: the notification area's icon size it was set at
+	title    string
+	tooltip  string
+	items    []Item
 }
 
 func loop(ctx context.Context, c Controller, updates <-chan struct{}, notice string) {
@@ -130,9 +130,11 @@ func openLogged(u string) {
 // apply changes only what differs from what is shown.
 func apply(menu []*systray.MenuItem, last *shown, v View, iconDir string) {
 	img := IconImage(runtime.GOOS, os.Getenv("XDG_CURRENT_DESKTOP"), v)
-	if !bytes.Equal(img, last.icon) {
+	// On Windows the icon is also set again when the notification area's
+	// icon size changed (checked on every redraw, at least once a minute).
+	if size := trayIconSize(); needIcon(last.icon, last.iconSize, img, size) {
 		setIcon(img, iconDir)
-		last.icon = img
+		last.icon, last.iconSize = img, size
 	}
 	if t, ok := NextToIcon(runtime.GOOS, v); ok && t != last.title {
 		setNextToIcon(t)

@@ -17,8 +17,8 @@ mode 100644, nothing executable).
 ## Changes
 
 Added files: this `PATCHED.md`, `systray_patch_test.go` (tests of the
-Linux and BSD changes) and `internal/trayicon/` (`trayicon_windows.go` and
-its test, see Windows below). Each added Go file starts with a comment saying it
+Linux and BSD changes) and `trayicon/` (`trayicon_windows.go` and its
+test, see Windows below). Each added Go file starts with a comment saying it
 is not upstream code.
 
 ### `systray_unix.go` (Linux and BSD)
@@ -58,7 +58,9 @@ extra properties.
   (`SM_CXICON`, 32 px at 100 %), so the shell scaled every tray icon down
   and an ICO's small entries were never shown. The loaded handles are
   cached per file and size (upstream: per file). The `LoadImage` call and
-  the size are in the new package `internal/trayicon`, whose test
+  the size are in the new public package `trayicon` (public so that the
+  AI Usage agent can call `trayicon.Size()` and set its icon again when
+  the size changes after a display-scale change), whose test
   (`trayicon_windows_test.go`) loads an ICO with one entry per size and
   checks that the entry of exactly the small-icon size comes back
   unscaled. Upstream's own `systray_windows_test.go` does not compile at

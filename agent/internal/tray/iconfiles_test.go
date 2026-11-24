@@ -51,3 +51,30 @@ func TestIconFilesAreBoundedAndOurs(t *testing.T) {
 		t.Fatal("empty folder left")
 	}
 }
+
+// The icon is set again when its picture changes, and on Windows also when
+// the notification area's icon size changes (a display-scale change), so
+// the entry of the new size is loaded within a redraw tick; an unchanged
+// picture at an unchanged size is not set again (no NIM_MODIFY every
+// minute).
+func TestIconIsSetOnPictureOrSizeChange(t *testing.T) {
+	a, b := []byte("icon A"), []byte("icon B")
+	for _, c := range []struct {
+		lastImg  []byte
+		lastSize int
+		img      []byte
+		size     int
+		want     bool
+	}{
+		{nil, 0, a, 16, true}, // first draw
+		{a, 16, a, 16, false},
+		{a, 16, b, 16, true},
+		{a, 16, a, 24, true}, // 100 % -> 150 %
+		{a, 24, a, 16, true},
+		{a, 0, a, 0, false}, // macOS and Linux: no size
+	} {
+		if got := needIcon(c.lastImg, c.lastSize, c.img, c.size); got != c.want {
+			t.Fatalf("needIcon(%q, %d, %q, %d) = %v", c.lastImg, c.lastSize, c.img, c.size, got)
+		}
+	}
+}

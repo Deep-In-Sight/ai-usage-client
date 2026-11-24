@@ -1,6 +1,7 @@
 package tray
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -64,4 +65,12 @@ func removeIconFiles(dir string) {
 		}
 	}
 	_ = os.Remove(dir)
+}
+
+// needIcon reports whether the tray icon must be set: its picture changed,
+// or (Windows) the notification area's icon size did, after a display-scale
+// change, so that the ICO entry of the new size is loaded. size is 0 where
+// the icon does not depend on it.
+func needIcon(lastImg []byte, lastSize int, img []byte, size int) bool {
+	return !bytes.Equal(img, lastImg) || size != lastSize
 }

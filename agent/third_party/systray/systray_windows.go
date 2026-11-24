@@ -1,8 +1,8 @@
 //go:build windows
 
 //Modified from fyne.io/systray v1.12.2: the tray icon is loaded at the
-//notification area's size (through internal/trayicon), and loaded icons are
-//cached per file and size (see PATCHED.md).
+//notification area's size (through the added package trayicon), and
+//loaded icons are cached per file and size (see PATCHED.md).
 
 package systray
 
@@ -23,7 +23,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"fyne.io/systray/internal/trayicon" // added, see PATCHED.md
+	"fyne.io/systray/trayicon" // added, see PATCHED.md
 )
 
 // Helpful sources: https://github.com/golang/exp/blob/master/shiny/driver/internal/win32

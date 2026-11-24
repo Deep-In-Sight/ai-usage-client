@@ -7,6 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"fyne.io/systray/trayicon"
 	"golang.org/x/sys/windows"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
@@ -16,7 +17,6 @@ var (
 	user32            = windows.NewLazySystemDLL("user32.dll")
 	gdi32             = windows.NewLazySystemDLL("gdi32.dll")
 	pGetSystemMetrics = user32.NewProc("GetSystemMetrics")
-	pLoadImage        = user32.NewProc("LoadImageW")
 	pGetIconInfo      = user32.NewProc("GetIconInfo")
 	pDestroyIcon      = user32.NewProc("DestroyIcon")
 	pGetDC            = user32.NewProc("GetDC")
@@ -26,19 +26,16 @@ var (
 	pDeleteObject     = gdi32.NewProc("DeleteObject")
 )
 
-// loadTrayICO loads an ICO file as the patched systray does for the tray
-// (third_party/systray: LoadImage with LR_LOADFROMFILE at the small-icon
-// size; TestTrayIconLoadsTheSmallEntry there checks that path) and returns
-// the loaded image's size and straight-alpha NRGBA pixels.
+// loadTrayICO loads an ICO file as the tray does (the patched systray's
+// trayicon.Load at the notification area's size) and returns the loaded
+// image's size and straight-alpha NRGBA pixels.
 func loadTrayICO(t *testing.T, path string, n int) (int, []color.NRGBA) {
 	t.Helper()
-	p, err := windows.UTF16PtrFromString(path)
-	must(t, err)
-	const imageIcon, lrLoadFromFile = 1, 0x10
-	h, _, err := pLoadImage.Call(0, uintptr(unsafe.Pointer(p)), imageIcon, uintptr(n), uintptr(n), lrLoadFromFile)
-	if h == 0 {
-		t.Fatalf("LoadImage: %v", err)
+	hi, err := trayicon.Load(path, int32(n), int32(n))
+	if err != nil {
+		t.Fatalf("trayicon.Load: %v", err)
 	}
+	h := uintptr(hi)
 	defer pDestroyIcon.Call(h)
 	var ii struct {
 		FIcon              int32
@@ -90,8 +87,12 @@ func loadTrayICO(t *testing.T, path string, n int) (int, []color.NRGBA) {
 // for exactly that size: no rescaling.
 func TestWindowsLoadsTheTrayLayoutForItsSize(t *testing.T) {
 	r, _, _ := pGetSystemMetrics.Call(49) // SM_CXSMICON
-	n := int(r)
-	t.Logf("small-icon size %d", n)
+	cx, cy := trayicon.Size()
+	n := int(cx)
+	t.Logf("tray icon size %dx%d, small-icon size %d", cx, cy, r)
+	if n != int(r) || cy != cx {
+		t.Fatalf("trayicon.Size %dx%d, SM_CXSMICON %d", cx, cy, r)
+	}
 	stale := clawdSpec(p(71), usage.LevelNormal)
 	stale.Stale = true
 	for _, s := range []Spec{
