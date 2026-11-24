@@ -148,14 +148,19 @@ func wrap(w io.Writer, lead, text string) {
 
 const rule = "----------------------------------------------------------------------"
 
+// Independence is the notice of design D13, the same as the README's.
+const Independence = `AI Usage is an independent internal tool. It is not affiliated with, endorsed by, ` +
+	`or sponsored by Anthropic PBC or OpenAI. "Claude" and "Claude Code" are trademarks of Anthropic PBC; ` +
+	`"OpenAI", "ChatGPT" and "Codex" are trademarks of OpenAI. These names are used only to identify the ` +
+	`services whose usage this tool displays.`
+
 // Write prints the notices: AI Usage's own licence and what it does not
 // cover, then each module with its version when this binary has it
 // (versions; goVersion for Go), its licence and the licence files.
 func Write(w io.Writer, versions map[string]string, goVersion string) {
 	fmt.Fprintln(w, "AI Usage")
 	fmt.Fprintln(w, "Licence: MIT License")
-	fmt.Fprintln(w, "AI Usage is an independent internal tool. It is not affiliated with,")
-	fmt.Fprintln(w, "endorsed by, or sponsored by Anthropic PBC or OpenAI.")
+	wrap(w, "", Independence)
 	fmt.Fprintln(w, "These parts of the program are not covered by this licence:")
 	for _, m := range Marks {
 		wrap(w, "- ", fmt.Sprintf("%s, %s, depicts %s, (c) %s. It is not covered by this licence, "+

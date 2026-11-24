@@ -117,7 +117,7 @@ func statusCmd(env Env, args []string) int {
 	}
 	for _, id := range []provider.ID{provider.Claude, provider.Codex} {
 		if ps, ok := snap.Providers[id]; ok {
-			writeProvider(w, id, ps, now)
+			writeProvider(w, env, id, ps, now)
 		}
 	}
 	fmt.Fprintf(w, "Backlog:    %d\n", snap.Backlog)
@@ -148,7 +148,7 @@ var signInWords = map[string]string{"ok": "signed in", "expired": "sign-in expir
 // writeProvider prints one provider's part (design 6.12): its sign-in and
 // role on the first line, then one line per limit, when the numbers were
 // fetched and the last fetch of this PC.
-func writeProvider(w io.Writer, id provider.ID, ps status.ProviderStatus, now time.Time) {
+func writeProvider(w io.Writer, env Env, id provider.ID, ps status.ProviderStatus, now time.Time) {
 	const indent = "            "
 	when := func(t time.Time) string {
 		t = t.In(now.Location())
@@ -160,6 +160,9 @@ func writeProvider(w io.Writer, id provider.ID, ps status.ProviderStatus, now ti
 	head := signInWords[ps.State]
 	if head == "" {
 		head = ps.State
+	}
+	if id == provider.Codex && ps.Plan != "" && (ps.State == "ok" || ps.State == "expired") {
+		head += " (" + capitalise(ps.Plan) + ")"
 	}
 	if !ps.ExpiresAt.IsZero() {
 		head += ", expires " + when(ps.ExpiresAt)
@@ -210,6 +213,35 @@ func writeProvider(w io.Writer, id provider.ID, ps status.ProviderStatus, now ti
 	if len(numbers) > 0 {
 		fmt.Fprintln(w, indent+strings.Join(numbers, " · "))
 	}
+	if id == provider.Codex && (ps.LastFetchSource != "" || ps.FallbackCLI != "" || ps.FallbackProblem != "") {
+		// how this PC got Codex's numbers, and the Codex CLI the fallback
+		// would run (design 6.12)
+		src := map[string]string{"wham": "direct", "app-server": "Codex CLI", "": "no fetch from this PC yet"}[ps.LastFetchSource]
+		if src == "" {
+			src = ps.LastFetchSource
+		}
+		cli := "no fallback CLI found"
+		switch {
+		case ps.FallbackProblem != "":
+			cli = "fallback CLI: " + ps.FallbackProblem
+		case ps.FallbackCLI != "":
+			path, ver := ps.FallbackCLI, ""
+			if i := strings.LastIndexByte(path, ' '); i > 0 {
+				path, ver = path[:i], path[i:]
+			}
+			cli = "fallback CLI: " + displayPath(env, path) + ver
+		}
+		fmt.Fprintf(w, "%ssource: %s  (%s)\n", indent, src, cli)
+	}
+}
+
+// capitalise is a plan name as the menu shows it ("plus" -> "Plus").
+func capitalise(s string) string {
+	r := []rune(s)
+	if len(r) == 0 {
+		return s
+	}
+	return strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
 // displayPath shows a path under the home folder as ~/... (not on Windows,

@@ -148,8 +148,13 @@ files on this repository's Releases page do not install on their own: the
 server's command writes the settings the agent needs (the server's address and
 its key).
 
-You need Claude Code signed in with your claude.ai subscription, now or
-later; the agent starts reporting once you sign in. On a Mac, macOS may ask
+You need Claude Code signed in with your claude.ai subscription, or Codex
+signed in with ChatGPT (the Codex CLI, its IDE extension or the Codex app,
+which keep the sign-in in `~/.codex`), or both, now or later; the agent
+starts reporting once you sign in. Nothing else needs installing. A Codex
+sign-in kept in the system keychain (`cli_auth_credentials_store` set to
+`keyring` or `auto`) or an API-key sign-in is not supported: it has no
+plan limits to show, or no expiry the agent can read. On a Mac, macOS may ask
 whether `ai-usage` may use the "Claude Code-credentials" keychain item;
 choose **Always Allow**. The agent is not code-signed, so macOS may ask again
 after an upgrade. It installs for the OS
@@ -177,7 +182,9 @@ The menu, from top to bottom:
 | `███████░░░  71%  Weekly · Sun 01:00 (1d 6h)` | Weekly usage across all models. Always shown; `░░░░░░░░░░  –%` until there are numbers. |
 | `███████▌░░  76%  Fable · Sun 01:00 (1d 6h)` | The weekly limit for Fable, when the account has one. |
 | Sign-in expired: open Claude Code to renew it | Under the rows when the sign-in ran out; the last numbers stay. "Usage reply could not be read" means Anthropic's reply had no weekly number. |
-| Sign in to Claude Code | Nobody is signed in on this PC (the only line above the server's). |
+| Codex · user-c@… · 1 PC · Plus | Codex's section, when Codex is signed in: the account, its PCs and plan, then one row per limit window in its reply (`5-hour`, `Weekly`, `30-day`, and per-model limits as `<name> · Weekly`), at most four and `More limits on the dashboard`. |
+| Codex sign-in expired: run Codex once to renew it | Codex's sign-in ran out; running Codex renews it. Other lines here: the sign-in is in the keychain or is an API key (not supported), `config.toml` names another server, or "Server does not support Codex yet" (the team's server is older). |
+| Sign in to Claude Code or Codex | Nobody is signed in on this PC (the only line above the server's). |
 | Server connected · Updated 18:58 · fetching: TEST-PC-03 | When the numbers were fetched, and which PC fetches them (`this PC fetches Claude` when it is this one). |
 | Server not reachable · this PC fetches every 30 min | The server cannot be reached; this PC asks Anthropic itself, every 30 minutes, until it can. |
 | Open dashboard | Opens your server's dashboard. |
@@ -188,13 +195,14 @@ The menu, from top to bottom:
 
 Clicking a usage row opens that account's page on the dashboard. The bars
 start at the left edge so they line up whatever the menu's font; the
-percentages are padded to the same width. More providers (planned) get a
-section each, in the same menu under every icon.
+percentages are padded to the same width. Each provider has a section, and
+every icon has the same menu.
 
 | You see | It means |
 | --- | --- |
 | Clawd, the Claude Code mascot | Claude Code is signed in on this PC. The bar or number with it is that account's weekly usage. |
-| A grey ring, no Clawd | Claude Code is not signed in, or the agent is just starting. |
+| A ring with a number or bar | Codex's icon, when Codex is signed in (next to Clawd when both are). Its number is the Codex limit that matters most: the weekly one, or a shorter one that is used up. |
+| A grey ring, no Clawd | Nobody is signed in, or the agent is just starting. |
 | Terracotta bar or number | Normal. |
 | Yellow | 75% or more, or Anthropic flags the limit as being used up fast. |
 | Red | 90% or more. |
@@ -219,7 +227,8 @@ section each, in the same menu under every icon.
   new session starts replaces one left over from the old session.
 - The icon is drawn by a small helper process the agent starts (the same
   `ai-usage` program, run as `ai-usage tray-helper`), so Task Manager,
-  Activity Monitor or `ps` show two `ai-usage` processes. If the desktop's
+  Activity Monitor or `ps` show two `ai-usage` processes (three with both
+  Claude and Codex: one helper per icon). If the desktop's
   tray goes away, only the helper ends; the agent goes on collecting and
   starts it again. The helper gets nothing but what to draw: no sign-in,
   no file, no network, and of the agent's environment only what a tray
@@ -400,8 +409,10 @@ Code" are trademarks of Anthropic PBC; "OpenAI", "ChatGPT" and "Codex" are
 trademarks of OpenAI. These names are used only to identify the services
 whose usage this tool displays.
 
-The program's own icon (`agent/winres/icon.ico`) is original artwork. These
-files show other companies' marks:
+The program's own icon (`agent/winres/icon.ico`) is original artwork, and
+so is the plain ring the Codex tray icon shows: OpenAI's brand guidelines
+ask that its logo be used exactly as provided, so the agent does not
+reduce it to a tray-sized grid. These files show other companies' marks:
 
 - **Clawd.** `claude-usage@localhost/clawd.svg` and its rasterised
   derivatives depict the Claude Code mascot, © Anthropic PBC. They are not

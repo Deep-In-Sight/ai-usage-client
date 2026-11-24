@@ -16,6 +16,13 @@ type Provider string
 // Claude is a Claude Code sign-in.
 const Claude Provider = "claude"
 
+// Codex is a Codex sign-in. It has no artwork, so its icon is the ring
+// with Codex's number: OpenAI's brand guidelines (openai.com/brand,
+// 2026-11-24) ask that the logo be used exactly as provided and not
+// modified in any way, which a pixel grid of it would be. An artwork is
+// one more entry in arts, with its notice in notices.Marks.
+const Codex Provider = "codex"
+
 // Art is a provider's artwork as a pixel grid ('#' is ink), drawn only at
 // whole multiples so it stays crisp. It must fit 14×8.
 type Art struct {

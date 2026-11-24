@@ -306,6 +306,7 @@ func TestStatusShowsCodex(t *testing.T) {
 				Rows: []provider.Row{{Key: "weekly_all", Label: "Weekly", Percent: pf(30)}}},
 			provider.Codex: {State: "ok", Role: "poller", Plan: "plus", ExpiresAt: time.Date(2026, 1, 12, 9, 0, 0, 0, time.UTC),
 				LatestFetchedAt: at(8, 58), LastFetchAt: at(8, 58), LastFetchStatus: &st, LatestSource: "wham", MainKey: "codex:weekly",
+				LastFetchSource: "wham", FallbackCLI: filepath.Join(te.home, ".codex", "packages", "standalone", "current", "bin", "codex") + " 0.160.1",
 				Rows: []provider.Row{
 					{Key: "codex:5h", Label: "5-hour", Percent: pf(100), Blocked: true, ResetsAt: ptr(at(14, 20))},
 					{Key: "codex:weekly", Label: "Weekly", Percent: pf(38), ResetsAt: ptr(time.Date(2026, 1, 9, 6, 0, 0, 0, time.UTC))},
@@ -315,11 +316,26 @@ func TestStatusShowsCodex(t *testing.T) {
 	eq(t, te.main("status"), 0)
 	contains(t, te.out.String(), `Claude:     signed in, expires 17:30 · poller
             Weekly 30%
-Codex:      signed in, expires Jan 12 09:00 · poller
+Codex:      signed in (Plus), expires Jan 12 09:00 · poller
             5-hour 100% blocked  Resets Mon 14:20 · in 5h 20m
             Weekly  38%  Resets Fri 06:00 · in 3d 21h
             Updated 08:58 · last fetch 08:58 HTTP 200
+            source: direct  (fallback CLI: ~/.codex/packages/standalone/current/bin/codex 0.160.1)
 Backlog:`)
+	// the fallback answered; an old CLI; none found
+	cx := snap.Providers[provider.Codex]
+	cx.LastFetchSource, cx.FallbackCLI, cx.FallbackProblem = "app-server", "", "Codex CLI update needed"
+	snap.Providers[provider.Codex] = cx
+	must(t, status.Write(te.Dirs.File(paths.StatusFile), snap))
+	te.out.Reset()
+	eq(t, te.main("status"), 0)
+	contains(t, te.out.String(), "            source: Codex CLI  (fallback CLI: Codex CLI update needed)\nBacklog:")
+	cx.LastFetchSource, cx.FallbackProblem = "wham", ""
+	snap.Providers[provider.Codex] = cx
+	must(t, status.Write(te.Dirs.File(paths.StatusFile), snap))
+	te.out.Reset()
+	eq(t, te.main("status"), 0)
+	contains(t, te.out.String(), "            source: direct  (no fallback CLI found)\nBacklog:")
 	snap.Providers[provider.Codex] = status.ProviderStatus{State: "not_signed_in", Problem: "no Codex sign-in found"}
 	must(t, status.Write(te.Dirs.File(paths.StatusFile), snap))
 	te.out.Reset()

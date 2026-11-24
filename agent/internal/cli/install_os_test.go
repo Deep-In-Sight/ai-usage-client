@@ -134,7 +134,7 @@ func TestInstallWindowsWritesEntryAndNotice(t *testing.T) {
 	eq(t, e.UninstallString, `"`+te.Dirs.InstallExe+`" uninstall`)
 	eq(t, e.EstimatedSizeKB, uint32(1)) // "BIN"
 	eq(t, read(t, te.Dirs.File(paths.NotifyFile)), version.Version)
-	contains(t, te.out.String(), "The AI Usage icon is under the ^ arrow on the taskbar. Drag it onto the taskbar to keep it in view.")
+	contains(t, te.out.String(), "The AI Usage icons (Clawd for Claude, a ring for Codex) are under the ^ arrow on the taskbar. Drag them onto the taskbar to keep them in view.")
 	eq(t, rec.list(), []string{"main.stop:none", "winapp.register", "main.register:BIN"})
 	eq(t, len(te.detached), 0)
 }
@@ -145,7 +145,7 @@ func TestInstallStartFailedFallsBackToDetached(t *testing.T) {
 	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
 	eq(t, te.detached, [][]string{{te.Dirs.InstallExe, "run"}})
 	eq(t, rec.list()[len(rec.list())-1], "detached:run")
-	contains(t, te.out.String(), "Look for the AI Usage icon in the menu bar: Clawd, or a grey ring until Claude Code is signed in.")
+	contains(t, te.out.String(), "Look for the AI Usage icons in the menu bar: Clawd for Claude, a ring for Codex, or one grey ring until Claude Code or Codex is signed in.")
 
 	te, _, main, _, _ = osEnv(t, "windows")
 	main.registerErr = errors.New("registry: access denied")
@@ -159,7 +159,7 @@ func TestInstallLinuxDesktopRemovesSystemdUnit(t *testing.T) {
 	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
 	eq(t, rec.list(), []string{"main.stop:none", "other.stop:none", "main.register:BIN", "other.unregister"})
 	eq(t, len(wa.entries), 0)
-	contains(t, te.out.String(), "Look for the AI Usage icon in the top bar: Clawd, or a grey ring until Claude Code is signed in.")
+	contains(t, te.out.String(), "Look for the AI Usage icons in the top bar: Clawd for Claude, a ring for Codex, or one grey ring until Claude Code or Codex is signed in.")
 	for _, c := range te.runner.calls {
 		if c[0] == "loginctl" {
 			t.Fatalf("linger touched on a desktop: %v", c)

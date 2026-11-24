@@ -408,3 +408,21 @@ func TestReadmeCreditsListEveryBorrowedProject(t *testing.T) {
 		}
 	}
 }
+
+// Design D13: the README and `ai-usage licenses` carry the same
+// independence notice, word for word.
+func TestLicensesCarryTheReadmesIndependenceNotice(t *testing.T) {
+	const notice = `AI Usage is an independent internal tool. It is not affiliated with, endorsed by, or sponsored by Anthropic PBC or OpenAI. "Claude" and "Claude Code" are trademarks of Anthropic PBC; "OpenAI", "ChatGPT" and "Codex" are trademarks of OpenAI. These names are used only to identify the services whose usage this tool displays.`
+	b, err := os.ReadFile("../../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(strings.Fields(string(b)), " "), notice) {
+		t.Fatal("the README does not carry the notice")
+	}
+	var out strings.Builder
+	Write(&out, nil, "go1.27")
+	if !strings.Contains(strings.Join(strings.Fields(out.String()), " "), notice) {
+		t.Fatal("ai-usage licenses does not carry the notice")
+	}
+}

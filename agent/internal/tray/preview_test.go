@@ -16,7 +16,7 @@ import (
 
 // TestMenuPreview prints the menu of a few situations as JSON lines
 // ("PREVIEW {…}") for a person to render and look at; it runs only with
-// AI_USAGE_MENU_PREVIEW=1. The second provider is fake (test data only).
+// AI_USAGE_MENU_PREVIEW=1. All values are fake (test data only).
 func TestMenuPreview(t *testing.T) {
 	if os.Getenv("AI_USAGE_MENU_PREVIEW") != "1" {
 		t.Skip("set AI_USAGE_MENU_PREVIEW=1 to print the preview data")
@@ -59,7 +59,7 @@ func TestMenuPreview(t *testing.T) {
 				{Key: "codex:weekly", Label: "Weekly", Percent: pf(8), ResetsAt: &rw, Level: usage.LevelNormal, WindowMins: 10080},
 			}}
 	})
-	list = append(list, scenario{"two-providers-fake-second", in})
+	list = append(list, scenario{"two-providers", in})
 
 	type line struct {
 		ID       string `json:"id"`

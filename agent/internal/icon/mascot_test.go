@@ -424,3 +424,28 @@ func TestTrayGauge32IsTwice16(t *testing.T) {
 		}
 	}
 }
+
+// Codex has no artwork (OpenAI's guidelines do not allow the logo to be
+// reduced to a grid): its tray icon is the ring with its number at every
+// size and level, and its menu header has no picture.
+func TestCodexIconIsTheRing(t *testing.T) {
+	if _, ok := arts[Codex]; ok {
+		t.Fatal("Codex artwork without a notice and without permission")
+	}
+	for _, l := range []usage.Level{usage.LevelNone, usage.LevelNormal, usage.LevelWarning, usage.LevelCritical} {
+		for _, number := range []bool{false, true} {
+			s := Spec{Provider: Codex, Percent: p(42), Level: l, Number: number}
+			for _, n := range append([]int{32}, windowsSizes...) {
+				want := Ring(Spec{Percent: s.Percent, Level: l, Number: number}, n)
+				if !bytes.Equal(Tray(s, n).Pix, want.Pix) {
+					t.Fatalf("%+v at %d px is not the ring", s, n)
+				}
+			}
+		}
+	}
+	for _, goos := range []string{"windows", "darwin", "linux"} {
+		if MenuImage(goos, Codex) != nil {
+			t.Fatalf("%s: a Codex menu picture", goos)
+		}
+	}
+}
