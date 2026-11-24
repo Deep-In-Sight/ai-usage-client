@@ -173,7 +173,7 @@ func TestReadmeListsEveryMark(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(b)
+	s := strings.ReplaceAll(string(b), "\r\n", "\n") // Windows checkouts have CRLF
 	i := strings.Index(s, "\n### Third-party marks\n")
 	if i < 0 {
 		t.Fatal("README has no Third-party marks section")
