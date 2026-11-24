@@ -110,6 +110,7 @@ func (p *Provider) Fetch(ctx context.Context) (provider.Result, error) {
 	}
 	p.mu.Lock()
 	fallbackFirst := !p.directAgain.IsZero() && now.Before(p.directAgain)
+	account := p.account
 	p.mu.Unlock()
 	if fallbackFirst && ready {
 		if res, ok := p.askFallback(ctx); ok {
@@ -122,7 +123,9 @@ func (p *Provider) Fetch(ctx context.Context) (provider.Result, error) {
 		dctx, cancel = context.WithTimeout(ctx, p.DirectLimit)
 		defer cancel()
 	}
-	res, err := p.client.At(u).Fetch(dctx, p.reader)
+	// the token only while auth.json still names the Login's account: the
+	// result is filed under it (review m-2)
+	res, err := p.client.At(u).Fetch(dctx, p.reader.For(account))
 	if err != nil {
 		return provider.Result{}, err
 	}
@@ -154,7 +157,10 @@ func (p *Provider) Fetch(ctx context.Context) (provider.Result, error) {
 // as a refusal of the sign-in too.
 func (p *Provider) askFallback(ctx context.Context) (provider.Result, bool) {
 	a, ok := p.reader.Usable(ctx)
-	if !ok {
+	p.mu.Lock()
+	same := cx.AccountKey(a) == p.account
+	p.mu.Unlock()
+	if !ok || !same { // another account by now: its numbers must not be filed under the Login's (review m-2)
 		return provider.Result{}, false
 	}
 	res, ok := p.fallback.Fetch(ctx, a)

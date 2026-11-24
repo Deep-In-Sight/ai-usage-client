@@ -281,6 +281,11 @@ type Reader struct {
 	handedStamp stamp
 }
 
+// ErrAccountChanged: the sign-in now names another account than the one
+// the fetch is for (codex login with another account in between); no
+// request is made (review m-2).
+var ErrAccountChanged = errors.New("codex: the Codex sign-in changed to another account")
+
 // Rejected notes that the usage service refused the token last handed out
 // (HTTP 401): until auth.json differs from the content that token came
 // from (Codex renewed the sign-in, perhaps while the request was on its
@@ -470,10 +475,25 @@ func (r *Reader) Now() time.Time { return r.clk.Now() }
 // due for renewal is read again twice, 50 ms apart (Codex may be just
 // writing the renewed one), and fn is then not called.
 func (r *Reader) WithToken(ctx context.Context, fn func(accessToken, accountID string) error) error {
-	return r.withToken(ctx, fn)
+	return r.withToken(ctx, false, "", fn)
 }
 
-func (r *Reader) withToken(ctx context.Context, fn func(accessToken, accountID string) error) error {
+// For is the sign-in as a TokenSource for the account accountKey (the
+// account the result will be filed under): when auth.json names another
+// account by the time the token is read, it hands out nothing and returns
+// ErrAccountChanged (review m-2).
+func (r *Reader) For(accountKey string) TokenSource { return forAccount{r, accountKey} }
+
+type forAccount struct {
+	r   *Reader
+	key string
+}
+
+func (f forAccount) WithToken(ctx context.Context, fn func(accessToken, accountID string) error) error {
+	return f.r.withToken(ctx, true, f.key, fn)
+}
+
+func (r *Reader) withToken(ctx context.Context, check bool, want string, fn func(accessToken, accountID string) error) error {
 	r.mu.Lock()
 	var tok string
 	var l provider.Login
@@ -486,7 +506,8 @@ func (r *Reader) withToken(ctx context.Context, fn func(accessToken, accountID s
 		r.sleep(retryGap)
 	}
 	account := r.auth.AccountID
-	usable := l.State == "ok" && tok != ""
+	changed := check && AccountKey(r.auth) != want
+	usable := l.State == "ok" && tok != "" && !changed
 	if usable {
 		r.handed, r.handedStamp = true, r.readStamp
 	}
@@ -496,6 +517,8 @@ func (r *Reader) withToken(ctx context.Context, fn func(accessToken, accountID s
 		return ErrExpired
 	case l.State != "ok" || tok == "":
 		return ErrNotSignedIn
+	case changed:
+		return ErrAccountChanged
 	}
 	return fn(tok, account)
 }

@@ -301,3 +301,29 @@ func Test401RefusesTheFileTheTokenCameFrom(t *testing.T) {
 	must(t, err)
 	eq(t, s.count(), 2)
 }
+
+// Review m-2: when auth.json names another account than the Login the
+// result would be filed under, no request is made with its token.
+func TestAnotherAccountsTokenIsNotUsed(t *testing.T) {
+	s := newServer(t)
+	p, home, _ := newProvider(t, s, nil)
+	signIn(t, home, t0.Add(9*24*time.Hour))
+	ctx := context.Background()
+	eq(t, p.Login(ctx).AccountKey, "codex:"+fakeAccountID+":"+fakeUserID)
+	// codex login with another account before the fetch
+	access := jwt(map[string]any{"exp": t0.Add(9 * 24 * time.Hour).Unix()})
+	id := jwt(map[string]any{"https://api.openai.com/auth": map[string]any{"chatgpt_user_id": "user-Other02"}})
+	b, _ := json.Marshal(map[string]any{"auth_mode": "chatgpt", "tokens": map[string]any{"access_token": access,
+		"account_id": "00000000-0000-4000-8000-000000000003", "id_token": id}})
+	must(t, os.WriteFile(filepath.Join(home, "auth.json"), b, 0o600))
+	if _, err := p.Fetch(ctx); !errors.Is(err, cx.ErrAccountChanged) {
+		t.Fatalf("%v", err)
+	}
+	eq(t, s.count(), 0)
+	// the next Login knows the new account, and its fetch goes ahead
+	eq(t, p.Login(ctx).AccountKey, "codex:00000000-0000-4000-8000-000000000003:user-Other02")
+	res, err := p.Fetch(ctx)
+	must(t, err)
+	eq(t, res.AccountKey, "codex:00000000-0000-4000-8000-000000000003:user-Other02")
+	eq(t, s.count(), 1)
+}
