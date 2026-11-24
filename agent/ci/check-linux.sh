@@ -471,12 +471,19 @@ schema1_check
 # answers 403 for three fetch rounds, then 200 with both limit fields
 # null for three more: codex must never have run, and every Codex result
 # the server got must be the direct request's own answer.
+# What the release check changed on this runner, for release_cleanup
+# (also run by the exit trap, so an interrupted run undoes it too).
+REL_HOSTS_SAVED="" REL_CA="" REL_PORT_OLD="" REL_PATH_OLD="" REL_SWITCH="" REL_VPID=""
 release_codex_check() {
   local problems="" relbin="$RUNNER_TEMP/relbin" ca="$out/fakevendor-ca.pem" marker="$out/codex-ran.txt"
-  local base2=http://127.0.0.1:18702 admin=http://127.0.0.1:18799 dev2="" vpid="" h code got old_path results v
+  local base2=http://127.0.0.1:18702 admin=http://127.0.0.1:18799 dev2="" h code got results v
   local names="chatgpt.com chat.openai.com api.openai.com auth.openai.com api.anthropic.com console.anthropic.com claude.ai"
   if [ -z "${CI_REL:-}" ] || [ ! -f "$CI_REL/ai-usage-linux-amd64" ]; then fail release.no_codex_cli "no release-style build in CI_REL"; return; fi
+  trap release_cleanup EXIT
+  trap 'release_cleanup; exit 130' INT TERM
   # 1. the vendors' names are this runner's, before anything could ask them
+  REL_HOSTS_SAVED="$RUNNER_TEMP/hosts.before-release-check"
+  cp /etc/hosts "$REL_HOSTS_SAVED"
   printf '127.0.0.1 %s # ai-usage CI fake vendors\n' "$names" | sudo tee -a /etc/hosts > /dev/null
   for h in $names; do
     got=$(getent hosts "$h" | awk '{ print $1 }' | sort -u | tr '\n' ' ')
@@ -484,21 +491,24 @@ release_codex_check() {
   done
   if [ -n "$problems" ]; then fail release.no_codex_cli "vendor names not mapped to this runner:$problems"; release_cleanup; return; fi
   # 2. the fake vendors on 127.0.0.1:443, their CA trusted by the system
+  REL_PORT_OLD=$(sysctl -n net.ipv4.ip_unprivileged_port_start)
   sudo sysctl -q -w net.ipv4.ip_unprivileged_port_start=443
   "$CI_BIN/fakevendor" -listen 127.0.0.1:443 -admin 127.0.0.1:18799 -ca "$ca" -mode 403 > "$out/fakevendor.log" 2>&1 &
-  vpid=$!
+  REL_VPID=$!
   if ! wait_for 20 curl -fsS --max-time 5 "$admin/healthz" -o /dev/null; then
     fail release.no_codex_cli "fakevendor did not start: $(head -c 200 "$out/fakevendor.log")"; release_cleanup; return
   fi
-  sudo cp "$ca" /usr/local/share/ca-certificates/ai-usage-ci-fakevendor.crt && sudo update-ca-certificates > "$out/update-ca.log" 2>&1
+  REL_CA=/usr/local/share/ca-certificates/ai-usage-ci-fakevendor.crt
+  sudo cp "$ca" "$REL_CA" && sudo update-ca-certificates > "$out/update-ca.log" 2>&1
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 https://chatgpt.com/backend-api/wham/usage)
   if [ "$code" != 403 ]; then fail release.no_codex_cli "chatgpt.com is not the fake vendor (HTTP $code)"; release_cleanup; return; fi
   # 3. the fakecodex, first on PATH for install and for the service
   mkdir -p "$relbin"
   cp "$CI_BIN/fakecodex" "$relbin/codex"
   printf -- '-record\n%s\n' "$marker" > "$relbin/codex.args"
-  old_path=$(systemctl --user show-environment | sed -n 's/^PATH=//p')
-  systemctl --user set-environment PATH="$relbin:${old_path:-$PATH}" AI_USAGE_TEST_CODEX_FALLBACK="$relbin/codex"
+  REL_PATH_OLD=$(systemctl --user show-environment | sed -n 's/^PATH=//p')
+  REL_SWITCH=1
+  systemctl --user set-environment PATH="$relbin:${REL_PATH_OLD:-$PATH}" AI_USAGE_TEST_CODEX_FALLBACK="$relbin/codex"
   # 4. a fake server with the release-style files that asks for Codex at every sync
   start_fakeserver 18702 -codex-poller -files "$CI_REL" || { fail release.no_codex_cli "the second fake server did not start"; release_cleanup; return; }
   PATH="$relbin:$PATH" AI_USAGE_TEST_CODEX_FALLBACK="$relbin/codex" timeout 180 sh -c "wget -qO- $base2/files/install-ci.sh | sh" \
@@ -527,14 +537,27 @@ release_codex_check() {
   if [ -z "$problems" ]; then pass release.no_codex_cli "$v: Codex results $results, all direct; fakecodex (PATH, codex_path, switch) never run"
   else fail release.no_codex_cli "$problems"; fi
 }
+# release_cleanup undoes what the release check changed, each part once.
 release_cleanup() {
-  [ -n "${vpid:-}" ] && kill "$vpid" 2>/dev/null
+  [ -n "$REL_VPID" ] && kill "$REL_VPID" 2>/dev/null
+  REL_VPID=""
   pkill -f -- "-listen 127.0.0.1:18702" 2>/dev/null
-  [ -n "${old_path:-}" ] && systemctl --user set-environment PATH="$old_path"
-  systemctl --user unset-environment AI_USAGE_TEST_CODEX_FALLBACK 2>/dev/null
-  sudo sed -i '/# ai-usage CI fake vendors$/d' /etc/hosts
-  if [ -e /usr/local/share/ca-certificates/ai-usage-ci-fakevendor.crt ]; then
-    sudo rm -f /usr/local/share/ca-certificates/ai-usage-ci-fakevendor.crt && sudo update-ca-certificates --fresh > /dev/null 2>&1
+  if [ -n "$REL_SWITCH" ]; then
+    [ -n "$REL_PATH_OLD" ] && systemctl --user set-environment PATH="$REL_PATH_OLD"
+    systemctl --user unset-environment AI_USAGE_TEST_CODEX_FALLBACK 2>/dev/null
+    REL_SWITCH=""
+  fi
+  if [ -n "$REL_HOSTS_SAVED" ] && [ -f "$REL_HOSTS_SAVED" ]; then
+    sudo cp "$REL_HOSTS_SAVED" /etc/hosts && rm -f "$REL_HOSTS_SAVED"
+    REL_HOSTS_SAVED=""
+  fi
+  if [ -n "$REL_CA" ]; then
+    sudo rm -f "$REL_CA" && sudo update-ca-certificates --fresh > /dev/null 2>&1
+    REL_CA=""
+  fi
+  if [ -n "$REL_PORT_OLD" ]; then
+    sudo sysctl -q -w net.ipv4.ip_unprivileged_port_start="$REL_PORT_OLD"
+    REL_PORT_OLD=""
   fi
   true
 }

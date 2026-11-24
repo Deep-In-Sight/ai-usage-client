@@ -5,6 +5,13 @@
 # required check failed.
 # Env: CI_DIST (release files), CI_BIN (fakeserver.exe), CI_SCRIPTS (agent/ci).
 param([bool]$Desktop = $true)
+# These checks overwrite the Claude and Codex sign-ins, install and remove
+# the agent, and (the release check) change the hosts file and the trusted
+# CAs: only ever on a GitHub Actions runner, never a PC.
+if ($env:GITHUB_ACTIONS -ne 'true' -or -not $env:RUNNER_TEMP) {
+    [Console]::Error.WriteLine('agent/ci: refusing to run: these checks overwrite sign-ins and system settings and run only on a GitHub Actions runner (GITHUB_ACTIONS=true, RUNNER_TEMP set)')
+    exit 2
+}
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -384,22 +391,27 @@ $vendorTag = '# ai-usage CI fake vendors'
 $script:vendorProc = $null
 $script:server2 = $null
 $script:caThumb = $null
+$script:hostsBefore = $null
+# ReleaseCleanup undoes what the release check changed, each part once (in
+# a finally block, so an interrupted run undoes it too). The hosts file
+# gets its bytes back exactly.
 function ReleaseCleanup {
-    if ($script:vendorProc) { Stop-Process -Id $script:vendorProc.Id -Force -ErrorAction SilentlyContinue }
-    if ($script:server2) { Stop-Process -Id $script:server2.Id -Force -ErrorAction SilentlyContinue }
-    try {
-        $kept = @(Get-Content -LiteralPath $hostsFile -ErrorAction Stop | Where-Object { -not $_.EndsWith($vendorTag) })
-        Set-Content -LiteralPath $hostsFile -Value $kept -Encoding ascii
-    } catch { }
-    if ($script:caThumb) { Remove-Item -LiteralPath "Cert:\LocalMachine\Root\$($script:caThumb)" -ErrorAction SilentlyContinue }
+    if ($script:vendorProc) { Stop-Process -Id $script:vendorProc.Id -Force -ErrorAction SilentlyContinue; $script:vendorProc = $null }
+    if ($script:server2) { Stop-Process -Id $script:server2.Id -Force -ErrorAction SilentlyContinue; $script:server2 = $null }
+    if ($null -ne $script:hostsBefore) {
+        try { [IO.File]::WriteAllBytes($hostsFile, $script:hostsBefore); $script:hostsBefore = $null } catch { Write-Output "::error title=release cleanup::hosts file not restored: $($_.Exception.Message)" }
+    }
+    if ($script:caThumb) { Remove-Item -LiteralPath "Cert:\LocalMachine\Root\$($script:caThumb)" -ErrorAction SilentlyContinue; $script:caThumb = $null }
     Remove-Item Env:AI_USAGE_TEST_CODEX_FALLBACK -ErrorAction SilentlyContinue
 }
 if ($Desktop) {
+  try {
     Check 'release.no_codex_cli' {
         $problems = @()
         $rel = $env:CI_REL
         if (-not $rel -or -not (Test-Path -LiteralPath (Join-Path $rel 'ai-usage-windows-amd64.exe'))) { Fail 'release.no_codex_cli' 'no release-style build in CI_REL'; return }
         # 1. the vendors' names are this runner's, before anything could ask them
+        $script:hostsBefore = [IO.File]::ReadAllBytes($hostsFile)
         Add-Content -LiteralPath $hostsFile -Value ("`r`n127.0.0.1 " + ($vendorNames -join ' ') + " $vendorTag") -Encoding ascii
         $null = & ipconfig.exe /flushdns
         foreach ($h in $vendorNames) {
@@ -471,7 +483,9 @@ if ($Desktop) {
         if ($problems.Count -eq 0) { Pass 'release.no_codex_cli' "$($env:CI_REL_VERSION): Codex results $(ConvertTo-Json -Compress -InputObject $res), all direct; fakecodex (PATH, codex_path, switch) never run" }
         else { Fail 'release.no_codex_cli' ($problems -join ' ') }
     }
+  } finally {
     ReleaseCleanup
+  }
 }
 
 $failed = ''

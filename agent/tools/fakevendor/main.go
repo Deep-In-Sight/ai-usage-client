@@ -116,7 +116,10 @@ func certificates() (tls.Certificate, []byte, error) {
 	now := time.Now()
 	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "AI Usage CI fake vendor CA"},
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour), IsCA: true, BasicConstraintsValid: true,
-		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		// even trusted by mistake, it can vouch for these names only (and
+		// its key is never written anywhere)
+		PermittedDNSDomainsCritical: true, PermittedDNSDomains: Hosts}
 	caDER, err := x509.CreateCertificate(rand.Reader, ca, ca, &caKey.PublicKey, caKey)
 	if err != nil {
 		return tls.Certificate{}, nil, err

@@ -89,9 +89,14 @@ func TestFakeVendor(t *testing.T) {
 		st.Requests["api.anthropic.com GET /api/oauth/usage"] != 1 || st.Auth["api.anthropic.com GET /api/oauth/usage"] != 0 {
 		t.Fatalf("stats %s", b)
 	}
-	// the certificate does not cover other names
+	// the certificate does not cover other names, and the authority may
+	// only vouch for the vendors' names (re-review R-2)
 	leaf, _ := x509.ParseCertificate(cert.Certificate[0])
 	if leaf.VerifyHostname("example.com") == nil {
 		t.Fatal("covers example.com")
+	}
+	ca, _ := x509.ParseCertificate(cert.Certificate[1])
+	if !ca.PermittedDNSDomainsCritical || strings.Join(ca.PermittedDNSDomains, " ") != strings.Join(Hosts, " ") {
+		t.Fatalf("CA name constraints %v %v", ca.PermittedDNSDomainsCritical, ca.PermittedDNSDomains)
 	}
 }

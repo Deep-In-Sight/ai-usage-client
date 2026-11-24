@@ -5,6 +5,13 @@
 # line is "::notice title=summary::<passed>/<required>".
 # Env: CI_DIST (release files), CI_BIN (fakeserver), CI_SCRIPTS (agent/ci).
 set -u
+# These checks overwrite the Claude and Codex sign-ins, install and remove
+# the agent, and (the release check) change the hosts file, the trusted
+# CAs and a sysctl: only ever on a GitHub Actions runner, never a PC.
+if [ "${GITHUB_ACTIONS:-}" != true ] || [ -z "${RUNNER_TEMP:-}" ]; then
+  echo "agent/ci: refusing to run: these checks overwrite sign-ins and system settings and run only on a GitHub Actions runner (GITHUB_ACTIONS=true, RUNNER_TEMP set)" >&2
+  exit 2
+fi
 BASE=http://127.0.0.1:18700
 KEY=ci-ingest-key-0123456789
 TOKEN=fake-access-token-0123456789
