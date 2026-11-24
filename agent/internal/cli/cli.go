@@ -162,7 +162,7 @@ const usageText = `usage: ai-usage <command>
   run [--headless]                                run the agent (the service does this)
   status [--json]                                 show what the agent is doing
   version                                         print the version
-  licenses                                        print the third-party licence notices
+  licenses                                        print the licence and third-party notices
 `
 
 // Main runs one command and returns the exit code.

@@ -1,6 +1,8 @@
-// Package notices holds the licence texts of the third-party code compiled
-// into the agent, so they reach everyone who gets the binary ("ai-usage
-// licenses"). The files under licenses/ are the modules' own, unchanged
+// Package notices holds AI Usage's own licence and the licence texts of the
+// third-party code compiled into the agent, so they reach everyone who gets
+// the binary ("ai-usage licenses"). licenses/ai-usage/LICENSE is the
+// repository's LICENSE (TestOwnLicenceIsTheRepositorysLicense); the other
+// files under licenses/ are the modules' own, unchanged
 // (TestNoticesAreTheModulesFiles), and every compiled-in module has an
 // entry (TestEveryCompiledModuleHasANotice).
 package notices
@@ -16,6 +18,9 @@ import (
 
 //go:embed licenses
 var files embed.FS
+
+// OwnLicence is AI Usage's licence, a copy of the repository's LICENSE.
+const OwnLicence = "licenses/ai-usage/LICENSE"
 
 // GoPath stands for the Go standard library and runtime.
 const GoPath = "Go"
@@ -63,12 +68,27 @@ func BuildVersions() map[string]string {
 
 const rule = "----------------------------------------------------------------------"
 
-// Write prints the notices: each module with its version when this binary
-// has it (versions; goVersion for Go), its licence and the licence files.
+// Write prints the notices: AI Usage's own licence and what it does not
+// cover, then each module with its version when this binary has it
+// (versions; goVersion for Go), its licence and the licence files.
 func Write(w io.Writer, versions map[string]string, goVersion string) {
+	fmt.Fprintln(w, "AI Usage")
+	fmt.Fprintln(w, "Licence: MIT License")
+	fmt.Fprintln(w, "AI Usage is an independent internal tool. It is not affiliated with,")
+	fmt.Fprintln(w, "endorsed by, or sponsored by Anthropic PBC or OpenAI.")
+	fmt.Fprintln(w, "These parts of the program are not covered by this licence:")
+	fmt.Fprintln(w, "- The Clawd artwork, which the tray icon shows while Claude Code is signed")
+	fmt.Fprintln(w, "  in, depicts the Claude Code mascot, (c) Anthropic PBC. It is not covered")
+	fmt.Fprintln(w, "  by this licence, no licence from Anthropic is claimed, and it will be")
+	fmt.Fprintln(w, "  removed on request.")
+	fmt.Fprintln(w, "- The third-party software listed below keeps its own licence")
+	fmt.Fprintln(w, "  (fyne.io/systray: Apache License 2.0, changes included).")
+	if b, err := files.ReadFile(OwnLicence); err == nil { // always: TestOwnLicenceIsTheRepositorysLicense
+		fmt.Fprintf(w, "\nLICENSE:\n\n%s", b)
+	}
+	fmt.Fprintf(w, "\n%s\n\n", rule)
 	fmt.Fprintln(w, "AI Usage contains the third-party software below, used under the licences")
 	fmt.Fprintln(w, "shown. The full texts follow each entry.")
-	fmt.Fprintln(w, "The Clawd mascot artwork is (c) Anthropic PBC.")
 	for _, m := range Modules {
 		fmt.Fprintf(w, "\n%s\n", rule)
 		v := versions[m.Path]

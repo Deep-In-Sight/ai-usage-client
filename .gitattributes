@@ -1,5 +1,7 @@
 # Byte-exact files (no CRLF conversion on Windows checkouts): the embedded
-# licence notices must equal the modules' files, and the systray copy
-# must equal upstream plus agent/third_party/systray.patch.
+# licence notices must equal the repository's LICENSE and the modules'
+# files, and the systray copy must equal upstream plus
+# agent/third_party/systray.patch.
+/LICENSE -text
 agent/internal/notices/licenses/** -text
 agent/third_party/systray/** -text

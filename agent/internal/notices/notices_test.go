@@ -101,6 +101,53 @@ func TestNoticesAreTheModulesFiles(t *testing.T) {
 	}
 }
 
+// The program's own licence is the repository's LICENSE, unchanged.
+func TestOwnLicenceIsTheRepositorysLicense(t *testing.T) {
+	want, err := os.ReadFile("../../../LICENSE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := files.ReadFile(OwnLicence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("%s differs from the repository's LICENSE", OwnLicence)
+	}
+}
+
+// The notices start with AI Usage's own licence and what it does not
+// cover, before any third-party entry.
+func TestTextStartsWithTheProgramsLicence(t *testing.T) {
+	var b bytes.Buffer
+	Write(&b, map[string]string{"fyne.io/systray": "v1.12.2"}, "go1.27.4")
+	s := b.String()
+	if !strings.HasPrefix(s, "AI Usage\n") {
+		t.Fatalf("the notices start with %q", s[:min(len(s), 40)])
+	}
+	s = strings.Join(strings.Fields(s), " ") // the wording, not the line breaks
+	first := strings.Index(s, "Go go1.27.4")
+	if first < 0 {
+		t.Fatal("no Go entry")
+	}
+	for _, want := range []string{
+		"Licence: MIT License",
+		"Copyright (c) 2026 Deep-In-Sight", "Permission is hereby granted", // LICENSE
+		"AI Usage is an independent internal tool. It is not affiliated with, endorsed by, or sponsored by Anthropic PBC or OpenAI.",
+		"Claude Code mascot, (c) Anthropic PBC",
+		"no licence from Anthropic is claimed, and it will be removed on request",
+		"Apache License 2.0, changes included",
+	} {
+		i := strings.Index(s, want)
+		if i < 0 || i > first {
+			t.Fatalf("%q is not in the program's part of the notices", want)
+		}
+	}
+	if !strings.Contains(s[:first], "not covered by this licence") {
+		t.Fatal("the exceptions are not stated")
+	}
+}
+
 func TestTextNamesEveryModuleAndItsVersion(t *testing.T) {
 	var b bytes.Buffer
 	Write(&b, map[string]string{"fyne.io/systray": "v1.12.2", "golang.org/x/sys": "v0.50.0"}, "go1.27.4")
@@ -122,8 +169,8 @@ func TestTextNamesEveryModuleAndItsVersion(t *testing.T) {
 }
 
 // Git must not convert the licence files' line endings, nor those of the
-// systray copy they are compared with (core.autocrlf on Windows would make
-// them differ from the modules' files).
+// files they are compared with: the repository's LICENSE and the systray
+// copy (core.autocrlf on Windows would make them differ).
 func TestLicenceFilesKeepTheirBytesInGit(t *testing.T) {
 	b, err := os.ReadFile("../../../.gitattributes")
 	if err != nil {
@@ -133,7 +180,7 @@ func TestLicenceFilesKeepTheirBytesInGit(t *testing.T) {
 	for _, l := range strings.Split(string(b), "\n") {
 		lines[strings.TrimSpace(l)] = true
 	}
-	for _, want := range []string{"agent/internal/notices/licenses/** -text", "agent/third_party/systray/** -text"} {
+	for _, want := range []string{"/LICENSE -text", "agent/internal/notices/licenses/** -text", "agent/third_party/systray/** -text"} {
 		if !lines[want] {
 			t.Fatalf(".gitattributes has no line %q", want)
 		}
