@@ -2,7 +2,9 @@
 
 //Modified from fyne.io/systray v1.12.2: SetLabel and the XAyatanaLabel and
 //XAyatanaLabelGuide properties were added, the item's properties are
-//exported under the lock, and introspection lists the additions (see
+//exported under the lock, introspection lists the additions, setting the
+//icon or label on a closed connection logs instead of panicking, Quit
+//without a connection does not panic, and ConnectionLost was added (see
 //PATCHED.md).
 
 //Note that you need to have github.com/knightpp/dbus-codegen-go installed from "custom" branch
@@ -39,7 +41,37 @@ var (
 
 	// instance is the current instance of our DBus tray server
 	instance = &tray{menu: &menuLayout{}, menuVersion: 1}
+
+	// closed when the connection is lost (added, see PATCHED.md)
+	lostChan = make(chan struct{})
+	lostOnce sync.Once
 )
+
+// ConnectionLost returns a channel that is closed when the tray's D-Bus
+// connection ends while the tray runs (the session bus was restarted or
+// went away), or when start-up could not connect to the bus. The tray does
+// not reconnect: the program has to start it again in a new process. It is
+// closed at most once. Linux and BSD only.
+//
+// Added to the upstream v1.12.2 code; see PATCHED.md.
+func ConnectionLost() <-chan struct{} { return lostChan }
+
+func connectionLost() { lostOnce.Do(func() { close(lostChan) }) }
+
+// setItemProp sets a property of the item. prop.SetMust stores the value
+// and then panics if PropertiesChanged cannot be sent, which is what a
+// closed connection gives; here that is logged instead (added, see
+// PATCHED.md). It reports whether the change was sent.
+func setItemProp(props *prop.Properties, name string, v interface{}) (ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("systray error: failed to set %s prop: %v\n", name, r)
+			ok = false
+		}
+	}()
+	props.SetMust("org.kde.StatusNotifierItem", name, v)
+	return true
+}
 
 // SetTemplateIcon sets the systray icon as a template icon (on macOS), falling back
 // to a regular icon on other platforms.
@@ -64,8 +96,10 @@ func SetIcon(iconBytes []byte) {
 		return
 	}
 
-	props.SetMust("org.kde.StatusNotifierItem", "IconPixmap",
-		[]PX{convertToPixels(iconBytes)})
+	// patched (see PATCHED.md): no panic on a closed connection
+	if !setItemProp(props, "IconPixmap", []PX{convertToPixels(iconBytes)}) {
+		return
+	}
 	if conn == nil {
 		return
 	}
@@ -140,8 +174,12 @@ func SetLabel(label, guide string) {
 	if props == nil {
 		return
 	}
-	props.SetMust("org.kde.StatusNotifierItem", "XAyatanaLabelGuide", guide)
-	props.SetMust("org.kde.StatusNotifierItem", "XAyatanaLabel", label)
+	// patched (see PATCHED.md): no panic on a closed connection; both are
+	// stored either way
+	okGuide := setItemProp(props, "XAyatanaLabelGuide", guide)
+	if !setItemProp(props, "XAyatanaLabel", label) || !okGuide {
+		return
+	}
 	if conn == nil {
 		return
 	}
@@ -213,7 +251,9 @@ func nativeLoop() int {
 
 func nativeEnd() {
 	runSystrayExit()
-	instance.conn.Close()
+	if instance.conn != nil { // patched: start-up may have failed (see PATCHED.md)
+		instance.conn.Close()
+	}
 }
 
 func quit() {
@@ -225,8 +265,22 @@ func nativeStart() {
 	conn, err := dbus.SessionBus()
 	if err != nil {
 		log.Printf("systray error: failed to connect to DBus: %v\n", err)
+		connectionLost() // patched, see PATCHED.md
 		return
 	}
+	// Patched (see PATCHED.md): tell the program when this connection ends
+	// before Quit.
+	go func() {
+		select {
+		case <-conn.Context().Done():
+			select {
+			case <-quitChan:
+			default:
+				connectionLost()
+			}
+		case <-quitChan:
+		}
+	}()
 	err = notifier.ExportStatusNotifierItem(conn, path, newLeftRightNotifierItem())
 	if err != nil {
 		log.Printf("systray error: failed to export status notifier item: %v\n", err)

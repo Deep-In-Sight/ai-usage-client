@@ -46,6 +46,21 @@ is not upstream code and is under the AI Usage client's MIT licence.
   `SetTitle`, `SetTooltip` or `SetLabel` that ran in between was stored
   but never exported (the tray's first draw runs concurrently with
   start-up), until the next change.
+- A closed connection (the session bus was restarted, as GNOME does at
+  every logout) no longer panics: `SetIcon` and `SetLabel` set their
+  properties through `setItemProp`, which calls `prop.SetMust` and logs
+  (`systray error: failed to set <name> prop: …`) instead of panicking
+  when the `PropertiesChanged` signal cannot be sent. The value is stored
+  either way. Upstream panics there, and the panic ends the whole program.
+  (`SetTitle` and `SetTooltip` already used `Properties.Set`, which returns
+  the error; they are unchanged.)
+- New function `ConnectionLost() <-chan struct{}`: closed when the tray's
+  connection ends before `Quit`, or when `nativeStart` cannot connect to
+  the bus. The copy does not reconnect; the program starts the tray again
+  in a new process.
+- `nativeEnd` closes the connection only if start-up got one. Upstream
+  calls `Close` on a nil connection when start-up failed, which panics on
+  `Quit`.
 - The header comment says the file was modified.
 
 Why the label: Ubuntu's AppIndicator extension shows `XAyatanaLabel` as
