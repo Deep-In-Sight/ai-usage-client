@@ -16,6 +16,7 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/creds"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/machine"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/notices"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/notify"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/osinfo"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
@@ -54,6 +55,8 @@ type Env struct {
 	Helper func(p provider.ID, uid uint32, token string) (supervisor.Proc, error)
 	// OpenURL opens a web page (nil means tray.OpenURL).
 	OpenURL func(u string) error
+	// Notify shows a one-off OS notification (nil means notify.Show).
+	Notify func(title, text string) error
 	// Stdin is the standard input (nil means os.Stdin; the tray helper
 	// reads the agent's lines there).
 	Stdin io.Reader
@@ -81,6 +84,13 @@ func autostartOptions(d paths.Dirs, headless bool, run autostart.Runner, start f
 type WinApp interface {
 	Register(winapp.Entry) error
 	Unregister() error
+}
+
+func (env Env) notify(title, text string) error {
+	if env.Notify != nil {
+		return env.Notify(title, text)
+	}
+	return notify.Show(title, text)
 }
 
 func (env Env) hasConsole() bool { return env.HasConsole == nil || env.HasConsole() }

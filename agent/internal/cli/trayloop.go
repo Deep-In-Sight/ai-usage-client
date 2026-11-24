@@ -27,7 +27,8 @@ const (
 // trayLoop shows the agent through its tray helpers (design 6.4): it keeps
 // the helpers to the providers in use, sends them the view whenever it
 // changes, handles their clicks and tells the engine whether an icon is
-// shown. It never touches the desktop session itself.
+// shown. It never touches the desktop session itself, except for the one
+// notification after a failed Remove (the helpers are gone by then).
 type trayLoop struct {
 	env     Env
 	ctrl    *controller
@@ -253,31 +254,16 @@ func (l *trayLoop) click(id string) bool {
 	return false
 }
 
-// failureNotice shows text through a neutral helper started for it: the
-// helpers were stopped before the removal (design 6.4).
+// failureNotice shows msg as an OS notification from this process (as v0.8
+// did): the helpers were stopped before the removal, and a new one would
+// be started from an executable the removal may have deleted (Linux) or
+// moved away (Windows).
 func (l *trayLoop) failureNotice(msg string) {
 	if l.env.goos() == "darwin" {
 		return // no notifications without an app bundle
 	}
-	s := supervisor.New(supervisor.Options{Spawn: l.env.helperSpawner(l.log), Clock: l.env.Clock, Log: l.log})
-	defer s.Stop()
-	s.Notice(msg)
-	s.Want(nil)
-	s.Show(tray.BuildMenu(l.inputs()), map[provider.ID]supervisor.IconView{"": tray.BuildIcon("", l.inputs())})
-	deadline := l.env.Clock.After(15 * time.Second)
-	for {
-		select {
-		case e := <-s.Events():
-			if e.Ready {
-				<-l.env.Clock.After(time.Second) // the notice is handed over
-				return
-			}
-			if e.Exit != nil {
-				return
-			}
-		case <-deadline:
-			return
-		}
+	if err := l.env.notify(text.App, msg); err != nil {
+		l.log.Printf("tray: could not show the removal failure: %v", err)
 	}
 }
 

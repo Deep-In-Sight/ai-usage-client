@@ -109,6 +109,7 @@ func newEnv(t *testing.T) *testEnv {
 	te.helpers = newFakeHelpers(t)
 	te.Env.Helper = te.helpers.spawn
 	te.Env.OpenURL = func(string) error { return nil }
+	te.Env.Notify = func(string, string) error { return nil } // never the desktop's
 	return te
 }
 

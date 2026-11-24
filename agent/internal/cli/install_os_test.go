@@ -40,11 +40,12 @@ func (r *recorder) list() []string {
 // fakeMethod is an autostart method and Toggler that records its calls; Stop
 // and Register also note what the installed executable held at that moment.
 type fakeMethod struct {
-	name        string
-	rec         *recorder
-	exe         string // the install location, read at Stop and Register
-	registerErr error
-	enabled     bool
+	name          string
+	rec           *recorder
+	exe           string // the install location, read at Stop and Register
+	registerErr   error
+	unregisterErr error
+	enabled       bool
 }
 
 func (f *fakeMethod) content() string {
@@ -69,7 +70,7 @@ func (f *fakeMethod) Stop(context.Context) error {
 func (f *fakeMethod) Unregister(context.Context) error {
 	f.rec.add(f.name + ".unregister")
 	f.enabled = false
-	return nil
+	return f.unregisterErr
 }
 func (f *fakeMethod) State(context.Context) string { return "registered" }
 func (f *fakeMethod) Enabled(context.Context) bool { return f.enabled }

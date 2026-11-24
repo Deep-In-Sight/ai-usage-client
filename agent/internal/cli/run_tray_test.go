@@ -426,6 +426,64 @@ func TestTrayRemoveRemovesEverything(t *testing.T) {
 	}
 }
 
+// A removal that failed is shown by the agent itself (as in v0.8), not by
+// a helper started from an executable the removal has deleted or moved
+// (stage-2 review m-7).
+func TestFailedRemoveIsShownWithoutAHelper(t *testing.T) {
+	for _, goos := range []string{"windows", "linux"} {
+		t.Run(goos, func(t *testing.T) {
+			fs := newFakeServer(t)
+			te := trayEnv(t, fs)
+			te.GOOS = goos
+			if goos == "linux" {
+				te.vars["XDG_SESSION_TYPE"] = "wayland"
+			}
+			rec := &recorder{}
+			main := &fakeMethod{name: "main", rec: rec, exe: te.Dirs.InstallExe, unregisterErr: errors.New("test: entry is locked")}
+			te.Autostart = func(bool) (autostart.Method, error) { return main, nil }
+			te.Others = nil
+			te.WinApp = &fakeWinApp{rec: rec}
+			must(t, os.MkdirAll(filepath.Dir(te.Dirs.InstallExe), 0o755))
+			must(t, os.WriteFile(te.Dirs.InstallExe, []byte("BIN"), 0o755))
+			var mu sync.Mutex
+			var notices []string
+			te.Notify = func(title, body string) error {
+				mu.Lock()
+				defer mu.Unlock()
+				notices = append(notices, title+": "+body)
+				return nil
+			}
+			cancel, code := te.mainAsync("run")
+			defer cancel()
+			h := te.helpers.ready()
+			fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 1 })
+			h.click("remove")
+			deadline := time.Now().Add(5 * time.Second)
+			for !strings.Contains(itemText(h.lastView(), "remove"), "again") {
+				if time.Now().After(deadline) {
+					t.Fatalf("Remove not armed: %q", itemText(h.lastView(), "remove"))
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			started := te.helpers.count()
+			h.click("remove")
+			eq(t, waitCode(t, code), 0)
+			if n := te.helpers.count(); n != started {
+				t.Fatalf("%d helpers started after the removal", n-started)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(notices) != 1 || !strings.HasPrefix(notices[0], text.App+": "+text.RemoveFailed) || !strings.Contains(notices[0], "entry is locked") {
+				t.Fatalf("notices %q", notices)
+			}
+			// the rest was removed, the program too
+			if _, err := os.Stat(te.Dirs.InstallExe); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("the program is left")
+			}
+		})
+	}
+}
+
 func TestMacLogIsCutAtStart(t *testing.T) {
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
