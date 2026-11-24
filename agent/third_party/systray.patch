@@ -1,0 +1,272 @@
+diff -ruN a/PATCHED.md b/PATCHED.md
+--- a/PATCHED.md
++++ b/PATCHED.md
+@@ -0,0 +1,49 @@
++# fyne.io/systray, patched copy
++
++This folder is a copy of [fyne.io/systray](https://github.com/fyne-io/systray)
++**v1.12.2** (Apache License 2.0, see `LICENSE`), used through a `replace`
++directive in `agent/go.mod`. The `example/` folder, `Makefile` and
++`.gitignore` of the upstream module are left out; every other file is as
++upstream ships it, except for the changes below.
++
++The exact difference from upstream is recorded in
++`agent/third_party/systray.patch`. CI (`agent/tools/systray-patch.sh`)
++downloads v1.12.2 through the Go module proxy, checks its hash against the
++checksum database's (`h1:Y8DZxgLHsVQt6rY9Zrkkg+j67S7vv/1F2viOWKPpVeA=`) and
++fails unless this folder is upstream plus exactly that patch.
++
++## Changes
++
++Added files: this `PATCHED.md` and `systray_patch_test.go` (tests of the
++changes below; Linux and BSD).
++
++Only `systray_unix.go` (Linux and BSD) is changed:
++
++- New function `SetLabel(label, guide string)`.
++- The StatusNotifierItem object exports the read-only properties
++  `XAyatanaLabel` and `XAyatanaLabelGuide` (`org.kde.StatusNotifierItem`
++  interface). `SetLabel` updates them (which also sends
++  `PropertiesChanged`) and emits the `XAyatanaNewLabel(label, guide)` signal.
++- The item's introspection data (`Introspect` on `/StatusNotifierItem`)
++  lists these two properties and the signal: `itemIntrospection()` is
++  upstream's generated `IntrospectDataStatusNotifierItem` with the three
++  members appended. The generated file itself is unchanged.
++- Start-up: `nativeStart` builds the property spec, exports it and stores
++  `instance.props` while it holds `instance.lock`, and `createPropSpec`
++  no longer takes the lock itself (its caller holds it). Upstream builds
++  the spec under the lock but stores `props` later, so a `SetIcon`,
++  `SetTitle`, `SetTooltip` or `SetLabel` that ran in between was stored
++  but never exported (the tray's first draw runs concurrently with
++  start-up), until the next change.
++- The header comment says the file was modified.
++
++Why the label: Ubuntu's AppIndicator extension shows `XAyatanaLabel` as
++text next to the tray icon and re-reads it on `XAyatanaNewLabel`.
++Upstream's `SetTitle` sets only `Title`, which that extension uses as the
++accessible name. Hosts that do not know the Ayatana label (KDE) ignore the
++extra properties.
++
++Windows and macOS code is untouched. To update the library, copy the new
++upstream release over this folder, re-apply the changes, and record the
++new diff with `tools/systray-patch.sh --write` (after changing the version
++and hash in that script).
+diff -ruN a/systray_patch_test.go b/systray_patch_test.go
+--- a/systray_patch_test.go
++++ b/systray_patch_test.go
+@@ -0,0 +1,83 @@
++//go:build (linux || freebsd || openbsd || netbsd) && !android
++
++// Added to the upstream v1.12.2 code; see PATCHED.md.
++
++package systray
++
++import (
++	"testing"
++	"time"
++)
++
++// SetLabel before start-up is stored and lands in the exported properties.
++func TestPropSpecHasTheLabel(t *testing.T) {
++	SetLabel("71%", "100% ⚠")
++	defer SetLabel("", "")
++	instance.lock.Lock()
++	spec := instance.createPropSpec()
++	instance.lock.Unlock()
++	item := spec["org.kde.StatusNotifierItem"]
++	if v := item["XAyatanaLabel"].Value; v != "71%" {
++		t.Fatalf("XAyatanaLabel %v", v)
++	}
++	if v := item["XAyatanaLabelGuide"].Value; v != "100% ⚠" {
++		t.Fatalf("XAyatanaLabelGuide %v", v)
++	}
++	if item["XAyatanaLabel"].Writable || item["XAyatanaLabelGuide"].Writable {
++		t.Fatal("label properties are writable")
++	}
++}
++
++// nativeStart builds the spec, exports it and publishes props while it
++// holds instance.lock (no SetLabel/SetIcon can fall between the spec and
++// props), so createPropSpec must not take the lock itself.
++func TestPropSpecRunsUnderTheCallersLock(t *testing.T) {
++	done := make(chan struct{})
++	go func() {
++		instance.lock.Lock()
++		defer instance.lock.Unlock()
++		instance.createPropSpec()
++		close(done)
++	}()
++	select {
++	case <-done:
++	case <-time.After(5 * time.Second):
++		t.Fatal("createPropSpec blocks on instance.lock")
++	}
++}
++
++// Introspection lists the label properties and signal.
++func TestIntrospectionHasTheLabel(t *testing.T) {
++	i := itemIntrospection()
++	if i.Name != "org.kde.StatusNotifierItem" {
++		t.Fatalf("interface %s", i.Name)
++	}
++	props := map[string]string{}
++	for _, p := range i.Properties {
++		props[p.Name] = p.Type + " " + p.Access
++	}
++	for _, name := range []string{"XAyatanaLabel", "XAyatanaLabelGuide"} {
++		if props[name] != "s read" {
++			t.Fatalf("%s: %q", name, props[name])
++		}
++	}
++	if props["IconPixmap"] == "" {
++		t.Fatal("upstream properties lost")
++	}
++	found := false
++	for _, s := range i.Signals {
++		if s.Name == "XAyatanaNewLabel" {
++			found = len(s.Args) == 2 && s.Args[0].Name == "label" && s.Args[0].Type == "s" &&
++				s.Args[1].Name == "guide" && s.Args[1].Type == "s"
++		}
++	}
++	if !found {
++		t.Fatal("no XAyatanaNewLabel(s label, s guide)")
++	}
++	// the generated upstream data itself is unchanged
++	for _, p := range i.Properties[:len(i.Properties)-2] {
++		if p.Name == "XAyatanaLabel" {
++			t.Fatal("upstream data modified")
++		}
++	}
++}
+diff -ruN a/systray_unix.go b/systray_unix.go
+--- a/systray_unix.go
++++ b/systray_unix.go
+@@ -1,5 +1,10 @@
+ //go:build (linux || freebsd || openbsd || netbsd) && !android
+ 
++//Modified from fyne.io/systray v1.12.2: SetLabel and the XAyatanaLabel and
++//XAyatanaLabelGuide properties were added, the item's properties are
++//exported under the lock, and introspection lists the additions (see
++//PATCHED.md).
++
+ //Note that you need to have github.com/knightpp/dbus-codegen-go installed from "custom" branch
+ //go:generate dbus-codegen-go -prefix org.kde -package notifier -output internal/generated/notifier/status_notifier_item.go internal/StatusNotifierItem.xml
+ //go:generate dbus-codegen-go -prefix com.canonical -package menu -output internal/generated/menu/dbus_menu.go internal/DbusMenu.xml
+@@ -118,6 +123,34 @@
+ 	}
+ }
+ 
++// SetLabel sets the text shown next to the icon by hosts that support the
++// Ayatana label (Ubuntu's AppIndicator extension): the XAyatanaLabel and
++// XAyatanaLabelGuide properties, announced with the XAyatanaNewLabel signal.
++// guide is the widest text the label will hold, for hosts that reserve room.
++// Hosts without label support (KDE) ignore it. Linux and BSD only.
++//
++// Added to the upstream v1.12.2 code; see PATCHED.md.
++func SetLabel(label, guide string) {
++	instance.lock.Lock()
++	instance.label, instance.labelGuide = label, guide
++	props := instance.props
++	conn := instance.conn
++	defer instance.lock.Unlock()
++
++	if props == nil {
++		return
++	}
++	props.SetMust("org.kde.StatusNotifierItem", "XAyatanaLabelGuide", guide)
++	props.SetMust("org.kde.StatusNotifierItem", "XAyatanaLabel", label)
++	if conn == nil {
++		return
++	}
++	err := conn.Emit(path, "org.kde.StatusNotifierItem.XAyatanaNewLabel", label, guide)
++	if err != nil {
++		log.Printf("systray error: failed to emit new label signal: %s\n", err)
++	}
++}
++
+ // SetTooltip sets the systray tooltip to display on mouse hover of the tray icon,
+ // only available on Mac and Windows.
+ func SetTooltip(tooltipTitle string) {
+@@ -210,7 +243,15 @@
+ 		log.Printf("systray error: failed to request name: %s\n", err)
+ 		// it's not critical error: continue
+ 	}
++	// Patched (see PATCHED.md): the properties are built, exported and
++	// published under the lock, so a SetIcon/SetLabel/... that races with
++	// start-up is either in the spec or applied to the exported properties.
++	instance.lock.Lock()
+ 	props, err := prop.Export(conn, path, instance.createPropSpec())
++	if err == nil {
++		instance.props = props
++	}
++	instance.lock.Unlock()
+ 	if err != nil {
+ 		log.Printf("systray error: failed to export notifier item properties to bus: %s\n", err)
+ 		return
+@@ -226,7 +267,7 @@
+ 		Interfaces: []introspect.Interface{
+ 			introspect.IntrospectData,
+ 			prop.IntrospectData,
+-			notifier.IntrospectDataStatusNotifierItem,
++			itemIntrospection(), // patched, see PATCHED.md
+ 		},
+ 	}
+ 	err = conn.Export(introspect.NewIntrospectable(&node), path,
+@@ -319,6 +360,8 @@
+ 	iconData []byte
+ 	// title and tooltip state
+ 	title, tooltipTitle string
++	// Ayatana label state (added, see PATCHED.md)
++	label, labelGuide string
+ 
+ 	lock             sync.Mutex
+ 	menu             *menuLayout
+@@ -327,9 +370,8 @@
+ 	menuVersion      uint32
+ }
+ 
++// createPropSpec is called with t.lock held (patched, see PATCHED.md).
+ func (t *tray) createPropSpec() map[string]map[string]*prop.Prop {
+-	t.lock.Lock()
+-	defer t.lock.Unlock()
+ 	id := t.title
+ 	if id == "" {
+ 		id = fmt.Sprintf("systray_%d", os.Getpid())
+@@ -396,9 +438,37 @@
+ 				Emit:     prop.EmitTrue,
+ 				Callback: nil,
+ 			},
++			// XAyatanaLabel and XAyatanaLabelGuide: added, see PATCHED.md.
++			"XAyatanaLabel": {
++				Value:    t.label,
++				Writable: false,
++				Emit:     prop.EmitTrue,
++				Callback: nil,
++			},
++			"XAyatanaLabelGuide": {
++				Value:    t.labelGuide,
++				Writable: false,
++				Emit:     prop.EmitTrue,
++				Callback: nil,
++			},
+ 		}}
+ }
+ 
++// itemIntrospection is upstream's introspection data for the item plus
++// the Ayatana label members SetLabel provides (added, see PATCHED.md).
++func itemIntrospection() introspect.Interface {
++	i := notifier.IntrospectDataStatusNotifierItem
++	i.Properties = append(append([]introspect.Property(nil), i.Properties...),
++		introspect.Property{Name: "XAyatanaLabel", Type: "s", Access: "read"},
++		introspect.Property{Name: "XAyatanaLabelGuide", Type: "s", Access: "read"})
++	i.Signals = append(append([]introspect.Signal(nil), i.Signals...),
++		introspect.Signal{Name: "XAyatanaNewLabel", Args: []introspect.Arg{
++			{Name: "label", Type: "s", Direction: "out"},
++			{Name: "guide", Type: "s", Direction: "out"},
++		}})
++	return i
++}
++
+ // PX is picture pix map structure with width and high
+ type PX struct {
+ 	W, H int

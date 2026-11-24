@@ -40,6 +40,22 @@ jobs:
               head -10 | sed -E 's/^[[:space:]]*/::error title=go test::/'
             exit 1
           }
+      - name: patched systray copy
+        # third_party/systray must be upstream v1.12.2 (hash checked against
+        # the checksum database) plus exactly third_party/systray.patch; its
+        # own tests (a separate module, not in ./...) run too. Upstream's
+        # tests start the tray, which needs a session bus.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          bash tools/systray-patch.sh
+          cd third_party/systray
+          if command -v dbus-run-session >/dev/null; then
+            dbus-run-session -- go test -count=1 ./...
+          else
+            echo "::notice title=systray::no dbus-run-session; only the patch tests run"
+            go test -count=1 -run 'TestPropSpec|TestIntrospection' ./...
+          fi
       - name: keychain integration
         if: runner.os == 'macOS' && hashFiles('agent/internal/creds/keychain_darwin_test.go') != ''
         env:
