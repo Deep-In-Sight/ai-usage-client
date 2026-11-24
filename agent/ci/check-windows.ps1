@@ -37,7 +37,35 @@ function Check([string]$Id, [scriptblock]$Body) {
 }
 function Stats { try { Invoke-RestMethod -TimeoutSec 10 "$base/stats" } catch { $null } }
 function DevStat([string]$Device) { $s = Stats; if ($s -and $s.devices) { $s.devices.$Device } else { $null } }
-function AgentProcs { @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -eq $exe }) }
+# Every process of the installed executable: the agent ("run") and its
+# tray helpers ("tray-helper", design 6.4), told apart by the command line.
+function AllProcs { @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath -eq $exe }) }
+function AgentProcs { @(AllProcs | Where-Object { "$($_.CommandLine)" -notmatch 'tray-helper' } | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }) }
+function HelperProcs { @(AllProcs | Where-Object { "$($_.CommandLine)" -match 'tray-helper' }) }
+# Top-level windows of a class that a process owns (the tray library's
+# hidden window is "SystrayClass").
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class CiWindows {
+    delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+    public static int Count(uint pid, string cls) {
+        int n = 0;
+        EnumWindows((h, l) => {
+            uint p; GetWindowThreadProcessId(h, out p);
+            if (p == pid) { var sb = new StringBuilder(256); GetClassName(h, sb, 256); if (sb.ToString() == cls) n++; }
+            return true;
+        }, IntPtr.Zero);
+        return n;
+    }
+}
+'@
+# Helpers of the agent with pid $Parent that each own a SystrayClass window.
+function HelpersWithWindow([int]$Parent) { @(HelperProcs | Where-Object { $_.ParentProcessId -eq $Parent -and [CiWindows]::Count([uint32]$_.ProcessId, 'SystrayClass') -ge 1 }) }
 function DeviceId { try { (Get-Content -Raw -LiteralPath (Join-Path $data 'device-id') -ErrorAction Stop).Trim() } catch { '' } }
 function WaitFor([int]$Seconds, [scriptblock]$Cond) {
     $end = (Get-Date).AddSeconds($Seconds)
@@ -149,16 +177,31 @@ Check 'sync.arrives' {
     else { Fail 'sync.arrives' "device=$($script:device) stats=$(ConvertTo-Json -Compress -InputObject $d)" }
 }
 
-Check 'sync.mode_tray' {
-    $d = DevStat $script:device
-    if ($d -and $d.last_mode -eq 'tray') { Pass 'sync.mode_tray' 'tray' } else { Fail 'sync.mode_tray' "last_mode=$($d.last_mode)" }
+# The agent reports "tray" once a helper's icon is in the notification
+# area (design 6.4); a runner without a desktop may have none.
+if ($Desktop) {
+    Check 'sync.mode_tray' {
+        $ok = WaitFor 60 { $d = DevStat $script:device; $d -and $d.last_mode -eq 'tray' }
+        $d = DevStat $script:device
+        if ($ok) { Pass 'sync.mode_tray' 'tray' } else { Fail 'sync.mode_tray' "last_mode=$($d.last_mode)" }
+    }
+} else {
+    Info 'sync.mode' "$((DevStat $script:device).last_mode)"
+}
+
+# Claude only: one tray helper, the agent's child, with its tray window.
+Check 'tray.one_helper' {
+    $ok = WaitFor 30 { (HelpersWithWindow $script:agentPid).Count -eq 1 -and (HelperProcs).Count -eq 1 }
+    $h = HelperProcs
+    if ($ok) { Pass 'tray.one_helper' "helper pid $($h[0].ProcessId) of agent $($script:agentPid): $($h[0].CommandLine -replace '^.*tray-helper', 'tray-helper')" }
+    else { Fail 'tray.one_helper' "helpers=$($h.Count) with_window=$((HelpersWithWindow $script:agentPid).Count) cmd=$($h.CommandLine -join ' | ')" }
 }
 
 Check 'status.json' {
     $r = RunExe $exe 'status --json' 30
     [IO.File]::WriteAllText((Join-Path $out 'status.json'), "$($r.out)")
     $j = $null; try { $j = "$($r.out)" | ConvertFrom-Json } catch { }
-    if ($j -and $j.snapshot.client_mode -eq 'tray' -and $j.snapshot.mode -eq 'coordinated') { Pass 'status.json' 'coordinated tray' }
+    if ($j -and ($j.snapshot.client_mode -eq 'tray' -or -not $Desktop) -and $j.snapshot.mode -eq 'coordinated') { Pass 'status.json' "coordinated $($j.snapshot.client_mode)" }
     else { Fail 'status.json' "code=$($r.code) out=$($r.out) err=$($r.err)" }
 }
 
@@ -191,6 +234,32 @@ Check 'tray.no_temp_icons' {
 }
 Info 'exe.signature' "$((Get-AuthenticodeSignature -LiteralPath $exe).Status)"
 
+# Two helpers (the CI build's test switch AI_USAGE_TEST_FAKE_PROVIDERS):
+# two child processes, each with its own tray window (design D3; uIDs
+# 100 and 101). The agent is started by hand for this and ended after it;
+# the upgrade below starts the installed one again.
+Check 'tray.two_helpers' {
+    foreach ($p in AllProcs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    $null = WaitFor 15 { (AllProcs).Count -eq 0 }
+    $env:AI_USAGE_TEST_FAKE_PROVIDERS = 'claude,codex'
+    try { $p2 = Start-Process -FilePath $exe -ArgumentList 'run' -PassThru } finally { Remove-Item Env:AI_USAGE_TEST_FAKE_PROVIDERS }
+    $ok = WaitFor 60 { (HelpersWithWindow $p2.Id).Count -eq 2 }
+    $h = @(HelperProcs | Where-Object { $_.ParentProcessId -eq $p2.Id })
+    $uids = ($h | ForEach-Object { if ("$($_.CommandLine)" -match '--uid (\d+)') { $Matches[1] } }) -join ','
+    Info 'tray.two_helpers.measured' "helpers=$($h.Count) with SystrayClass window=$((HelpersWithWindow $p2.Id).Count) uids=$uids"
+    if ($Desktop) { Info 'tray.screenshot.two' (Shot 'tray-two.png') }
+    if ($ok -and $uids -match '100' -and $uids -match '101') { Pass 'tray.two_helpers' "agent $($p2.Id): helpers $($h.ProcessId -join ',') uids $uids" }
+    else { Fail 'tray.two_helpers' "helpers=$($h.Count) with_window=$((HelpersWithWindow $p2.Id).Count) uids=$uids" }
+    if ($env:GITHUB_STEP_SUMMARY) {
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY "Two tray helpers on $($env:RUNNER_OS) ($((Get-CimInstance Win32_OperatingSystem).Caption)): $($h.Count) helper processes, $((HelpersWithWindow $p2.Id).Count) with a SystrayClass window, uIDs $uids."
+    }
+    # ending the agent ends its helpers (their standard input closes)
+    Stop-Process -Id $p2.Id -Force -ErrorAction SilentlyContinue
+    $gone = WaitFor 10 { (HelperProcs).Count -eq 0 }
+    if ($gone) { Pass 'tray.helpers_follow_main' 'no helper left' } else { Fail 'tray.helpers_follow_main' "helpers left: $((HelperProcs).Count)" }
+    $script:agentPid = $null
+}
+
 Check 'upgrade.in_place' {
     $before = (DevStat $script:device).syncs
     $oldPid = $script:agentPid
@@ -217,7 +286,7 @@ Check 'uninstall.via_entry' {
     if (Test-Path -Path $entryKey) { $problems += 'entry_left' }
     if (Test-Path -LiteralPath $installDir) { $problems += 'install_dir_left' }
     if (Test-Path -LiteralPath $data) { $problems += 'data_left' }
-    if ((AgentProcs).Count -ne 0) { $problems += "processes=$((AgentProcs).Count)" }
+    if ((AllProcs).Count -ne 0) { $problems += "processes=$((AllProcs).Count)" }
     if ($problems.Count -eq 0) { Pass 'uninstall.via_entry' 'everything removed' } else { Fail 'uninstall.via_entry' ($problems -join ' ') }
 }
 

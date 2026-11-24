@@ -5,8 +5,9 @@
 # headless with XDG autostart), one with a fake tray host (the
 # top-bar label over D-Bus), and the session lifecycle: the bus restarted
 # at logout, a login with a second run, a late tray host and the agent's
-# log file (lifecycle-linux.sh). Results as annotations; exit 1 if a
-# required check failed.
+# log file, two tray helpers and a killed agent leaving none behind
+# (lifecycle-linux.sh). Results as annotations; exit 1 if a required check
+# failed.
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$here/lib.sh"
@@ -134,7 +135,12 @@ tray_label_check() {
       guide=$(get_prop XAyatanaLabelGuide)
       [ -n "$guide" ] || problems="$problems guide_empty"
       device4=$(cat "$data/device-id" 2>/dev/null)
-      [ "$(dev "$device4" last_mode)" = tray ] || problems="$problems mode=$(dev "$device4" last_mode)"
+      tray_mode() { [ "$(dev "$device4" last_mode)" = tray ]; }
+      wait_for 30 tray_mode || problems="$problems mode=$(dev "$device4" last_mode)"
+      # Claude only: exactly one icon, drawn by one helper of the agent
+      n_items=$(awk '$1 == "registered" { s[$2] = 1 } END { n = 0; for (k in s) n++; print n }' "$out/watcher.log")
+      n_helpers=$(pgrep -f "^$exe tray-helper" | wc -l)
+      [ "$n_items" = 1 ] && [ "$n_helpers" -eq 1 ] || problems="$problems items=$n_items helpers=$n_helpers"
       curl -fsS --max-time 10 -X POST "$BASE/weekly?percent=57" || problems="$problems set_weekly_failed"
       signalled() { grep -q "^label $svc \"57%\" " "$out/watcher.log"; }
       wait_for 60 signalled || problems="$problems no_signal_57"
@@ -147,12 +153,13 @@ tray_label_check() {
     "$exe" uninstall > "$out/uninstall-tray.log" 2>&1 || problems="$problems uninstall_rc=$?"
     sleep 2
     [ "$(agent_count)" -eq 0 ] || problems="$problems processes_after_uninstall=$(agent_count)"
+    [ "$(pgrep -f "^$exe tray-helper" | wc -l)" -eq 0 ] || problems="$problems helpers_after_uninstall"
   else
     problems="watcher not ready: $(head -c 200 "$out/watcher.err")"
   fi
   kill "$wpid" 2>/dev/null
   kill "$bus_pid" 2>/dev/null
-  if [ -z "$problems" ]; then pass tray.label "label 42% -> 57% (signal), guide [$guide]"; else fail tray.label "$problems"; fi
+  if [ -z "$problems" ]; then pass tray.label "label 42% -> 57% (signal), guide [$guide], one item from one helper"; else fail tray.label "$problems"; fi
 }
 tray_label_check
 
@@ -163,7 +170,7 @@ tray_label_check
 start_agent() { (export "$@"; oneliner) >> "$out/install-lifecycle.log" 2>&1; }
 stop_agents() {
   "$exe" uninstall >> "$out/uninstall-lifecycle.log" 2>&1
-  none_left() { [ "$(agent_count)" -eq 0 ]; }
+  none_left() { [ "$(agent_count)" -eq 0 ] && [ "$(pgrep -f "^$exe tray-helper" | wc -l)" -eq 0 ]; }
   wait_for 15 none_left
 }
 lifecycle_checks

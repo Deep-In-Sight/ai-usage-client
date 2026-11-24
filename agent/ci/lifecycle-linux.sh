@@ -6,8 +6,9 @@
 # server.
 #   tray.bus_restart  the session bus is restarted at the same address
 #                     (GNOME restarts it at every logout) while the agent
-#                     runs: no crash, the same process registers again
-#                     with the new bus's tray host, syncing goes on
+#                     runs: no crash, the agent's process stays, its tray
+#                     helper ends and a new one registers with the new
+#                     bus's tray host, syncing goes on
 #   tray.relogin      the bus goes away, a new session comes with a new
 #                     bus, and autostart starts a second run: exactly one
 #                     agent remains, registered on the new bus, showing
@@ -17,6 +18,9 @@
 #                     once
 #   agent.log         the agent install started keeps a log file, with
 #                     no token, key or home path in it
+#   tray.two_helpers  two tray helpers (a CI build told to show a second
+#                     one) register two items, both the agent's children
+#   tray.helpers_follow_main  killing the agent leaves no helper behind
 # Needs: $exe, $data, $out, $CI_BIN, wait_for, dev, stats, pass, fail,
 # info, and the hooks start_agent (start the agent the way install does,
 # with the variables given) and stop_agents (end every agent).
@@ -28,6 +32,11 @@ lc_autostart() { env "$@" setsid "$exe" run < /dev/null >> "$out/autostart-run.l
 lc_log="$data/agent.log"
 lc_pids() { pgrep -f "^$exe run" | tr '\n' ' ' | sed 's/ $//'; }
 lc_count() { pgrep -f "^$exe run" | wc -l; }
+# the tray helpers (design 6.4): "$exe tray-helper --provider …"
+lc_hpids() { pgrep -f "^$exe tray-helper" | tr '\n' ' ' | sed 's/ $//'; }
+lc_hcount() { pgrep -f "^$exe tray-helper" | wc -l; }
+# lc_children PID: the helpers whose parent is PID
+lc_children() { local p n=0; for p in $(pgrep -f "^$exe tray-helper"); do [ "$(ps -o ppid= -p "$p" | tr -d ' ')" = "$1" ] && n=$((n + 1)); done; echo $n; }
 
 # lc_bus NAME [ADDRESS]: start a private session bus; sets lc_addr, lc_bpid.
 lc_bus() {
@@ -53,6 +62,8 @@ lc_watcher() {
 
 # lc_registered NAME: the item registered with that watcher; sets lc_svc.
 lc_registered() { lc_svc=$(awk '$1 == "registered" { s = $2 } END { print s }' "$out/$1.log") && [ -n "$lc_svc" ]; }
+# lc_items NAME: how many different items registered with that watcher
+lc_items() { awk '$1 == "registered" { s[$2] = 1 } END { n = 0; for (k in s) n++; print n }' "$out/$1.log"; }
 lc_prop() { DBUS_SESSION_BUS_ADDRESS="$1" "$CI_BIN/fakewatcher" get "$2" "$3" 2>>"$out/lifecycle-get.err"; }
 lc_device() { cat "$data/device-id" 2>/dev/null; }
 lc_syncs() { dev "$(lc_device)" syncs; }
@@ -62,7 +73,7 @@ lc_weekly() { curl -fsS --max-time 10 -X POST "$BASE/weekly?percent=$1" > /dev/n
 lc_panics() { if [ -f "$lc_log" ]; then grep -c '^panic\|^fatal error' "$lc_log"; else echo 0; fi; }
 
 lifecycle_checks() {
-  local sockdir sock a1 b1 w1 a2 b2 w2 a3 b3 w3 pid1 pid2 pid3 s problems label n
+  local sockdir sock a1 b1 w1 a2 b2 w2 a3 b3 w3 pid1 pid2 pid3 hpid1 hpid2 s problems label n
   # a socket path must be short (108 bytes)
   sockdir=$(mktemp -d) || { fail tray.bus_restart "no temporary folder"; return; }
   sock="$sockdir/bus"
@@ -78,6 +89,7 @@ lifecycle_checks() {
     kill "$w1" "$b1" 2>/dev/null; stop_agents; return
   fi
   pid1=$(lc_pids)
+  hpid1=$(lc_hpids)
   # the first sync may come after the registration
   wait_for 60 lc_synced || { fail tray.bus_restart "no sync from device [$(lc_device)]"; kill "$w1" "$b1" 2>/dev/null; stop_agents; return; }
 
@@ -109,13 +121,17 @@ lifecycle_checks() {
   pid2=$(lc_pids)
   [ "$(lc_count)" -eq 1 ] || problems="$problems processes=[$pid2]"
   [ "$pid2" = "$pid1" ] || problems="$problems pid_changed=$pid1->$pid2"
+  hpid2=$(lc_hpids)
+  [ "$(lc_hcount)" -eq 1 ] || problems="$problems helpers=[$hpid2]"
+  [ -n "$hpid1" ] && [ "$hpid2" != "$hpid1" ] || problems="$problems helper_not_restarted=[$hpid1]->[$hpid2]"
+  [ "$(lc_children "$pid1")" -eq 1 ] || problems="$problems helper_not_the_agents_child"
   label=""
   label_50() { label=$(lc_prop "$a2" "$lc_svc" XAyatanaLabel) && [ "$label" = 50% ]; }
   [ -n "$lc_svc" ] && { wait_for 30 label_50 || problems="$problems label=[$label]"; }
   wait_for 60 lc_more_syncs "$s" || problems="$problems syncs_stopped=$s"
   n=$(lc_panics); [ "$n" = 0 ] || problems="$problems panics=$n"
-  grep -q 'restarting' "$lc_log" 2>/dev/null || problems="$problems no_restart_in_log"
-  if [ -z "$problems" ]; then pass tray.bus_restart "pid $pid1 registered again on the restarted bus, syncs $s -> $(lc_syncs)"
+  grep -qE 'tray helper claude(: the session bus went away| ended \(exit 75\))' "$lc_log" 2>/dev/null || problems="$problems no_helper_restart_in_log"
+  if [ -z "$problems" ]; then pass tray.bus_restart "agent pid $pid1 kept, helper $hpid1 -> $hpid2 registered on the restarted bus, syncs $s -> $(lc_syncs)"
   else fail tray.bus_restart "$problems; log: $(grep -v ' sync ' "$lc_log" 2>/dev/null | tail -n 4)"; fi
 
   cp "$lc_log" "$out/agent-bus-restart.log" 2>/dev/null || true
@@ -161,6 +177,8 @@ lifecycle_checks() {
   sleep 20 # still one agent, still registered, still syncing a while later
   [ "$(lc_count)" -eq 1 ] || problems="$problems processes_later=[$(lc_pids)]"
   [ "$(lc_pids)" = "$pid3" ] || problems="$problems agent_changed_later=[$(lc_pids)]"
+  # one icon: the old agent's helper ended with it, the new one has one
+  [ "$(lc_hcount)" -eq 1 ] && [ "$(lc_children "$pid3")" -eq 1 ] || problems="$problems helpers=[$(lc_hpids)]"
   n=$(lc_panics); [ "$n" = 0 ] || problems="$problems panics=$n"
   if grep -q 'took over' "$lc_log" 2>/dev/null; then info relogin "the new run took over from the old one"; fi
   if [ -z "$problems" ]; then pass tray.relogin "pid $pid1 -> $pid3, registered on the new bus, label 57%, syncs $s -> $(lc_syncs)"
@@ -188,4 +206,32 @@ lifecycle_checks() {
   cp "$lc_log" "$out/agent-late-host.log" 2>/dev/null || true
   stop_agents
   kill "$w4" "$b4" 2>/dev/null
+
+  # two helpers at once (the CI build's test switch), then the agent is
+  # killed: no helper, no icon may stay
+  if ! lc_bus bus5; then fail tray.two_helpers "dbus-daemon 5 did not start"; return; fi
+  local a5=$lc_addr b5=$lc_bpid w5 pid5 items
+  lc_watcher w5 "$a5" || { fail tray.two_helpers "watcher 5 not ready"; kill "$b5"; return; }
+  w5=$lc_wpid
+  start_agent AI_USAGE_TEST_FAKE_PROVIDERS=claude,codex XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=ubuntu:GNOME DBUS_SESSION_BUS_ADDRESS="$a5"
+  two_items() { [ "$(lc_items w5)" -ge 2 ]; }
+  problems=""
+  wait_for 90 two_items || problems="$problems items=$(lc_items w5)"
+  pid5=$(lc_pids)
+  [ "$(lc_count)" -eq 1 ] || problems="$problems processes=[$pid5]"
+  [ "$(lc_hcount)" -eq 2 ] && [ "$(lc_children "$pid5")" -eq 2 ] || problems="$problems helpers=[$(lc_hpids)]"
+  if [ -z "$problems" ]; then pass tray.two_helpers "$(lc_items w5) items registered by helpers $(lc_hpids) of agent $pid5"
+  else fail tray.two_helpers "$problems"; fi
+  problems=""
+  if [ -n "$pid5" ]; then kill -9 "$pid5"; else problems="no_agent"; fi
+  no_helpers() { [ "$(lc_hcount)" -eq 0 ]; }
+  t0=$(date +%s)
+  wait_for 5 no_helpers || problems="$problems helpers_left=[$(lc_hpids)]"
+  t1=$(date +%s)
+  if [ -z "$problems" ]; then pass tray.helpers_follow_main "no helper $((t1 - t0)) s after the agent was killed"
+  else fail tray.helpers_follow_main "$problems"; fi
+  cp "$lc_log" "$out/agent-two-helpers.log" 2>/dev/null || true
+  stop_agents
+  pkill -f "^$exe tray-helper" 2>/dev/null
+  kill "$w5" "$b5" 2>/dev/null
 }

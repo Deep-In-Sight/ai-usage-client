@@ -180,6 +180,12 @@ The menu, from top to bottom:
   session at logout while the agent keeps running, the icon comes back by
   itself; the numbers are collected all the while. At login, the agent the
   new session starts replaces one left over from the old session.
+- The icon is drawn by a small helper process the agent starts (the same
+  `ai-usage` program, run as `ai-usage tray-helper`), so Task Manager,
+  Activity Monitor or `ps` show two `ai-usage` processes. If the desktop's
+  tray goes away, only the helper ends; the agent goes on collecting and
+  starts it again. The helper gets nothing but what to draw: no sign-in,
+  no file, no network.
 - The agent keeps a log, `agent.log` in its settings folder (`status`
   prints where); the previous one is `agent.log.1`. It never holds sign-in
   tokens or the team key, and your home folder is written as `~`. A crash

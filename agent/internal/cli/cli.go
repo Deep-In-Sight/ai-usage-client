@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"time"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/autostart"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
@@ -20,10 +19,12 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/osinfo"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/supervisor"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/discover"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/engine"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
-	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayhelper"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/version"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/winapp"
 )
@@ -46,18 +47,16 @@ type Env struct {
 	GOOS string
 	// Context ends a run like SIGTERM (nil means context.Background()).
 	Context context.Context
-	// TrayAvailable and Tray default to tray.Available and tray.Run.
-	TrayAvailable func(ctx context.Context) (bool, string)
-	Tray          func(ctx context.Context, c tray.Controller, updates <-chan struct{}, notice string) error
-	// TrayWait waits up to limit for a tray host to appear (nil means
-	// tray.WaitForHost).
-	TrayWait func(ctx context.Context, limit time.Duration) bool
 	// TakeOver takes run.lock from an older run (nil means procs.TakeOver).
 	TakeOver func(ctx context.Context, path string, self procs.Identity) (unlock func(), replaced procs.Identity, err error)
-	// Restart replaces this process with "ai-usage <args>", passing the
-	// count of quick restarts (nil means the real exec); it returns only
-	// on failure.
-	Restart func(args []string, restarts int) error
+	// Helper starts a tray helper (nil means this executable as
+	// "tray-helper", supervisor.ExecSpawner).
+	Helper func(p provider.ID, uid uint32, token string) (supervisor.Proc, error)
+	// OpenURL opens a web page (nil means tray.OpenURL).
+	OpenURL func(u string) error
+	// Stdin is the standard input (nil means os.Stdin; the tray helper
+	// reads the agent's lines there).
+	Stdin io.Reader
 	// Syncer makes the sync client (nil means the real one).
 	Syncer func(cfg config.Config, userAgent string) engine.Syncer
 	// HasConsole (nil means true) and Alert (nil means none): a Windows GUI
@@ -179,11 +178,6 @@ func DefaultEnv() Env {
 		HasConsole:    winapp.HasConsole,
 		Alert:         winapp.Alert,
 		GOOS:          runtime.GOOS,
-		TrayAvailable: func(ctx context.Context) (bool, string) {
-			return tray.Available(ctx, os.Getenv)
-		},
-		Tray:     tray.Run,
-		TrayWait: tray.WaitForHost,
 	}
 }
 
@@ -216,9 +210,11 @@ func Main(env Env) int {
 		return uninstallCmd(env, args)
 	case "status":
 		return statusCmd(env, args)
+	case "tray-helper": // hidden: the agent starts it (design 6.4)
+		return trayHelperCmd(env, args)
 	case "version", "--version":
 		word := "no-tray"
-		if tray.Compiled {
+		if trayhelper.Compiled {
 			word = "tray"
 		}
 		fmt.Fprintf(env.Stdout, "ai-usage %s %s/%s %s\n", version.Version, runtime.GOOS, runtime.GOARCH, word)

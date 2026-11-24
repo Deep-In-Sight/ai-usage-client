@@ -89,6 +89,21 @@ extra properties.
   v1.12.2, so a test inside package `systray` could not run on Windows.
 - Menu item icons go through the same function, so they too are loaded
   at the small-icon size (they are drawn at that size anyway).
+- New function `SetTrayID(id uint32)`: the notification icon's id (`uID`
+  of `NOTIFYICONDATA`) is the package variable `trayID` (default 100, as
+  upstream's literal) and can be set before `Run`. The AI Usage agent runs
+  one tray process per provider from one executable; Windows keeps the
+  user's show/hide setting per program and id, so each needs its own id.
+- A first `Shell_NotifyIcon(NIM_ADD)` that fails (right after login the
+  taskbar may not be there yet) no longer ends start-up: upstream returns
+  the error from `initInstance`, so `onReady` never runs (no menu, no
+  updates) while a later `TaskbarCreated` adds a bare icon. Here the
+  failure is logged and start-up goes on. New field `winTray.added`
+  records whether the notification area has the icon; the
+  `TaskbarCreated` handler sets it from its own add, and the new function
+  `EnsureIcon() bool` adds the icon when it is not there (an add, or a
+  modify when an add that reported failure went through) and reports
+  whether it is. The agent's helper calls it every 2 s.
 - The header comment says the file was modified.
 
 ### Everything else

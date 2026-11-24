@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,7 +14,7 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
-	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
 )
 
 // The agent that install starts on Linux has no standard error anyone
@@ -27,13 +25,14 @@ func TestLinuxRunWritesAgentLog(t *testing.T) {
 	te := trayEnv(t, fs)
 	te.GOOS = "linux"
 	te.vars["XDG_SESSION_TYPE"] = "wayland"
-	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error {
-		log.Printf("systray error: key test-ingest-key-0123456789 under %s", te.home)
-		return nil
+	te.helpers.onReady = func(*fakeHelper) {
+		// anything this process logs through the standard logger
+		log.Printf("tray: key test-ingest-key-0123456789 under %s", te.home)
 	}
+	te.helpers.autoClick = "quit"
 	eq(t, te.main("run"), 0)
 	got := read(t, te.Dirs.File(paths.LogFile))
-	for _, want := range []string{"ai-usage 0.0.0-dev started", "systray error: key [ingest key] under ~", "ai-usage stopped"} {
+	for _, want := range []string{"ai-usage 0.0.0-dev started", "tray: key [ingest key] under ~", "ai-usage stopped"} {
 		contains(t, got, want)
 	}
 	for _, bad := range []string{"test-ingest-key-0123456789", te.home} {
@@ -57,7 +56,7 @@ func TestLaunchdLogIsNotWrittenTwice(t *testing.T) {
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
 	te.GOOS = "darwin"
-	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error { return nil }
+	te.helpers.autoClick = "quit"
 	p := te.Dirs.File(paths.LogFile)
 	must(t, os.MkdirAll(filepath.Dir(p), 0o700))
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
@@ -82,212 +81,93 @@ func TestStatusNamesTheLogFile(t *testing.T) {
 	contains(t, te.out.String(), want+"\n")
 }
 
-// A tray host that comes after the start-up wait (the extension loads late)
-// is noticed when it appears, not at the next 5-minute recheck.
+// A tray host that comes late (the extension loads after login) is noticed
+// when it appears: the helper waits for it by signal and says ready, and
+// the server hears "tray" at once (no 5-minute recheck).
 func TestLateTrayHostIsNoticedWhenItAppears(t *testing.T) {
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
-	var hostUp atomic.Bool
-	appear := make(chan struct{})
-	te.TrayAvailable = func(context.Context) (bool, string) {
-		if hostUp.Load() {
-			return true, ""
-		}
-		return false, "no StatusNotifierWatcher"
-	}
-	var limits []time.Duration
-	var mu sync.Mutex
-	te.TrayWait = func(ctx context.Context, limit time.Duration) bool {
-		mu.Lock()
-		limits = append(limits, limit)
-		mu.Unlock()
-		select {
-		case <-appear:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}
-	shown := make(chan time.Time, 1)
-	te.Tray = func(ctx context.Context, c tray.Controller, u <-chan struct{}, notice string) error {
-		shown <- time.Now()
-		<-ctx.Done()
-		return nil
-	}
+	te.helpers.why = "no StatusNotifierWatcher"
 	cancel, code := te.mainAsync("run")
+	h := te.helpers.ready()
 	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) > 0 && modeOf(r[len(r)-1]) == "headless" })
-	hostUp.Store(true)
 	at := time.Now()
-	close(appear)
-	select {
-	case s := <-shown:
-		if d := s.Sub(at); d > 2*time.Second {
-			t.Fatalf("tray shown %v after the host appeared", d)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the tray was not shown when the host appeared")
-	}
+	h.say(trayproto.Msg{Type: trayproto.TypeReady})
 	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) > 0 && modeOf(r[len(r)-1]) == "tray" })
+	if d := time.Since(at); d > 2*time.Second {
+		t.Fatalf("the server heard tray %v after the icon came up", d)
+	}
 	cancel()
 	eq(t, waitCode(t, code), 0)
-	mu.Lock()
-	defer mu.Unlock()
-	if len(limits) == 0 || limits[0] != trayRecheck {
-		t.Fatalf("waits %v", limits)
-	}
 }
 
-func TestRestartPlan(t *testing.T) {
-	old := restartBase
-	restartBase = 5 * time.Second
-	t.Cleanup(func() { restartBase = old })
-	cases := []struct {
-		prev  int
-		lived time.Duration
-		wait  time.Duration
-		next  int
-	}{
-		{0, 0, 5 * time.Second, 1},               // the first restart: after at least 5 s
-		{0, time.Minute, 0, 1},                   // a run that lived long restarts at once
-		{1, 2 * time.Second, 8 * time.Second, 2}, // 10 s for the second in a row
-		{3, 0, 40 * time.Second, 4},              // doubling
-		{20, 0, restartMax, 21},                  // capped
-		{20, restartReset, 0, 1},                 // a long life starts the count again
-		{9, restartReset - time.Second, restartMax - restartReset + time.Second, 10},
-	}
-	for _, c := range cases {
-		wait, next := restartPlan(c.prev, c.lived)
-		if wait != c.wait || next != c.next {
-			t.Errorf("restartPlan(%d, %v) = %v, %d; want %v, %d", c.prev, c.lived, wait, next, c.wait, c.next)
-		}
-	}
-	// however often it happens, restarts never come faster than one per
-	// restartBase, and after a few at most one per restartMax
-	lifetimes := time.Duration(0)
-	prev := 0
-	for i := 0; i < 20; i++ {
-		wait, next := restartPlan(prev, 0)
-		lifetimes += wait
-		prev = next
-	}
-	if lifetimes < 2*time.Hour {
-		t.Fatalf("20 quick restarts took only %v", lifetimes)
-	}
-}
-
-func TestRestartsFromEnvironment(t *testing.T) {
-	for v, want := range map[string]int{"": 0, "3": 3, "x": 0, "-2": 0} {
-		eq(t, restartsFrom(func(string) string { return v }), want)
-	}
-}
-
-// restartRecorder is a Restart that records instead of replacing the
-// process.
-type restartRecorder struct {
-	mu    sync.Mutex
-	args  []string
-	n     int
-	at    time.Time
-	free  bool // run.lock was free when it was called
-	calls int
-}
-
-func (r *restartRecorder) restart(te *testEnv) func([]string, int) error {
-	return func(args []string, n int) error {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		r.calls++
-		r.args, r.n, r.at = args, n, time.Now()
-		if unlock, err := procs.Lock(te.Dirs.File(paths.LockFile)); err == nil {
-			r.free = true
-			unlock()
-		}
-		return nil
-	}
-}
-
-// The tray's connection to the session bus is lost (GNOME restarts the bus
-// at logout): the run reports no icon, keeps syncing for a while (so that
-// restarts cannot come in a tight loop), then stops its engine, lets go of
-// run.lock and replaces itself with a new run, which waits for a tray host
-// on the new bus.
-func TestSessionLossRestartsInPlace(t *testing.T) {
-	old := restartBase
-	restartBase = 600 * time.Millisecond
-	t.Cleanup(func() { restartBase = old })
+// The helper's connection to the session bus is lost (GNOME restarts the
+// bus at logout): the helper ends with 75 and the agent starts it again
+// within about a second; the main process keeps running, keeps run.lock
+// and keeps syncing, telling the server there is no icon meanwhile
+// (design D14; v0.8.1 restarted the whole process instead).
+func TestSessionLossRestartsTheHelper(t *testing.T) {
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
-	var lostAt time.Time
-	te.Tray = func(ctx context.Context, c tray.Controller, u <-chan struct{}, notice string) error {
-		fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 1 })
-		lostAt = time.Now()
-		return tray.ErrSessionLost
-	}
-	rec := &restartRecorder{}
-	te.Restart = rec.restart(te)
-	eq(t, te.main("run"), 0)
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	eq(t, rec.calls, 1)
-	eq(t, rec.args, []string{"run"})
-	eq(t, rec.n, 1)
-	if !rec.free {
-		t.Fatal("run.lock still held when the run replaced itself")
-	}
-	if d := rec.at.Sub(lostAt); d < 500*time.Millisecond {
-		t.Fatalf("restarted %v after the loss, want at least restartBase", d)
-	}
-	// the engine kept syncing in between, telling the server there is no icon
-	var headless int
-	for _, r := range fs.requests() {
-		if modeOf(r) == "headless" {
-			headless++
-		}
-	}
-	if headless == 0 {
-		t.Fatal("no headless sync between the loss and the restart")
-	}
-	logText := read(t, te.Dirs.File(paths.LogFile))
-	contains(t, logText, "session bus")
-	contains(t, logText, "ai-usage restarting")
-}
-
-func TestSessionLossRestartCountsUp(t *testing.T) {
-	old := restartBase
-	restartBase = 50 * time.Millisecond
-	t.Cleanup(func() { restartBase = old })
-	fs := newFakeServer(t)
-	te := trayEnv(t, fs)
-	te.vars["AI_USAGE_RESTARTS"] = "3"
-	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error { return tray.ErrSessionLost }
-	rec := &restartRecorder{}
-	te.Restart = rec.restart(te)
-	start := time.Now()
-	eq(t, te.main("run"), 0)
-	eq(t, rec.n, 4)
-	eq(t, rec.args, []string{"run"})
-	if d := time.Since(start); d < 400*time.Millisecond {
-		t.Fatalf("fourth restart in a row after %v, want at least 8 x restartBase", d)
-	}
-}
-
-// A run that stops while it waits to restart (SIGTERM) does not restart.
-func TestStopWhileWaitingToRestart(t *testing.T) {
-	fs := newFakeServer(t)
-	te := trayEnv(t, fs)
-	lost := make(chan struct{})
-	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error {
-		close(lost)
-		return tray.ErrSessionLost
-	}
-	rec := &restartRecorder{}
-	te.Restart = rec.restart(te)
 	cancel, code := te.mainAsync("run")
-	<-lost
-	time.Sleep(50 * time.Millisecond)
+	h := te.helpers.ready()
+	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) > 0 && modeOf(r[len(r)-1]) == "tray" })
+	te.helpers.mu.Lock()
+	te.helpers.why = "no StatusNotifierWatcher" // the new bus has no tray host yet
+	te.helpers.mu.Unlock()
+	lostAt := time.Now()
+	h.exit(trayproto.ExitSessionLost)
+	h2 := te.helpers.ready()
+	if d := time.Since(lostAt); d < 900*time.Millisecond || d > 5*time.Second {
+		t.Fatalf("helper started again %v after the loss, want about 1 s", d)
+	}
+	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) > 0 && modeOf(r[len(r)-1]) == "headless" })
+	n := len(fs.requests())
+	h2.say(trayproto.Msg{Type: trayproto.TypeReady}) // the host appeared on the new bus
+	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) > n && modeOf(r[len(r)-1]) == "tray" })
+	if _, err := procs.Lock(te.Dirs.File(paths.LockFile)); err == nil {
+		t.Fatal("run.lock was let go")
+	}
 	cancel()
 	eq(t, waitCode(t, code), 0)
-	eq(t, rec.calls, 0)
+	logText := read(t, te.Dirs.File(paths.LogFile))
+	contains(t, logText, "tray helper none ended (exit 75); starting it again in 1s")
+	if strings.Contains(logText, "ai-usage restarting") || strings.Count(logText, " started (pid ") != 1 {
+		t.Fatalf("the main process restarted:\n%s", logText)
+	}
+}
+
+// A run that stops (SIGTERM) while a helper waits to be started again
+// starts no helper and ends.
+func TestStopWhileAHelperWaitsToRestart(t *testing.T) {
+	fs := newFakeServer(t)
+	te := trayEnv(t, fs)
+	cancel, code := te.mainAsync("run")
+	h := te.helpers.ready()
+	h.exit(3)
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	eq(t, waitCode(t, code), 0)
+	time.Sleep(1500 * time.Millisecond)
+	eq(t, te.helpers.count(), 1)
+}
+
+// When its helper ends the agent itself goes on: killing the main process
+// is what ends a helper (its standard input closes), never the reverse.
+func TestHelperCrashLoopNeverStopsSyncing(t *testing.T) {
+	fs := newFakeServer(t)
+	te := trayEnv(t, fs)
+	cancel, code := te.mainAsync("run")
+	for range 3 {
+		h := te.helpers.ready()
+		h.exit(2)
+	}
+	n := len(fs.requests())
+	h := te.helpers.ready()
+	h.click("refresh")
+	fs.waitFor(t, 10*time.Second, func(r []protocol.Request) bool { return len(r) > n })
+	cancel()
+	eq(t, waitCode(t, code), 0)
 }
 
 // Newest instance wins: a desktop run takes the lock over (the real
@@ -307,7 +187,7 @@ func TestDesktopRunTakesOver(t *testing.T) {
 		unlock, err := procs.LockAs(path, self)
 		return unlock, procs.Identity{PID: 4242, Start: 1}, err
 	}
-	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error { return nil }
+	te.helpers.autoClick = "quit"
 	eq(t, te.main("run"), 0)
 	eq(t, called, 1)
 	contains(t, read(t, te.Dirs.File(paths.LogFile)), "took over from the agent that ran before (pid 4242)")
@@ -335,11 +215,8 @@ func TestRunYieldsToANewerAgent(t *testing.T) {
 	te.TakeOver = func(context.Context, string, procs.Identity) (func(), procs.Identity, error) {
 		return nil, procs.Identity{PID: 4343, Start: 9}, procs.ErrNewer
 	}
-	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error {
-		t.Error("tray shown")
-		return nil
-	}
 	eq(t, te.main("run"), 1)
+	eq(t, te.helpers.count(), 0) // no tray shown
 	contains(t, te.err.String(), "ai-usage: already running (pid 4343, started after this one)")
 	eq(t, len(fs.requests()), 0)
 }
@@ -368,7 +245,6 @@ func TestNewcomerThatCannotRunLeavesTheRunningAgent(t *testing.T) {
 				unlock, err := procs.LockAs(path, self)
 				return unlock, procs.Identity{PID: 4242, Start: 1}, err
 			}
-			te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error { return nil }
 			eq(t, te.main("run"), 1)
 			eq(t, called, 0)
 			eq(t, len(fs.requests()), 0)
@@ -383,7 +259,7 @@ func TestRunScrubsWhatACrashLeft(t *testing.T) {
 	te := trayEnv(t, fs)
 	te.GOOS = "linux"
 	te.vars["XDG_SESSION_TYPE"] = "wayland"
-	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error { return nil }
+	te.helpers.autoClick = "quit"
 	p := te.Dirs.File(paths.LogFile)
 	must(t, os.MkdirAll(filepath.Dir(p), 0o700))
 	crash := "panic: key test-ingest-key-0123456789 under " + te.home + "\n\ngoroutine 1 [running]:\n"

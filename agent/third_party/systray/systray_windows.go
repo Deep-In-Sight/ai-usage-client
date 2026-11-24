@@ -2,7 +2,10 @@
 
 //Modified from fyne.io/systray v1.12.2: the tray icon is loaded at the
 //notification area's size (through the added package trayicon), and
-//loaded icons are cached per file and size (see PATCHED.md).
+//loaded icons are cached per file and size; the icon's id can be set
+//(SetTrayID), and a first add that fails (no taskbar yet) no longer stops
+//the tray: the icon is added later (EnsureIcon, TaskbarCreated). See
+//PATCHED.md.
 
 package systray
 
@@ -244,6 +247,8 @@ type winTray struct {
 	wmTaskbarCreated uint32
 
 	initialized atomic.Bool
+	// added: the notification area has the icon (patched, see PATCHED.md).
+	added atomic.Bool
 }
 
 // isReady checks if the tray as already been initialized. It is not goroutine safe with in regard to the initialization function, but prevents a panic when functions are called too early.
@@ -339,7 +344,9 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 		}
 	case t.wmTaskbarCreated: // on explorer.exe restarts
 		t.muNID.Lock()
-		t.nid.add()
+		// patched (see PATCHED.md): remember whether the add worked, so
+		// that EnsureIcon tries again when it did not
+		t.added.Store(t.nid.add() == nil)
 		t.muNID.Unlock()
 	default:
 		// Calls the default window procedure to provide default processing for any window messages that an application does not process.
@@ -477,13 +484,60 @@ func (t *winTray) initInstance() error {
 	defer t.muNID.Unlock()
 	t.nid = &notifyIconData{
 		Wnd:             windows.Handle(t.window),
-		ID:              100,
+		ID:              trayID, // patched: upstream has 100 here (see PATCHED.md)
 		Flags:           NIF_MESSAGE,
 		CallbackMessage: t.wmSystrayMessage,
 	}
 	t.nid.Size = uint32(unsafe.Sizeof(*t.nid))
 
-	return t.nid.add()
+	// Patched (see PATCHED.md): right after login the taskbar may not be
+	// there yet and the add fails. Upstream returns the error, the tray
+	// never becomes ready (no menu, no updates) and a later TaskbarCreated
+	// adds a bare icon. Here the tray goes on; EnsureIcon and
+	// TaskbarCreated add the icon later.
+	if err := t.nid.add(); err != nil {
+		log.Printf("systray error: unable to add the icon (it is added when the taskbar is ready): %s\n", err)
+		return nil
+	}
+	t.added.Store(true)
+	return nil
+}
+
+// trayID is the icon's id (uID) within the window (patched, see
+// PATCHED.md); SetTrayID changes it before Run.
+var trayID uint32 = 100
+
+// SetTrayID sets the notification icon's id (uID) before Run; it has no
+// effect once the tray has started. Windows keeps the user's show or hide
+// setting for an icon per program and id, so two programs' icons with the
+// same executable need different ids. (Added, see PATCHED.md.)
+func SetTrayID(id uint32) {
+	if wt.window == 0 {
+		trayID = id
+	}
+}
+
+// EnsureIcon reports whether the notification area has the icon. When it
+// does not (the first add failed because the taskbar was not ready, or a
+// re-add after TaskbarCreated failed), it adds it now, with the icon and
+// tooltip set so far. (Added, see PATCHED.md.)
+func EnsureIcon() bool {
+	if !wt.isReady() {
+		return false
+	}
+	if wt.added.Load() {
+		return true
+	}
+	wt.muNID.Lock()
+	defer wt.muNID.Unlock()
+	wt.nid.Size = uint32(unsafe.Sizeof(*wt.nid))
+	// An add that reported failure may still have gone through; then the
+	// add fails and a modify works.
+	if wt.nid.add() == nil || wt.nid.modify() == nil {
+		wt.added.Store(true)
+		return true
+	}
+	return false
 }
 
 func (t *winTray) createMenu() error {

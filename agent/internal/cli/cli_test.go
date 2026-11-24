@@ -20,7 +20,7 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/engine"
-	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayhelper"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/winapp"
 )
 
@@ -72,6 +72,7 @@ type testEnv struct {
 	runner   *runner
 	detached [][]string
 	vars     map[string]string
+	helpers  *fakeHelpers // the tray helpers a run starts
 }
 
 func newEnv(t *testing.T) *testEnv {
@@ -105,6 +106,9 @@ func newEnv(t *testing.T) *testEnv {
 	te.Env.WinApp = noWinApp{}
 	te.Env.Machine = func() (string, string) { return fakeMachineKey, "os" }
 	te.Env.Syncer = func(config.Config, string) engine.Syncer { return refuseAll{} }
+	te.helpers = newFakeHelpers(t)
+	te.Env.Helper = te.helpers.spawn
+	te.Env.OpenURL = func(string) error { return nil }
 	return te
 }
 
@@ -117,7 +121,7 @@ func TestVersion(t *testing.T) {
 	te := newEnv(t)
 	eq(t, te.main("version"), 0)
 	word := "no-tray"
-	if tray.Compiled {
+	if trayhelper.Compiled {
 		word = "tray"
 	}
 	eq(t, te.out.String(), "ai-usage 0.0.0-dev "+runtime.GOOS+"/"+runtime.GOARCH+" "+word+"\n")

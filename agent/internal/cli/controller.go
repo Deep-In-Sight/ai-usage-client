@@ -12,7 +12,7 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/engine"
 )
 
-// controller is the tray's view of the running agent (tray.Controller).
+// controller is what the tray menu shows and changes of the running agent.
 type controller struct {
 	mu      sync.Mutex
 	snap    status.Snapshot
@@ -20,9 +20,7 @@ type controller struct {
 	eng     *engine.Engine
 	toggle  autostart.Toggler
 	exe     string
-	iconDir string
 	offFile string // marker: start at login turned off here (install keeps it off)
-	remove  func() error
 }
 
 func newController(cfg config.Config, initial status.Snapshot, eng *engine.Engine, toggle autostart.Toggler) *controller {
@@ -82,12 +80,3 @@ func (c *controller) SetAutostart(on bool) error {
 	}
 	return nil
 }
-
-func (c *controller) Remove() error {
-	if c.remove == nil {
-		return errors.New("not available")
-	}
-	return c.remove()
-}
-
-func (c *controller) IconDir() string { return c.iconDir }

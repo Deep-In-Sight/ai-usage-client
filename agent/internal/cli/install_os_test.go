@@ -247,13 +247,14 @@ func TestRemovalSteps(t *testing.T) {
 	}{
 		// notify-server (the uninstall sync) comes after every agent of this
 		// user stopped (a running one would undo the retirement with its
-		// next sync, design D8 rules 4-5) and before config.json is gone
+		// next sync, design D8 rules 4-5) and before config.json is gone;
+		// the tray's Remove first ends the tray helpers (design 6.4)
 		{"windows", false, []string{"stop", "kill", "notify-server", "unregister-autostart", "unregister-app", "remove-exe", "remove-install-dir", "remove-data"}},
-		{"windows", true, []string{"stop-engine", "notify-server", "unlock", "unregister-autostart", "unregister-app", "remove-exe", "remove-install-dir", "remove-data"}},
+		{"windows", true, []string{"stop-helpers", "stop-engine", "notify-server", "unlock", "unregister-autostart", "unregister-app", "remove-exe", "remove-install-dir", "remove-data"}},
 		{"darwin", false, []string{"stop", "kill", "notify-server", "unregister-autostart", "remove-data"}},
-		{"darwin", true, []string{"stop-engine", "notify-server", "unlock", "remove-plist", "remove-data", "bootout-self"}},
+		{"darwin", true, []string{"stop-helpers", "stop-engine", "notify-server", "unlock", "remove-plist", "remove-data", "bootout-self"}},
 		{"linux", false, []string{"stop", "kill", "notify-server", "unregister-autostart", "remove-exe", "remove-data"}},
-		{"linux", true, []string{"stop-engine", "notify-server", "unlock", "unregister-autostart", "remove-exe", "remove-data"}},
+		{"linux", true, []string{"stop-helpers", "stop-engine", "notify-server", "unlock", "unregister-autostart", "remove-exe", "remove-data"}},
 	}
 	for _, c := range cases {
 		eq(t, removalSteps(c.goos, c.inProcess), c.want)

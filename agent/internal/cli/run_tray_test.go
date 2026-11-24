@@ -10,11 +10,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,10 +23,13 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/engine"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
-	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayhelper"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
 )
 
 // fakeServer records sync requests and answers as a standby with a short
@@ -154,15 +157,6 @@ func trayEnv(t *testing.T, fs *fakeServer) *testEnv {
 	te.Syncer = func(cfg config.Config, ua string) engine.Syncer {
 		return onlyTo{base: fs.URL, next: protocol.NewClient(cfg.IngestKey, ua, nil)}
 	}
-	te.TrayAvailable = func(context.Context) (bool, string) { return true, "" }
-	// No tray host ever appears by itself (never the real session bus).
-	te.TrayWait = func(ctx context.Context, limit time.Duration) bool {
-		select {
-		case <-ctx.Done():
-		case <-time.After(limit):
-		}
-		return false
-	}
 	return te
 }
 
@@ -189,19 +183,18 @@ func waitCode(t *testing.T, ch <-chan int) int {
 
 func modeOf(r protocol.Request) string { return string(r.Client.Mode) }
 
+// The engine syncs from the start, before any tray icon is up; the server
+// hears "headless" until a helper shows its icon, then "tray" (design 6.4).
 func TestRunTrayModeSyncsBeforeTrayReady(t *testing.T) {
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
-	trayCalled := make(chan struct{})
-	te.Tray = func(ctx context.Context, c tray.Controller, updates <-chan struct{}, notice string) error {
-		close(trayCalled)
-		<-ctx.Done() // a tray that never becomes ready
-		return nil
-	}
+	te.helpers.why = "no StatusNotifierWatcher" // a helper whose icon is not up
 	cancel, code := te.mainAsync("run")
+	h := te.helpers.ready()
 	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 1 })
-	eq(t, modeOf(fs.requests()[0]), "tray")
-	<-trayCalled
+	eq(t, modeOf(fs.requests()[0]), "headless")
+	h.say(trayproto.Msg{Type: trayproto.TypeReady})
+	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) > 0 && modeOf(r[len(r)-1]) == "tray" })
 	cancel()
 	eq(t, waitCode(t, code), 0)
 }
@@ -209,11 +202,7 @@ func TestRunTrayModeSyncsBeforeTrayReady(t *testing.T) {
 func TestRunTrayUnavailableFallsBackToHeadless(t *testing.T) {
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
-	te.TrayAvailable = func(context.Context) (bool, string) { return false, "no StatusNotifierWatcher" }
-	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error {
-		t.Error("Tray called")
-		return nil
-	}
+	te.helpers.why = "no StatusNotifierWatcher"
 	cancel, code := te.mainAsync("run")
 	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool {
 		return len(r) > 0 && modeOf(r[len(r)-1]) == "headless"
@@ -229,9 +218,26 @@ func TestRunTrayUnavailableFallsBackToHeadless(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	waitLog(t, te, "no tray (no StatusNotifierWatcher): running without an icon")
 	cancel()
 	eq(t, waitCode(t, code), 0)
 	contains(t, te.err.String(), "no StatusNotifierWatcher")
+}
+
+// waitLog waits until agent.log has the text.
+func waitLog(t *testing.T, te *testEnv, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		b, _ := os.ReadFile(te.Dirs.File(paths.LogFile))
+		if strings.Contains(string(b), want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%q not in agent.log:\n%s", want, b)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func TestRunShowsNoticeOnce(t *testing.T) {
@@ -249,13 +255,32 @@ func TestRunShowsNoticeOnce(t *testing.T) {
 		marker := te.Dirs.File(paths.NotifyFile)
 		must(t, os.WriteFile(marker, []byte("1.0.0"), 0o600))
 		var got []string
-		te.Tray = func(ctx context.Context, c tray.Controller, u <-chan struct{}, notice string) error {
-			got = append(got, notice)
-			return nil // Quit at once
+		var mu sync.Mutex
+		te.helpers.onReady = func(h *fakeHelper) {
+			// the notice comes before the first view: a helper shows it
+			// once its icon is up (macOS: the menu bar title for a while)
+			n := h.noticesGot()
+			if goos == "darwin" {
+				n = nil
+				deadline := time.Now().Add(5 * time.Second)
+				for time.Now().Before(deadline) {
+					if v := h.lastView(); v.Title == want {
+						n = []string{want}
+						break
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+			}
+			mu.Lock()
+			got = append(got, strings.Join(n, ""))
+			mu.Unlock()
+			h.click("quit")
 		}
 		eq(t, te.main("run"), 0)
 		eq(t, te.main("run"), 0)
+		mu.Lock()
 		eq(t, got, []string{want, ""})
+		mu.Unlock()
 		if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("%s: marker still there", goos)
 		}
@@ -265,10 +290,6 @@ func TestRunShowsNoticeOnce(t *testing.T) {
 func TestHeadlessRunDropsNoticeMarker(t *testing.T) {
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
-	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error {
-		t.Error("Tray called")
-		return nil
-	}
 	marker := te.Dirs.File(paths.NotifyFile)
 	must(t, os.WriteFile(marker, []byte("1.0.0"), 0o600))
 	cancel, code := te.mainAsync("run", "--headless")
@@ -279,37 +300,28 @@ func TestHeadlessRunDropsNoticeMarker(t *testing.T) {
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("marker still there")
 	}
+	eq(t, te.helpers.count(), 0) // a headless run starts no helper
 }
 
 func TestLinuxWithoutDesktopRunsHeadless(t *testing.T) {
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
 	te.GOOS = "linux" // no XDG_* variables
-	te.TrayAvailable = func(context.Context) (bool, string) {
-		t.Error("TrayAvailable called")
-		return false, ""
-	}
 	cancel, code := te.mainAsync("run")
 	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 1 })
 	eq(t, modeOf(fs.requests()[0]), "headless")
 	cancel()
 	eq(t, waitCode(t, code), 0)
+	eq(t, te.helpers.count(), 0)
 }
 
 func TestControllerRefreshSendsWantFresh(t *testing.T) {
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
-	ctrlCh := make(chan tray.Controller, 1)
-	te.Tray = func(ctx context.Context, c tray.Controller, u <-chan struct{}, notice string) error {
-		ctrlCh <- c
-		<-ctx.Done()
-		return nil
-	}
 	cancel, code := te.mainAsync("run")
-	c := <-ctrlCh
-	eq(t, c.IconDir(), te.Dirs.File(paths.TrayIconsDir))
+	h := te.helpers.ready()
 	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 1 })
-	c.Refresh()
+	h.click("refresh")
 	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 2 && r[len(r)-1].WantFresh })
 	cancel()
 	eq(t, waitCode(t, code), 0)
@@ -323,29 +335,28 @@ func TestControllerDashboardURL(t *testing.T) {
 	eq(t, c.DashboardURL(), "http://ai-usage.local")
 	eq(t, c.Snapshot().Mode, "starting")
 	eq(t, c.HasToggle(), false)
-	if err := c.Remove(); err == nil {
-		t.Fatal("Remove should not be available yet")
-	}
 }
 
 func TestQuitExitsZeroAndUnlocks(t *testing.T) {
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
-	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error { return nil }
+	te.helpers.autoClick = "quit"
 	eq(t, te.main("run"), 0)
 	unlock, err := procs.Lock(te.Dirs.File(paths.LockFile))
 	must(t, err)
 	unlock()
 }
 
+// A helper that cannot start leaves the agent collecting without an icon.
 func TestTrayErrorFallsBackToHeadless(t *testing.T) {
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
-	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error { return errors.New("tray broke") }
+	te.helpers.fail = errors.New("tray broke")
 	cancel, code := te.mainAsync("run")
 	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool {
 		return len(r) > 0 && modeOf(r[len(r)-1]) == "headless"
 	})
+	waitLog(t, te, "tray broke")
 	cancel()
 	eq(t, waitCode(t, code), 0)
 	contains(t, te.err.String(), "tray broke")
@@ -358,8 +369,8 @@ func TestVersionOutputNamesTray(t *testing.T) {
 	if !re.MatchString(te.out.String()) {
 		t.Fatalf("%q", te.out.String())
 	}
-	if tray.Compiled != strings.HasSuffix(te.out.String(), " tray\n") {
-		t.Fatal("tray word does not follow tray.Compiled")
+	if trayhelper.Compiled != strings.HasSuffix(te.out.String(), " tray\n") {
+		t.Fatal("tray word does not follow trayhelper.Compiled")
 	}
 }
 
@@ -381,11 +392,20 @@ func TestTrayRemoveRemovesEverything(t *testing.T) {
 	te.WinApp = &fakeWinApp{rec: rec}
 	must(t, os.MkdirAll(filepath.Dir(te.Dirs.InstallExe), 0o755))
 	must(t, os.WriteFile(te.Dirs.InstallExe, []byte("BIN"), 0o755))
-	te.Tray = func(ctx context.Context, c tray.Controller, u <-chan struct{}, notice string) error {
-		fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 1 })
-		return c.Remove() // then Quit
+	cancel, code := te.mainAsync("run")
+	defer cancel()
+	h := te.helpers.ready()
+	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 1 })
+	h.click("remove")
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(itemText(h.lastView(), "remove"), "again") {
+		if time.Now().After(deadline) {
+			t.Fatalf("Remove not armed: %q", itemText(h.lastView(), "remove"))
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	eq(t, te.main("run"), 0)
+	h.click("remove") // the second click removes
+	eq(t, waitCode(t, code), 0)
 	for _, p := range []string{te.Dirs.Data, te.Dirs.InstallExe} {
 		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("%s left", p)
@@ -395,13 +415,20 @@ func TestTrayRemoveRemovesEverything(t *testing.T) {
 	if !slices.Contains(calls, "main.unregister") || !slices.Contains(calls, "winapp.unregister") {
 		t.Fatalf("%v", calls)
 	}
+	// the helper was asked to quit before anything was removed
+	select {
+	case <-h.ended:
+		eq(t, h.code, 0)
+	default:
+		t.Fatal("the helper is still running")
+	}
 }
 
 func TestMacLogIsCutAtStart(t *testing.T) {
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
 	te.GOOS = "darwin"
-	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error { return nil }
+	te.helpers.autoClick = "quit"
 	logPath := te.Dirs.File(paths.LogFile) // launchd appends here
 	must(t, os.WriteFile(logPath, make([]byte, 2<<20), 0o600))
 	eq(t, te.main("run"), 0)
@@ -412,32 +439,75 @@ func TestMacLogIsCutAtStart(t *testing.T) {
 	}
 }
 
+// A helper that waited for its tray host and then shows its icon switches
+// the agent to "tray".
 func TestLateTrayHostIsPickedUp(t *testing.T) {
-	old := trayRecheck
-	trayRecheck = 50 * time.Millisecond
-	t.Cleanup(func() { trayRecheck = old })
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
-	var checks atomic.Int32
-	te.TrayAvailable = func(context.Context) (bool, string) {
-		if checks.Add(1) < 3 {
-			return false, "no StatusNotifierWatcher"
-		}
-		return true, ""
-	}
-	shown := make(chan struct{})
-	te.Tray = func(ctx context.Context, c tray.Controller, u <-chan struct{}, notice string) error {
-		close(shown)
-		<-ctx.Done()
-		return nil
-	}
+	te.helpers.why = "no StatusNotifierWatcher"
 	cancel, code := te.mainAsync("run")
-	select {
-	case <-shown:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the tray never came")
-	}
+	h := te.helpers.ready()
+	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) > 0 && modeOf(r[len(r)-1]) == "headless" })
+	h.say(trayproto.Msg{Type: trayproto.TypeReady})
 	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) > 0 && modeOf(r[len(r)-1]) == "tray" })
+	waitLog(t, te, "tray found: showing the icon")
 	cancel()
 	eq(t, waitCode(t, code), 0)
+}
+
+// CI builds can be told to show a second helper (testHelpers); any other
+// build ignores the switch.
+func TestTestHelpersOnlyInCIBuilds(t *testing.T) {
+	te := newEnv(t)
+	te.vars[testHelpersEnv] = "claude, codex,codex,other"
+	eq(t, len(testHelpers(te.Env)), 0)
+	asCIBuild(t)
+	eq(t, testHelpers(te.Env), []provider.ID{provider.Claude, provider.Codex})
+}
+
+// Two helpers at once (a fake second provider): both get the same menu,
+// each its own icon; the one not signed in shows the neutral ring; a click
+// in either is handled; both end with the agent.
+func TestTwoHelpersShowOneMenu(t *testing.T) {
+	asCIBuild(t)
+	fs := newFakeServer(t)
+	te := trayEnv(t, fs)
+	te.vars[testHelpersEnv] = "claude,codex"
+	cancel, code := te.mainAsync("run")
+	a, b := te.helpers.ready(), te.helpers.ready()
+	ids := map[provider.ID]*fakeHelper{a.id: a, b.id: b}
+	n, c := ids[provider.Claude], ids[provider.Codex]
+	if n == nil || c == nil || n.uid != 100 || c.uid != 101 {
+		t.Fatalf("helpers %q/%d %q/%d", a.id, a.uid, b.id, b.uid)
+	}
+	eq(t, c.lastView().Icon.Provider, "") // nobody signed in: rings
+	eq(t, n.lastView().Icon.Provider, "")
+	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 1 })
+	// both get the same menu (each change reaches both)
+	deadline := time.Now().Add(5 * time.Second)
+	for !reflect.DeepEqual(c.lastView().Items, n.lastView().Items) || itemText(n.lastView(), "server") == text.Connecting {
+		if time.Now().After(deadline) {
+			t.Fatalf("menus differ:\n%+v\n%+v", c.lastView().Items, n.lastView().Items)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	before := len(fs.requests())
+	c.click("refresh")
+	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) > before && r[len(r)-1].WantFresh })
+	cancel()
+	eq(t, waitCode(t, code), 0)
+	for _, h := range []*fakeHelper{n, c} {
+		select {
+		case <-h.ended:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("helper %q still running", h.id)
+		}
+	}
+}
+
+// asCIBuild makes testHelpers see a CI build for this test.
+func asCIBuild(t *testing.T) {
+	old := buildVersion
+	buildVersion = func() string { return "0.0.0-ci" }
+	t.Cleanup(func() { buildVersion = old })
 }

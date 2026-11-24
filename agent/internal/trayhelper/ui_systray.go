@@ -1,0 +1,102 @@
+//go:build !darwin || cgo
+
+package trayhelper
+
+import (
+	"log"
+	"runtime"
+
+	"fyne.io/systray"
+)
+
+// Compiled is true: this build has a tray.
+const Compiled = true
+
+// systrayUI is the patched fyne systray copy (third_party/systray).
+type systrayUI struct{ iconDir string }
+
+func newUI(o Options) ui {
+	setTrayID(o.UID)
+	return systrayUI{iconDir: o.IconDir}
+}
+
+func (systrayUI) Run(onReady, onExit func()) { systray.Run(onReady, onExit) }
+func (systrayUI) Quit()                      { systray.Quit() }
+func (systrayUI) AddSeparator()              { systray.AddSeparator() }
+func (systrayUI) Reset()                     { systray.ResetMenu() }
+func (systrayUI) SetNextToIcon(s string)     { setNextToIcon(s) }
+func (systrayUI) SetTooltip(s string)        { systray.SetTooltip(s) }
+func (systrayUI) Lost() <-chan struct{}      { return sessionLost() }
+func (systrayUI) Shown() bool                { return iconShown() }
+func (systrayUI) IconSize() int              { return trayIconSize() }
+
+func (u systrayUI) AddItem(_ string, checkbox bool) uiItem {
+	if checkbox {
+		return systrayItem{systray.AddMenuItemCheckbox("", "", false), u.iconDir}
+	}
+	return systrayItem{systray.AddMenuItem("", ""), u.iconDir}
+}
+
+// SetIcon shows img. On Windows the library needs a file: it gets one of
+// ours in the helper's icon folder (see iconFile) instead of writing to
+// %TEMP% itself.
+func (u systrayUI) SetIcon(img []byte) {
+	if runtime.GOOS != "windows" || u.iconDir == "" {
+		systray.SetIcon(img)
+		return
+	}
+	p, err := iconFile(u.iconDir, img, iconsKeep)
+	if err == nil {
+		err = systray.SetIconFromFilePath(p)
+	}
+	if err != nil {
+		log.Printf("icon: %v", err)
+	}
+}
+
+type systrayItem struct {
+	m       *systray.MenuItem
+	iconDir string
+}
+
+func (i systrayItem) SetTitle(s string) { i.m.SetTitle(s) }
+func (i systrayItem) SetEnabled(b bool) {
+	if b {
+		i.m.Enable()
+	} else {
+		i.m.Disable()
+	}
+}
+func (i systrayItem) SetVisible(b bool) {
+	if b {
+		i.m.Show()
+	} else {
+		i.m.Hide()
+	}
+}
+func (i systrayItem) SetChecked(b bool) {
+	if b {
+		i.m.Check()
+	} else {
+		i.m.Uncheck()
+	}
+}
+func (i systrayItem) Clicked() <-chan struct{} { return i.m.ClickedCh }
+
+// SetImage sets the item's 16 px picture (Windows: from a file of ours).
+func (i systrayItem) SetImage(img []byte) {
+	if len(img) == 0 {
+		return
+	}
+	if runtime.GOOS != "windows" || i.iconDir == "" {
+		i.m.SetIcon(img)
+		return
+	}
+	p, err := iconFile(i.iconDir, img, iconsKeep)
+	if err == nil {
+		err = i.m.SetIconFromFilePath(p)
+	}
+	if err != nil {
+		log.Printf("menu icon: %v", err)
+	}
+}

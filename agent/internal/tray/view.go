@@ -1,5 +1,6 @@
-// Package tray is the tray icon and its menu. view.go is the pure part:
-// which texts, icon and items to show for a status snapshot.
+// Package tray is what the tray icons and their menu show for a status
+// snapshot (the helpers in package trayhelper draw it), and opening a web
+// page from the menu.
 package tray
 
 import (
@@ -11,7 +12,9 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/icon"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/supervisor"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/version"
 )
@@ -271,4 +274,50 @@ func truncateUTF16(s string, n int) string {
 		b.WriteRune(r)
 	}
 	return b.String() + "…"
+}
+
+// protoIDs are the helper protocol's ids of the view's items.
+var protoIDs = map[ItemID]string{
+	ItemNewVersion: "newversion", ItemAccount: "h.claude", ItemWeekly: "r.claude.0", ItemScoped: "r.claude.1",
+	ItemSignIn: "p.claude", ItemServer: "server", ItemDashboard: "dashboard", ItemRefresh: "refresh",
+	ItemAutostart: "autostart", ItemRemove: "remove", ItemQuit: "quit",
+}
+
+// ItemOf is the view's item for a protocol id (false for ids it has none
+// for).
+func ItemOf(id string) (ItemID, bool) {
+	for k, v := range protoIDs {
+		if v == id {
+			return k, true
+		}
+	}
+	return 0, false
+}
+
+// Menu is v's menu as the helpers get it: every trayproto.ItemIDs item in
+// order; those the view has none for are hidden.
+func Menu(v View) []trayproto.Item {
+	byID := map[string]Item{}
+	for _, it := range v.Items {
+		byID[protoIDs[it.ID]] = it
+	}
+	out := make([]trayproto.Item, 0, len(trayproto.ItemIDs))
+	for _, id := range trayproto.ItemIDs {
+		it, ok := byID[id]
+		p := trayproto.Item{ID: id}
+		if ok {
+			p.Text, p.Enabled, p.Visible, p.Checked = it.Text, it.Enabled, it.Visible, it.Checked
+			p.Checkbox = it.ID == ItemAutostart
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// IconView is v's icon, title and tooltip as one helper gets them.
+func IconView(v View) supervisor.IconView {
+	return supervisor.IconView{
+		Icon:  trayproto.Icon{Provider: string(v.Icon.Provider), Percent: v.Icon.Percent, Level: string(v.Icon.Level), Stale: v.Icon.Stale},
+		Title: v.Title, Tooltip: v.Tooltip,
+	}
 }

@@ -8,11 +8,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/anthropic"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/autostart"
@@ -25,10 +22,11 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider/claude"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/supervisor"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/backlog"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/engine"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
-	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayhelper"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/version"
 )
 
@@ -41,7 +39,6 @@ func runCmd(env Env, args []string) int {
 		}
 		headlessFlag = true
 	}
-	started := env.Clock.Now()
 	// 1: the mode this process starts in.
 	headless := headlessFlag || env.goos() == "linux" && osinfo.Headless(env.Getenv)
 	clientMode := "tray"
@@ -89,6 +86,9 @@ func runCmd(env Env, args []string) int {
 	info := osinfo.Current()
 	scrub := logfile.NewScrubber(logfile.Personal{Home: env.Dirs.Home, User: info.OSUser, Host: info.Hostname}, cfg.IngestKey)
 	logOut, closeLog := logOutput(env, scrub)
+	// The engine, the tray helpers' copied output and the standard logger
+	// write from several goroutines: one line at a time.
+	logOut = &lockedWriter{w: logOut}
 	logger := log.New(logOut, "", 0)
 	// The tray and the systray copy log through the standard logger.
 	stdOut, stdFlags := log.Writer(), log.Flags()
@@ -132,7 +132,6 @@ func runCmd(env Env, args []string) int {
 	}
 	ctrl := newController(cfg, initial, nil, toggle)
 	ctrl.exe = env.Dirs.InstallExe
-	ctrl.iconDir = env.Dirs.File(paths.TrayIconsDir)
 	ctrl.offFile = env.Dirs.File(paths.AutostartOffFile)
 	updates := make(chan struct{}, 1)
 
@@ -148,7 +147,8 @@ func runCmd(env Env, args []string) int {
 		LatestPath:       func(id provider.ID) string { return env.Dirs.File(paths.LatestFileFor(id)) },
 		LegacyLatestPath: env.Dirs.File(paths.LatestFile),
 		Identity: engine.Identity{DeviceID: deviceID, Hostname: info.Hostname, OSUser: info.OSUser, OS: info.OS,
-			OSVersion: info.OSVersion, Arch: info.Arch, Version: version.Version, Mode: clientMode,
+			// until a tray helper shows an icon, the agent has none
+			OSVersion: info.OSVersion, Arch: info.Arch, Version: version.Version, Mode: "headless",
 			MachineKey: machineKey, MachineSource: machineSource},
 		// 2: status file, the tray's snapshot and a wake-up for the tray.
 		Publish: func(s status.Snapshot) {
@@ -184,18 +184,6 @@ func runCmd(env Env, args []string) int {
 		logger.Print("ai-usage stopped")
 		return 0
 	}
-	// The tray's Remove: this process stops its engine and lets go of
-	// run.lock and the log before removing everything.
-	ctrl.remove = func() error {
-		r := newRemover(env)
-		r.stopEngine = func() { cancelEngine(); <-engineDone }
-		r.unlock = release
-		err := r.run(removalSteps(env.goos(), true))
-		if err != nil {
-			fmt.Fprintln(env.Stderr, "ai-usage: remove:", err)
-		}
-		return err
-	}
 	marker := env.Dirs.File(paths.NotifyFile)
 	withoutTray := func() int {
 		_ = os.Remove(marker)
@@ -207,81 +195,36 @@ func runCmd(env Env, args []string) int {
 	if headless {
 		return withoutTray()
 	}
-	// 5: tray, when there is one.
-	available := env.TrayAvailable
-	if available == nil {
-		available = func(ctx context.Context) (bool, string) { return tray.Available(ctx, env.Getenv) }
-	}
-	ok, reason := available(ctx)
-	if ctx.Err() != nil {
-		return finish()
-	}
-	if !ok {
+	// 5: tray helpers (design 6.4). The engine reports no icon until a
+	// helper shows one.
+	if !trayhelper.Compiled {
 		e.SetClientMode("headless")
-		logger.Printf("no tray (%s): running without an icon", reason)
-		_ = os.Remove(marker)
-		// The tray host can come later (an extension switched on after
-		// login): wait for it to appear on the bus, checking again at
-		// least every trayRecheck.
-		wait := env.TrayWait
-		if wait == nil {
-			wait = tray.WaitForHost
-		}
-		for !ok {
-			wait(ctx, trayRecheck)
-			if ctx.Err() != nil {
-				return finish()
-			}
-			ok, _ = available(ctx)
-			if ctx.Err() != nil {
-				return finish()
-			}
-		}
-		e.SetClientMode("tray")
-		logger.Print("tray found: showing the icon")
+		logger.Print("no tray (tray not compiled into this build): running without an icon")
+		return withoutTray()
 	}
+	e.SetClientMode("headless")
 	notice := ""
 	if _, err := os.Stat(marker); err == nil {
 		_ = os.Remove(marker)
 		notice = text.Notice(env.goos())
 	}
-	show := env.Tray
-	if show == nil {
-		show = tray.Run
-	}
-	err = show(ctx, ctrl, updates, notice)
-	if errors.Is(err, tray.ErrSessionLost) {
-		// The tray cannot reconnect: this run is replaced by a new one,
-		// which connects to the session bus again and waits for a tray
-		// host. Meanwhile (and while a restart wait keeps restarts from
-		// coming in a loop) the engine goes on.
-		e.SetClientMode("headless")
-		wait, next := restartPlan(restartsFrom(env.Getenv), env.Clock.Now().Sub(started))
-		logger.Printf("tray: the connection to the session bus was lost; restarting in %s", wait.Round(time.Second))
-		select {
-		case <-ctx.Done():
-			return finish()
-		case <-env.Clock.After(wait):
+	sup := supervisor.New(supervisor.Options{Spawn: env.helperSpawner(logger), Clock: env.Clock, Log: logger})
+	loop := &trayLoop{env: env, ctrl: ctrl, sup: sup, updates: updates, log: logger, setMode: e.SetClientMode,
+		known: []provider.ID{provider.Claude}, extra: testHelpers(env)}
+	// The tray's Remove: the helpers end, this process stops its engine
+	// and lets go of run.lock and the log before removing everything.
+	loop.remove = func() error {
+		r := newRemover(env)
+		r.stopHelpers = sup.Stop
+		r.stopEngine = func() { cancelEngine(); <-engineDone }
+		r.unlock = release
+		err := r.run(removalSteps(env.goos(), true))
+		if err != nil {
+			fmt.Fprintln(env.Stderr, "ai-usage: remove:", err)
 		}
-		cancelEngine()
-		<-engineDone
-		logger.Print("ai-usage restarting")
-		release()
-		restart := env.Restart
-		if restart == nil {
-			restart = restartSelf
-		}
-		if err := restart(append([]string{"run"}, args...), next); err != nil {
-			fmt.Fprintln(env.Stderr, "ai-usage: restart:", err)
-			return 1
-		}
-		return 0
+		return err
 	}
-	if err != nil {
-		e.SetClientMode("headless")
-		logger.Printf("tray: %v: running without an icon", err)
-		return withoutTray()
-	}
+	loop.run(ctx, notice)
 	// 6: Quit, Remove or a signal.
 	return finish()
 }
@@ -329,60 +272,6 @@ type newerError struct{ holder procs.Identity }
 
 func (e *newerError) Error() string { return "held by a newer run" }
 
-// Restarts after a lost session bus: each run lives at least restartBase
-// doubled for every quick restart before it (at most restartMax), so that a
-// bus that keeps failing cannot make restarts spin. A run that lived
-// restartReset starts the count again.
-var (
-	restartBase  = 5 * time.Second
-	restartMax   = 10 * time.Minute
-	restartReset = 10 * time.Minute
-)
-
-// restartPlan: how long a run that lived for lived waits before it
-// restarts, and the count the new run gets, after prev quick restarts.
-func restartPlan(prev int, lived time.Duration) (wait time.Duration, next int) {
-	if lived >= restartReset || prev < 0 {
-		prev = 0
-	}
-	life := restartMax
-	if prev < 20 {
-		life = min(restartBase<<prev, restartMax)
-	}
-	return max(0, life-lived), prev + 1
-}
-
-// restartsFrom reads the count a restarted run was given.
-func restartsFrom(getenv func(string) string) int {
-	n, err := strconv.Atoi(getenv(restartsEnv))
-	if err != nil || n < 0 {
-		return 0
-	}
-	return n
-}
-
-// restartEnviron is the environment of the restarted run: environ with
-// restartsEnv set to n. The session bus address stays as it is, even if
-// nothing answers there right now: a bus that restarts comes back at the
-// same address. The wait for a tray host moves to the runtime folder's bus
-// when the address stays dead (tray.SessionBusFallback, review m4).
-func restartEnviron(environ []string, n int) []string {
-	out := make([]string, 0, len(environ)+1)
-	for _, kv := range environ {
-		if !strings.HasPrefix(kv, restartsEnv+"=") {
-			out = append(out, kv)
-		}
-	}
-	return append(out, restartsEnv+"="+strconv.Itoa(n))
-}
-
-// restartsEnv carries the count of quick restarts to the new run.
-const restartsEnv = "AI_USAGE_RESTARTS"
-
-// trayRecheck is how often a run without a tray looks for one again even
-// when no tray host appeared on the bus.
-var trayRecheck = 5 * time.Minute
-
 // logOutput is where run logs, every line scrubbed: the data folder's
 // agent.log (each line stamped, moved to agent.log.1 past 1 MiB, Go crash
 // reports included, scrubbed at the next start) and standard error. The agent that install starts has
@@ -410,6 +299,18 @@ func logOutput(env Env, scrub *logfile.Scrubber) (io.Writer, func()) {
 	// The file first: io.MultiWriter stops at the first failing writer, and
 	// a GUI process's standard error is not valid.
 	return scrub.Writer(io.MultiWriter(f, env.Stderr)), func() { f.Close() }
+}
+
+// lockedWriter writes one Write at a time.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(b)
 }
 
 // sameFile: w is an open file that is the file at p.

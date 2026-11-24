@@ -25,7 +25,8 @@ import (
 
 // removalSteps is the order in which everything is removed: by "uninstall"
 // (another process) or by the tray's Remove (inside the running agent,
-// which must first stop its engine and let go of run.lock).
+// which must first end its tray helpers, stop its engine and let go of
+// run.lock; design 6.4).
 // notify-server, the uninstall sync, comes once no agent of this user runs
 // any more (a running one would undo the server's retirement with its next
 // sync, design D8 rules 4-5) and while config.json is still there.
@@ -34,16 +35,16 @@ func removalSteps(goos string, inProcess bool) []string {
 	case goos == "windows" && !inProcess:
 		return []string{"stop", "kill", "notify-server", "unregister-autostart", "unregister-app", "remove-exe", "remove-install-dir", "remove-data"}
 	case goos == "windows":
-		return []string{"stop-engine", "notify-server", "unlock", "unregister-autostart", "unregister-app", "remove-exe", "remove-install-dir", "remove-data"}
+		return []string{"stop-helpers", "stop-engine", "notify-server", "unlock", "unregister-autostart", "unregister-app", "remove-exe", "remove-install-dir", "remove-data"}
 	case goos == "darwin" && !inProcess:
 		return []string{"stop", "kill", "notify-server", "unregister-autostart", "remove-data"}
 	case goos == "darwin":
 		// bootout ends this process, so it comes last.
-		return []string{"stop-engine", "notify-server", "unlock", "remove-plist", "remove-data", "bootout-self"}
+		return []string{"stop-helpers", "stop-engine", "notify-server", "unlock", "remove-plist", "remove-data", "bootout-self"}
 	case !inProcess:
 		return []string{"stop", "kill", "notify-server", "unregister-autostart", "remove-exe", "remove-data"}
 	}
-	return []string{"stop-engine", "notify-server", "unlock", "unregister-autostart", "remove-exe", "remove-data"}
+	return []string{"stop-helpers", "stop-engine", "notify-server", "unlock", "unregister-autostart", "remove-exe", "remove-data"}
 }
 
 // notifyTimeout bounds the uninstall sync: removal waits for it this long
@@ -93,10 +94,11 @@ func notifyServer(env Env) {
 
 // remover carries out removal steps. Linger is never touched.
 type remover struct {
-	env        Env
-	methods    []autostart.Method
-	stopEngine func()
-	unlock     func()
+	env         Env
+	methods     []autostart.Method
+	stopHelpers func()
+	stopEngine  func()
+	unlock      func()
 }
 
 func newRemover(env Env) *remover {
@@ -169,6 +171,10 @@ func (r *remover) step(name string) error {
 			return os.RemoveAll(env.Dirs.Data)
 		}
 		return fmt.Errorf("unexpected data folder, left in place: %s", env.Dirs.Data)
+	case "stop-helpers":
+		if r.stopHelpers != nil {
+			r.stopHelpers()
+		}
 	case "stop-engine":
 		if r.stopEngine != nil {
 			r.stopEngine()

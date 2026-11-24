@@ -14,6 +14,9 @@ exe="$data/ai-usage"
 tmo() { perl -e 'alarm shift; exec @ARGV' "$@"; } # no timeout(1) on macOS
 oneliner() { tmo 180 sh -c "curl -fsSL $BASE/files/install-ci.sh | sh"; }
 agent_count() { pgrep -f "^$exe run" | wc -l | tr -d ' '; }
+# the tray helpers (design 6.4) and those whose parent is a pid
+helper_count() { pgrep -f "^$exe tray-helper" | wc -l | tr -d ' '; }
+children() { local p n=0; for p in $(pgrep -f "^$exe tray-helper"); do [ "$(ps -o ppid= -p "$p" | tr -d ' ')" = "$1" ] && n=$((n + 1)); done; echo $n; }
 la_print() { launchctl print "gui/$(id -u)/$label" 2>&1; }
 la_pid() { la_print | awk -F'= ' '/^[[:space:]]*pid = /{ print $2; exit }'; }
 la_state() { la_print | awk -F'= ' '/^[[:space:]]*state = /{ print $2; exit }'; }
@@ -72,6 +75,32 @@ pid=$(la_pid)
 l=$(lsof -nP -a -p "$pid" -iTCP -sTCP:LISTEN 2>/dev/null); u=$(lsof -nP -a -p "$pid" -iUDP 2>/dev/null)
 if [ -n "$pid" ] && [ -z "$l" ] && [ -z "$u" ]; then pass run.no_listen "pid $pid"; else fail run.no_listen "pid=$pid tcp=$l udp=$u"; fi
 
+# tray.one_helper: Claude only, one helper of the agent
+one_helper() { [ "$(helper_count)" -eq 1 ] && [ "$(children "$pid")" -eq 1 ]; }
+if wait_for 30 one_helper; then pass tray.one_helper "agent $pid, helper $(pgrep -f "^$exe tray-helper")"
+else fail tray.one_helper "helpers=$(helper_count) children_of_$pid=$(children "$pid")"; fi
+
+# tray.two_helpers: the CI build's test switch shows a second helper; the
+# agent is started by hand for this (the LaunchAgent is stopped
+# meanwhile), then the LaunchAgent is started again
+launchctl bootout "gui/$(id -u)/$label" > /dev/null 2>&1
+none() { [ "$(agent_count)" -eq 0 ] && [ "$(helper_count)" -eq 0 ]; }
+wait_for 15 none
+AI_USAGE_TEST_FAKE_PROVIDERS=claude,codex "$exe" run > "$out/run-two-helpers.log" 2>&1 &
+pid2h=$!
+two() { [ "$(children "$pid2h")" -eq 2 ]; }
+if wait_for 60 two; then
+  sleep 5
+  screencapture -x "$out/menubar-two-helpers.png" 2>/dev/null
+  pass tray.two_helpers "agent $pid2h, helpers $(pgrep -f "^$exe tray-helper" | tr '\n' ' '); menubar-two-helpers.png in the artifact"
+else fail tray.two_helpers "helpers=$(helper_count) children=$(children "$pid2h")"; fi
+kill -9 "$pid2h" 2>/dev/null
+nohelper() { [ "$(helper_count)" -eq 0 ]; }
+if wait_for 6 nohelper; then pass tray.helpers_follow_main "no helper left"; else fail tray.helpers_follow_main "helpers=$(helper_count)"; fi
+launchctl bootstrap "gui/$(id -u)" "$plist" > /dev/null 2>&1
+wait_for 20 running
+pid=$(la_pid)
+
 # fakeserver.token_leaks
 leaks=$(stats | jget - token_leaks)
 if [ "$leaks" = 0 ]; then pass fakeserver.token_leaks 0; else fail fakeserver.token_leaks "$leaks"; fi
@@ -93,7 +122,7 @@ fi
 "$exe" uninstall > "$out/uninstall.log" 2>&1
 rc=$?
 sleep 3
-n=$(agent_count)
+n=$(( $(agent_count) + $(helper_count) ))
 if [ $rc -eq 0 ] && [ ! -e "$plist" ] && ! launchctl print "gui/$(id -u)/$label" > /dev/null 2>&1 && [ "$n" -eq 0 ] && [ ! -e "$data" ]; then
   pass uninstall "rc=0"
 else
