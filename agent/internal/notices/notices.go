@@ -77,7 +77,9 @@ var BorrowedCode = []Borrowed{
 				"(agent/internal/codex)",
 			"the Codex usage request: the address made from chatgpt_base_url (wham/usage or api/codex/usage), its headers " +
 				"with the product's own User-Agent and its 30-second limit (agent/internal/codex)",
-			"naming Codex limit windows by their length, never by their position in the reply (agent/internal/codex)"},
+			"naming Codex limit windows by their length, never by their position in the reply (agent/internal/codex)",
+			"asking the Codex CLI's app-server for the rate limits (initialize, initialized, account/rateLimits/read; " +
+				"replies matched by id) and ending it by closing its input, then stopping its process tree (agent/internal/codex)"},
 		File: "borrowed/CodexBar/LICENSE"},
 }
 

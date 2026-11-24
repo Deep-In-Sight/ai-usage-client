@@ -109,6 +109,7 @@ func newEnv(t *testing.T) *testEnv {
 	te.Env.Machine = func() (string, string) { return fakeMachineKey, "os" }
 	te.Env.Syncer = func(config.Config, string) engine.Syncer { return refuseAll{} }
 	te.Env.CodexTransport = refuseTransport{} // never chatgpt.com from a test
+	te.Env.CodexVersion = func(string) (string, error) { return "", errors.New("no codex is run in a test") }
 	te.helpers = newFakeHelpers(t)
 	te.Env.Helper = te.helpers.spawn
 	te.Env.OpenURL = func(string) error { return nil }

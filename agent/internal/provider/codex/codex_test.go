@@ -71,6 +71,7 @@ type server struct {
 	n      int
 	status int
 	body   string
+	delay  time.Duration
 }
 
 func newServer(t *testing.T) *server {
@@ -78,8 +79,15 @@ func newServer(t *testing.T) *server {
 	s.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.n++
-		status, body := s.status, s.body
+		status, body, delay := s.status, s.body, s.delay
 		s.mu.Unlock()
+		if delay > 0 {
+			select {
+			case <-time.After(delay):
+			case <-r.Context().Done():
+				return
+			}
+		}
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
 	}))
@@ -108,13 +116,22 @@ func (s *server) transport() http.RoundTripper {
 	}, TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "example.com"}}
 }
 
+// fallback is a fake Fallback: ready unless notReady, answering res.
 type fallback struct {
-	calls int
-	res   provider.Result
-	ok    bool
+	calls    int
+	res      provider.Result
+	ok       bool
+	notReady bool
+	got      cx.Auth
 }
 
-func (f *fallback) Fetch(context.Context) (provider.Result, bool) { f.calls++; return f.res, f.ok }
+func (f *fallback) Ready(cx.Auth) bool { return !f.notReady }
+func (f *fallback) Fetch(_ context.Context, a cx.Auth) (provider.Result, bool) {
+	f.calls++
+	f.got = a
+	return f.res, f.ok
+}
+func (f *fallback) Status() (string, string) { return "/fake/codex 9.9.9", "" }
 
 func newProvider(t *testing.T, s *server, fb Fallback) (*Provider, string, *clock.Fake) {
 	t.Helper()
@@ -187,8 +204,12 @@ func Test403UsesFallback(t *testing.T) {
 		{404, `{}`, true},
 		{200, `<html>login</html>`, true},
 		{200, `{"plan_type":"plus"}`, true},
-		{200, `{"additional_rate_limits":[]}`, false},
-		{200, `{"rate_limit":null}`, false},
+		// review m-6: null or empty rate limits are none (D1)
+		{200, `{"rate_limit":null,"additional_rate_limits":null}`, true},
+		{200, `{"additional_rate_limits":[]}`, true},
+		{200, `{"rate_limit":null}`, true},
+		{200, `{"rate_limit":{}}`, false},
+		{200, `{"rate_limit":null,"additional_rate_limits":[{"limit_name":"x"}]}`, false},
 		{429, `{}`, false},
 		{500, `{}`, false},
 	} {

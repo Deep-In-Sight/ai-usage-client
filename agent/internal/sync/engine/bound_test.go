@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	cx "github.com/Deep-In-Sight/ai-usage-client/agent/internal/codex"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
+	codexprov "github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider/codex"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
 )
 
@@ -72,5 +74,20 @@ func TestWorstCaseFitsTheServersFetchTimeout(t *testing.T) {
 	const serverFetchTimeout = 90 * time.Second
 	if worst := 2*FetchTimeout + protocol.SyncTimeout; worst >= serverFetchTimeout {
 		t.Fatalf("two fetches and a sync can take %v", worst)
+	}
+}
+
+// R1: the Codex lane's whole fetch fits the cap: when the fallback could
+// run, the direct request's limit, the least the fallback needs for its
+// requests, codex's exit grace and the reap stay inside FetchTimeout (the
+// fallback starts only with that much left of the cap, and ends by the
+// cap; measured at full scale by TestCodexFetchEndsInsideTheEngineCap).
+func TestCodexBudgetFitsTheEngineCap(t *testing.T) {
+	if sum := codexprov.DirectLimitWithFallback + cx.MinCall + cx.ExitGrace + cx.ReapMargin; sum > FetchTimeout {
+		t.Fatalf("direct %v + fallback %v + exit %v + reap %v = %v > %v", codexprov.DirectLimitWithFallback,
+			cx.MinCall, cx.ExitGrace, cx.ReapMargin, sum, FetchTimeout)
+	}
+	if cx.MaxCall > FetchTimeout {
+		t.Fatalf("a fallback without a deadline may take %v", cx.MaxCall)
 	}
 }

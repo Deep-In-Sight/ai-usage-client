@@ -43,6 +43,11 @@ type Login struct {
 
 	ExpiresAt time.Time // zero: unknown
 	Problem   string    // why it is not usable; never file content
+
+	// The fallback's executable as the status command shows it
+	// ("<path> <version>"; Codex only) and why it cannot be used, if so.
+	// Local status only: never sent to the server.
+	FallbackCLI, FallbackProblem string
 }
 
 // Result is one fetch attempt.

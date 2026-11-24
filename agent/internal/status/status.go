@@ -57,8 +57,13 @@ type ProviderStatus struct {
 	MainKey         string         `json:"main_key,omitempty"`
 	LastFetchAt     time.Time      `json:"last_fetch_at,omitzero"`
 	LastFetchStatus *int           `json:"last_fetch_status,omitempty"`
-	FreshPending    bool           `json:"fresh_pending,omitempty"`
-	ServerProblem   string         `json:"server_problem,omitempty"` // the server's problem for this provider's block
+	LastFetchSource string         `json:"last_fetch_source,omitempty"` // Codex: "wham" (direct) | "app-server" (the Codex CLI)
+	// FallbackCLI is the Codex CLI the fallback would run ("<path>
+	// <version>"); FallbackProblem why it cannot (an old CLI). Codex only.
+	FallbackCLI     string `json:"fallback_cli,omitempty"`
+	FallbackProblem string `json:"fallback_problem,omitempty"`
+	FreshPending    bool   `json:"fresh_pending,omitempty"`
+	ServerProblem   string `json:"server_problem,omitempty"` // the server's problem for this provider's block
 }
 
 // Machine values besides a source.

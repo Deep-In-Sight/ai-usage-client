@@ -137,6 +137,8 @@ func runCmd(env Env, args []string) int {
 	ctrl.offFile = env.Dirs.File(paths.AutostartOffFile)
 	updates := make(chan struct{}, 1)
 
+	codexHome := codex.Home(cfg, env.Dirs.Home)
+	codexUsageURL, _ := codex.UsageURL("") // the address is set from config.toml at each fetch
 	e := engine.New(engine.Deps{
 		Clock: env.Clock,
 		// Claude: the reader hands the token to the usage client inside the
@@ -146,8 +148,8 @@ func runCmd(env Env, args []string) int {
 		// null), as the server expects (design 6.8).
 		Providers: []provider.Provider{
 			claude.New(reader, anthropic.New(anthropic.UsageURL, ua, env.Clock), env.Clock),
-			codexprov.New(codex.NewReader(codex.Home(cfg, env.Dirs.Home), env.Clock),
-				codex.NewClientWith(codex.DefaultBaseURL, ua, env.Clock, env.CodexTransport), nil),
+			codexprov.New(codex.NewReader(codexHome, env.Clock),
+				codex.NewClientWith(codexUsageURL, ua, env.Clock, env.CodexTransport), codexFallback(env, cfg, codexHome)),
 		},
 		Syncer:           env.syncer(cfg, ua),
 		Backlog:          bl,
@@ -335,4 +337,16 @@ func sameFile(w io.Writer, p string) bool {
 	}
 	b, err := os.Stat(p)
 	return err == nil && os.SameFile(a, b)
+}
+
+// codexFallback is the Codex lane's fallback: Codex's own CLI (codex
+// app-server), found as design D15 says (codex_path from install first)
+// and run only under its own rules (internal/codex AppServer).
+func codexFallback(env Env, cfg config.Config, codexHome string) *codex.AppServer {
+	home := env.Dirs.Home
+	return &codex.AppServer{
+		CLIs:    &codex.CLIFinder{List: func() []string { return codex.FindCLI(cfg, home, env.Getenv) }, Version: env.CodexVersion},
+		Home:    codexHome,
+		Version: version.Version,
+	}
 }

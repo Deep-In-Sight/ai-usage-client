@@ -431,6 +431,24 @@ func (r *Reader) read(_ context.Context) string {
 	return tok
 }
 
+// Usable reads auth.json again and returns the sign-in (no token) when it
+// is usable now: signed in with ChatGPT, not due for renewal and not
+// refused by the usage service (a 401 stands until auth.json changes).
+// The fallback asks it right before it would start codex.
+func (r *Reader) Usable(ctx context.Context) (Auth, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	tok := r.read(ctx)
+	l := r.login(r.clk.Now())
+	if l.State != "ok" || tok == "" {
+		return Auth{}, false
+	}
+	return r.auth, true
+}
+
+// Now is the reader's clock.
+func (r *Reader) Now() time.Time { return r.clk.Now() }
+
 // WithToken reads the sign-in and, when it is usable, calls fn with the
 // access token and the account id. fn must not keep the token. A sign-in
 // due for renewal is read again twice, 50 ms apart (Codex may be just

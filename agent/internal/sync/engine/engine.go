@@ -130,6 +130,7 @@ type lane struct {
 
 	lastFetchAt     time.Time
 	lastFetchStatus *int
+	lastFetchSource string // "wham" | "app-server" | "" (Claude)
 	lastFetchNote   string
 	parseProblem    string // of this PC's last 200 reply ("no_weekly"), sent as parse_problem
 }
@@ -737,7 +738,7 @@ func (e *Engine) fetch(ctx context.Context, l *lane) {
 		return // shutting down: the attempt counts locally, but its "no response" is not a result
 	}
 	st := res.HTTPStatus
-	l.lastFetchAt, l.lastFetchStatus = res.FetchedAt, &st
+	l.lastFetchAt, l.lastFetchStatus, l.lastFetchSource = res.FetchedAt, &st, res.Source
 	note := "fetch: HTTP " + strconv.Itoa(st)
 	if res.Problem != "" {
 		note += " (" + res.Problem + ")"
@@ -941,7 +942,8 @@ func (e *Engine) publish(now time.Time) {
 		ps := status.ProviderStatus{
 			State: l.login.State, Problem: l.login.Problem, AccountEmail: l.login.Email, AccountKey: l.login.AccountKey, Plan: l.login.Plan,
 			Role: l.role, PollerHostname: l.poller, PeersPCs: l.pcs, ServerProblem: l.serverProblem,
-			LastFetchAt: l.lastFetchAt.UTC(), LastFetchStatus: l.lastFetchStatus, FreshPending: s.FreshPending,
+			LastFetchAt: l.lastFetchAt.UTC(), LastFetchStatus: l.lastFetchStatus, LastFetchSource: l.lastFetchSource,
+			FreshPending: s.FreshPending, FallbackCLI: l.login.FallbackCLI, FallbackProblem: l.login.FallbackProblem,
 		}
 		if !l.login.ExpiresAt.IsZero() {
 			ps.ExpiresAt = l.login.ExpiresAt.UTC()

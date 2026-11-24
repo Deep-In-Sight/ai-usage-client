@@ -81,6 +81,9 @@ type Env struct {
 	// default transport; tests point it at a fake server, and refuse
 	// everything by default).
 	CodexTransport http.RoundTripper
+	// CodexVersion asks a codex executable its version for the Codex
+	// fallback (nil means running `<path> --version`; tests run nothing).
+	CodexVersion func(path string) (string, error)
 }
 
 // autostartOptions are the autostart inputs for this user.
