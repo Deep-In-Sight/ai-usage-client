@@ -1,3 +1,5 @@
-# The embedded licence notices must stay byte-identical to the modules' files
-# (no CRLF conversion on Windows checkouts).
+# Byte-exact files (no CRLF conversion on Windows checkouts): the embedded
+# licence notices must equal the modules' files, and the systray copy
+# must equal upstream plus agent/third_party/systray.patch.
 agent/internal/notices/licenses/** -text
+agent/third_party/systray/** -text

@@ -120,14 +120,21 @@ func TestTextNamesEveryModuleAndItsVersion(t *testing.T) {
 	}
 }
 
-// Git must not convert the licence files' line endings (core.autocrlf on
-// Windows would make them differ from the modules' files).
+// Git must not convert the licence files' line endings, nor those of the
+// systray copy they are compared with (core.autocrlf on Windows would make
+// them differ from the modules' files).
 func TestLicenceFilesKeepTheirBytesInGit(t *testing.T) {
 	b, err := os.ReadFile("../../../.gitattributes")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "agent/internal/notices/licenses/** -text\n") {
-		t.Fatal(".gitattributes does not mark the licence files -text")
+	lines := map[string]bool{}
+	for _, l := range strings.Split(string(b), "\n") {
+		lines[strings.TrimSpace(l)] = true
+	}
+	for _, want := range []string{"agent/internal/notices/licenses/** -text", "agent/third_party/systray/** -text"} {
+		if !lines[want] {
+			t.Fatalf(".gitattributes has no line %q", want)
+		}
 	}
 }
