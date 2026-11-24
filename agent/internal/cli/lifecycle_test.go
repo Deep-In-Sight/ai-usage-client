@@ -293,6 +293,9 @@ func TestStopWhileWaitingToRestart(t *testing.T) {
 // Newest instance wins: a desktop run takes the lock over (the real
 // mechanism is procs.TakeOver); a headless run never does.
 func TestDesktopRunTakesOver(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("process identities (and so takeover) are Linux and macOS only")
+	}
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
 	te.GOOS = "linux"
@@ -322,6 +325,9 @@ func TestDesktopRunTakesOver(t *testing.T) {
 }
 
 func TestRunYieldsToANewerAgent(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("process identities (and so takeover) are Linux and macOS only")
+	}
 	fs := newFakeServer(t)
 	te := trayEnv(t, fs)
 	te.GOOS = "linux"

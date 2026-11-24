@@ -57,6 +57,7 @@ lc_prop() { DBUS_SESSION_BUS_ADDRESS="$1" "$CI_BIN/fakewatcher" get "$2" "$3" 2>
 lc_device() { cat "$data/device-id" 2>/dev/null; }
 lc_syncs() { dev "$(lc_device)" syncs; }
 lc_more_syncs() { [ "$(lc_syncs)" -gt "$1" ] 2>/dev/null; }
+lc_synced() { [ "$(lc_syncs)" -ge 1 ] 2>/dev/null; } # the device's first sync arrived
 lc_weekly() { curl -fsS --max-time 10 -X POST "$BASE/weekly?percent=$1" > /dev/null; }
 lc_panics() { if [ -f "$lc_log" ]; then grep -c '^panic\|^fatal error' "$lc_log"; else echo 0; fi; }
 
@@ -77,6 +78,8 @@ lifecycle_checks() {
     kill "$w1" "$b1" 2>/dev/null; stop_agents; return
   fi
   pid1=$(lc_pids)
+  # the first sync may come after the registration
+  wait_for 60 lc_synced || { fail tray.bus_restart "no sync from device [$(lc_device)]"; kill "$w1" "$b1" 2>/dev/null; stop_agents; return; }
 
   # agent.log: the agent install started has a log file without secrets
   problems=""
@@ -135,6 +138,7 @@ lifecycle_checks() {
     kill "$w0" "$b0" 2>/dev/null; stop_agents; return
   fi
   pid1=$(lc_pids)
+  wait_for 60 lc_synced || { fail tray.relogin "no sync from device [$(lc_device)]"; kill "$w0" "$b0" 2>/dev/null; stop_agents; return; }
   s=$(lc_syncs)
   kill "$w0" "$b0" 2>/dev/null
   if ! lc_bus bus3; then fail tray.relogin "dbus-daemon 3 did not start"; stop_agents; return; fi
