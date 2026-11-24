@@ -46,7 +46,7 @@
             "OriginalFilename": "claude-usage.exe",
             "ProductName": "Claude Usage",
             "ProductVersion": "@PRODUCT_VERSION@",
-            "Comments": "Reports Claude plan usage to your team's server. Source: https://github.com/Deep-In-Sight/claude-usage-client"
+            "Comments": "Reports Claude plan usage to your team's server. Source: https://github.com/Deep-In-Sight/ai-usage-client"
           }
         }
       }

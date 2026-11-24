@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
 )
 
 // Runner runs a command and returns its combined output.

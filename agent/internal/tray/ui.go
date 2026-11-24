@@ -11,10 +11,10 @@ import (
 
 	"fyne.io/systray"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/icon"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/notify"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/text"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/version"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/icon"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/notify"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/version"
 )
 
 // Compiled is true: this build has a tray.

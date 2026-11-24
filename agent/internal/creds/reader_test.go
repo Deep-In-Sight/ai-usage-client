@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/clock"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
 )
 
 var t0 = time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/clock"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
 )
 
 var desktop = func(k string) string {

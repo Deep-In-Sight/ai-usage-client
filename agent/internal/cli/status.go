@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/autostart"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/paths"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/procs"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/status"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/usage"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/version"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/autostart"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/version"
 )
 
 func statusCmd(env Env, args []string) int {

@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/usage"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
 )
 
 func p(v float64) *float64 { return &v }

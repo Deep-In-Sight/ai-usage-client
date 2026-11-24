@@ -20,16 +20,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/anthropic"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/atomicfile"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/clock"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/config"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/creds"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/status"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/sync/backlog"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/sync/discover"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/sync/protocol"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/usage"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/anthropic"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/atomicfile"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/creds"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/backlog"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/discover"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
 )
 
 const (

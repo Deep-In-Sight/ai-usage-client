@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/atomicfile"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/atomicfile"
 )
 
 // Snapshot is the agent's current state.

@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/autostart"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/procs"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/text"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/version"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/winapp"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/autostart"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/version"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/winapp"
 )
 
 // removalSteps is the order in which everything is removed: by "uninstall"

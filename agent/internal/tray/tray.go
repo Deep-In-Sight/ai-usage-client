@@ -3,7 +3,7 @@ package tray
 import (
 	"errors"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 )
 
 // ErrNoTray: this build has no tray (macOS built without cgo).

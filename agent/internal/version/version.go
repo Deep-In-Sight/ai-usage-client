@@ -1,5 +1,5 @@
 // Package version holds the agent version, set at build time with
-// -ldflags "-X github.com/Deep-In-Sight/claude-usage-client/agent/internal/version.Version=1.2.3".
+// -ldflags "-X github.com/Deep-In-Sight/ai-usage-client/agent/internal/version.Version=1.2.3".
 package version
 
 // Version is the agent version.

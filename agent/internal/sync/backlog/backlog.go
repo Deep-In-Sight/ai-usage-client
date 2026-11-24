@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/atomicfile"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/sync/protocol"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/atomicfile"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
 )
 
 const (

@@ -12,14 +12,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/autostart"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/clock"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/config"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/paths"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/procs"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/status"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/tray"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/winapp"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/autostart"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/winapp"
 )
 
 const validConfig = `{"server_urls":["http://claude-usage.local","http://192.0.2.10:8700"],"ingest_key":"test-ingest-key-0123456789"}`

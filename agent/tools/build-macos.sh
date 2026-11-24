@@ -8,7 +8,7 @@ ver="${1:-}"
 . "$here/tools/version.sh"
 check_version "$ver"
 cd "$here"
-ld="-X github.com/Deep-In-Sight/claude-usage-client/agent/internal/version.Version=$ver"
+ld="-X github.com/Deep-In-Sight/ai-usage-client/agent/internal/version.Version=$ver"
 slices=dist/.macos-slices
 rm -rf "$slices"
 mkdir -p "$slices"

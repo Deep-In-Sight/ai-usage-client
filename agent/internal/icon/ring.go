@@ -8,7 +8,7 @@ import (
 	"image/color"
 	"math"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/usage"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
 )
 
 // Colours (the GNOME extension's "Terracotta ring").

@@ -6,10 +6,10 @@ import (
 	"os"
 	"sync"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/autostart"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/config"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/status"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/sync/engine"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/autostart"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/engine"
 )
 
 // controller is the tray's view of the running agent (tray.Controller).

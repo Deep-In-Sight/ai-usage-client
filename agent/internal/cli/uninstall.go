@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/text"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
 )
 
 func uninstallCmd(env Env, args []string) int {

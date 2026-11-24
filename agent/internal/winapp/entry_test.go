@@ -25,7 +25,7 @@ func TestUninstallEntryQuotesPath(t *testing.T) {
 	eq(t, e.DisplayVersion, "1.0.0")
 	eq(t, e.Publisher, "Deep-In-Sight")
 	eq(t, e.InstallDate, "20261124")
-	eq(t, e.URLInfoAbout, "https://github.com/Deep-In-Sight/claude-usage-client")
+	eq(t, e.URLInfoAbout, "https://github.com/Deep-In-Sight/ai-usage-client")
 	eq(t, e.NoModify, uint32(1))
 	eq(t, e.NoRepair, uint32(1))
 	eq(t, EntryFor(`C:\x\claude-usage.exe`, "1.0.0", 1024, day).EstimatedSizeKB, uint32(1))

@@ -7,8 +7,8 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/status"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/usage"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
 )
 
 var loc = time.FixedZone("UTC+9", 9*3600)

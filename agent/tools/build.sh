@@ -12,7 +12,7 @@ check_version "$ver"
 cd "$here"
 GO=$(go_cmd)
 filever="$(printf '%s' "$ver" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/').0"
-ld="-X github.com/Deep-In-Sight/claude-usage-client/agent/internal/version.Version=$ver"
+ld="-X github.com/Deep-In-Sight/ai-usage-client/agent/internal/version.Version=$ver"
 mkdir -p dist
 
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $GO build -trimpath -ldflags "$ld" \

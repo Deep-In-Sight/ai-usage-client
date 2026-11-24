@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/anthropic"
-	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/sync/protocol"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/anthropic"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
 )
 
 func withLatest(r protocol.Response, fetchedAt string) protocol.Response {
