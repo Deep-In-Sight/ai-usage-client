@@ -21,6 +21,10 @@
 #   tray.two_helpers  two tray helpers (a CI build told to show a second
 #                     one) register two items, both the agent's children
 #   tray.helpers_follow_main  killing the agent leaves no helper behind
+#   tray.comes_back   a helper that fails five times is stopped and a
+#                     watcher (no icon) takes its place; when a tray host
+#                     takes the name again, the icon comes back within a
+#                     minute, without a restart loop
 # Needs: $exe, $data, $out, $CI_BIN, wait_for, dev, stats, pass, fail,
 # info, and the hooks start_agent (start the agent the way install does,
 # with the variables given) and stop_agents (end every agent).
@@ -234,4 +238,43 @@ lifecycle_checks() {
   stop_agents
   pkill -f "^$exe tray-helper" 2>/dev/null
   kill "$w5" "$b5" 2>/dev/null
+
+  # a helper that keeps failing (killed five times): stopped, watched, and
+  # back as soon as the tray host comes again
+  if ! lc_bus bus6; then fail tray.comes_back "dbus-daemon 6 did not start"; return; fi
+  local a6=$lc_addr b6=$lc_bpid w6 hp i before starts t2 t3
+  lc_watcher w6 "$a6" || { fail tray.comes_back "watcher 6 not ready"; kill "$b6"; return; }
+  w6=$lc_wpid
+  start_agent XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=ubuntu:GNOME DBUS_SESSION_BUS_ADDRESS="$a6"
+  problems=""
+  wait_for 90 lc_registered w6 || problems="$problems not_registered"
+  before=$(grep -c 'tray helper claude' "$lc_log" 2>/dev/null)
+  for i in 1 2 3 4 5; do
+    hp=$(lc_hpids)
+    [ -n "$hp" ] && kill -9 $hp
+    if [ "$i" -lt 5 ]; then
+      replaced() { local n; n=$(lc_hpids); [ -n "$n" ] && [ "$n" != "$hp" ]; }
+      wait_for 30 replaced || problems="$problems not_restarted_after_kill_$i"
+    fi
+  done
+  stopped() { grep -q 'tray helper claude stopped after repeated failures' "$lc_log" && grep -q 'tray helper claude: watching the desktop' "$lc_log"; }
+  wait_for 30 stopped || problems="$problems not_stopped_and_watched"
+  [ "$(lc_hcount)" -eq 1 ] || problems="$problems watchers=[$(lc_hpids)]"
+  # the tray host goes and comes back (GNOME Shell restarted)
+  kill "$w6" 2>/dev/null
+  sleep 1
+  lc_watcher w6b "$a6" || problems="$problems watcher_6b_not_ready"
+  w6=$lc_wpid
+  t2=$(date +%s)
+  wait_for 90 lc_registered w6b || problems="$problems not_back"
+  t3=$(date +%s)
+  grep -q 'tray helper claude: trying again (the desktop came back)' "$lc_log" || problems="$problems no_desktop_back_in_log"
+  [ "$(lc_hcount)" -eq 1 ] || problems="$problems helpers=[$(lc_hpids)]"
+  starts=$(grep -c 'tray helper claude' "$lc_log" 2>/dev/null)
+  [ $((starts - before)) -le 15 ] || problems="$problems log_lines=$((starts - before))"
+  if [ -z "$problems" ]; then pass tray.comes_back "stopped after five failures, watched, registered again $((t3 - t2)) s after the host came back"
+  else fail tray.comes_back "$problems; log: $(grep 'tray helper' "$lc_log" 2>/dev/null | tail -n 4)"; fi
+  cp "$lc_log" "$out/agent-comes-back.log" 2>/dev/null || true
+  stop_agents
+  kill "$w6" "$b6" 2>/dev/null
 }

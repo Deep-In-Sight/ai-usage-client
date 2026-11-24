@@ -301,6 +301,7 @@ func (s *Supervisor) startWatcher(sl *slot) {
 		return
 	}
 	if p, token, ok := s.spawn(sl, true, s.o.Clock.Now()); ok {
+		s.o.Log.Printf("tray helper %s: watching the desktop for its tray to come back", name(sl.id))
 		s.launch(sl, p, token)
 	}
 }

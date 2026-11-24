@@ -724,6 +724,9 @@ func TestStoppedHelperIsWatchedForTheDesktop(t *testing.T) {
 	if m := w.next(t); m.Type != trayproto.TypeHello || !m.Standby || m.Provider != "claude" {
 		t.Fatalf("watcher hello %+v", m)
 	}
+	if !strings.Contains(h.logBuf.String(), "tray helper claude: watching the desktop for its tray to come back") {
+		t.Fatalf("log: %s", h.logBuf.String())
+	}
 	w.none(t) // no view, no notice: it shows nothing
 	h.sup.Show(view("41%"))
 	w.none(t)

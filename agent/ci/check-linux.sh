@@ -3,10 +3,12 @@
 # sync, status, no listening port, no token leak, in-place upgrade,
 # uninstall, a desktop session without a tray host (falls back to
 # headless with XDG autostart), one with a fake tray host (the
-# top-bar label over D-Bus), and the session lifecycle: the bus restarted
-# at logout, a login with a second run, a late tray host and the agent's
-# log file, two tray helpers and a killed agent leaving none behind
-# (lifecycle-linux.sh). Results as annotations; exit 1 if a required check
+# top-bar label over D-Bus, the menu, what the helper process shows of
+# itself), the menu rebuilt for a fresh install with nobody signed in, and
+# the session lifecycle: the bus restarted at logout, a login with a
+# second run, a late tray host and the agent's log file, two tray helpers
+# and a killed agent leaving none behind, a failing helper coming back
+# with the tray host (lifecycle-linux.sh). Results as annotations; exit 1 if a required check
 # failed.
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
