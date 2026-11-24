@@ -112,6 +112,37 @@ if [ -z "$problems" ]; then pass desktop.fallback_headless "xdg-autostart, headl
 # on a private session bus). The item must export XAyatanaLabel (the text
 # Ubuntu's AppIndicator extension shows next to the icon) and send
 # XAyatanaNewLabel when the percentage changes.
+# menu_check: the item's menu over D-Bus has the Claude header with its
+# picture and a text bar row for the weekly limit (design D4, 6.5), and
+# answers at once.
+menu_check() {
+  local layout got
+  layout=$(timeout 15 busctl --address="$bus_addr" --timeout=10 --json=short -- \
+    call "$svc" /StatusNotifierItem/menu com.canonical.dbusmenu GetLayout iias 0 -1 0 2>&1)
+  printf '%s\n' "$layout" > "$out/menu-layout.json"
+  got=$(printf '%s' "$layout" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("no_layout"); sys.exit()
+items = []
+def walk(n):
+    i, props, kids = n
+    p = {k: v["data"] for k, v in props.items()}
+    if p.get("visible", True) and p.get("label"):
+        items.append((p["label"], len(p.get("icon-data", []))))
+    for k in kids:
+        walk(k["data"])
+walk(d["data"][1])
+head = [l for l, icon in items if l.startswith("Claude") and icon > 0]
+rows = [l for l, _ in items if "\u2588" in l and "Weekly" in l and "42%" in l]
+print("ok" if head and rows else "missing: " + " | ".join(l for l, _ in items))
+')
+  if [ "$got" = ok ]; then pass tray.menu "Claude header with its picture, weekly bar row"
+  else fail tray.menu "$got"; fi
+}
+
 tray_label_check() {
   local bus_addr="" bus_pid="" wpid="" svc="" label="" guide="" label2="" rc problems=""
   : > "$out/bus.addr"; : > "$out/bus.pid"
@@ -141,6 +172,8 @@ tray_label_check() {
       n_items=$(awk '$1 == "registered" { s[$2] = 1 } END { n = 0; for (k in s) n++; print n }' "$out/watcher.log")
       n_helpers=$(pgrep -f "^$exe tray-helper" | wc -l)
       [ "$n_items" = 1 ] && [ "$n_helpers" -eq 1 ] || problems="$problems items=$n_items helpers=$n_helpers"
+      # tray.menu: the menu as the tray host reads it (dbusmenu GetLayout)
+      menu_check
       curl -fsS --max-time 10 -X POST "$BASE/weekly?percent=57" || problems="$problems set_weekly_failed"
       signalled() { grep -q "^label $svc \"57%\" " "$out/watcher.log"; }
       wait_for 60 signalled || problems="$problems no_signal_57"

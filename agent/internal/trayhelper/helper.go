@@ -139,7 +139,19 @@ func runWith(ctx context.Context, in io.Reader, out io.Writer, o Options, d deps
 			d.giveUp()
 		}
 	}()
-	d.ui.Run(func() { close(started); h.loop(ctx) }, h.onExit)
+	d.ui.Run(func() {
+		close(started)
+		// The loop runs on its own: the Linux library answers the tray
+		// host's request for the menu only once onReady has returned
+		// (initialMenuBuilt). onReady waits for the menu to be built from
+		// the first view, a short while at most.
+		built := make(chan struct{})
+		go h.loop(ctx, built)
+		select {
+		case <-built:
+		case <-time.After(menuWait):
+		}
+	}, h.onExit)
 	if d.goos == "windows" {
 		removeIconFiles(o.IconDir)
 	}
@@ -232,8 +244,12 @@ func (h *helper) quit() {
 	h.d.ui.Quit()
 }
 
-// loop runs once the tray library has started.
-func (h *helper) loop(ctx context.Context) {
+// menuWait is how long onReady waits for the first view.
+const menuWait = 2 * time.Second
+
+// loop runs once the tray library has started; built is closed once the
+// menu is built from the first view.
+func (h *helper) loop(ctx context.Context, built chan<- struct{}) {
 	for h.view == nil {
 		select {
 		case m, ok := <-h.msgs:
@@ -247,6 +263,7 @@ func (h *helper) loop(ctx context.Context) {
 		}
 	}
 	h.apply(*h.view)
+	close(built)
 	h.check()
 	tick := time.NewTicker(h.d.tick)
 	defer tick.Stop()

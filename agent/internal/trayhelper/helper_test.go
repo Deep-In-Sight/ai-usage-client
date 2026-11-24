@@ -32,6 +32,8 @@ type fakeUI struct {
 	ranOnce  sync.Once
 	onExit   func()
 	noReady  bool // Run never calls onReady (a tray that cannot start)
+	// readyReturned is closed when onReady returned
+	readyReturned chan struct{}
 
 	layout   []string // item ids and "-" for separators, as created
 	items    map[string]*fakeItem
@@ -56,7 +58,7 @@ type fakeItem struct {
 }
 
 func newFakeUI() *fakeUI {
-	u := &fakeUI{ran: make(chan struct{}), quit: make(chan struct{}), items: map[string]*fakeItem{}, lost: make(chan struct{})}
+	u := &fakeUI{ran: make(chan struct{}), quit: make(chan struct{}), items: map[string]*fakeItem{}, lost: make(chan struct{}), readyReturned: make(chan struct{})}
 	u.shown.Store(true)
 	return u
 }
@@ -67,7 +69,13 @@ func (u *fakeUI) Run(onReady, onExit func()) {
 	u.mu.Unlock()
 	u.ranOnce.Do(func() { close(u.ran) })
 	if !u.noReady {
-		go onReady()
+		go func() {
+			// the library runs onReady on a goroutine of its own, and
+			// answers the tray host's first request for the menu only once
+			// onReady has returned (initialMenuBuilt)
+			onReady()
+			close(u.readyReturned)
+		}()
 	}
 	<-u.quit
 	onExit()
@@ -519,4 +527,42 @@ func TestHelperGivesUpWhenTheTrayNeverStarts(t *testing.T) {
 	if !r.gaveUp.Load() {
 		t.Fatal("did not give up")
 	}
+}
+
+// onReady returns once the menu is built: the Linux library answers the
+// tray host's GetLayout only after that (a loop run inside onReady left
+// the menu unreadable).
+func TestHelperOnReadyReturnsWithTheMenuBuilt(t *testing.T) {
+	r := startRun(t, runOpts{})
+	r.hello()
+	r.send(view("42%", false))
+	select {
+	case <-r.ui.readyReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("onReady did not return")
+	}
+	layout, items, _, _, _, _ := r.ui.snapshot()
+	if len(layout) == 0 || items["r.claude.0"].title != "Weekly 42%" {
+		t.Fatalf("onReady returned before the menu was built: %v", layout)
+	}
+	eq(t, r.next().Type, trayproto.TypeReady)
+	r.send(view("43%", false)) // and the helper goes on working
+	waitFor(t, "the next view", func() bool {
+		_, items, _, _, _, _ := r.ui.snapshot()
+		return items["r.claude.0"].title == "Weekly 43%"
+	})
+}
+
+// A helper that gets no view at first still returns from onReady (the
+// menu is built when the view comes).
+func TestHelperOnReadyReturnsWithoutAView(t *testing.T) {
+	r := startRun(t, runOpts{})
+	r.hello()
+	select {
+	case <-r.ui.readyReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("onReady did not return")
+	}
+	r.send(view("42%", false))
+	eq(t, r.next().Type, trayproto.TypeReady)
 }
