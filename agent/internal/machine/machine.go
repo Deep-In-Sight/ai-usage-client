@@ -1,10 +1,14 @@
-// Package machine computes the machine key: a salted hash that tells the
-// server which PC a device runs on (design D8), so a reinstall on the same
-// PC is counted once. The source is the OS's own machine identifier
-// (Linux machine-id, Windows MachineGuid, macOS host UUID), or the
-// address of a real network card when the OS gives none. The source value
-// never leaves this package: not sent, not stored, not logged; the key
-// itself is not logged either.
+// Package machine computes the machine key, which tells the server which
+// PC a device runs on (design D8), so a reinstall on the same PC is counted
+// once. It is a keyed hash (HMAC-SHA256 with a fixed, public message) of
+// the OS's own machine identifier: Linux machine-id, Windows MachineGuid,
+// macOS host UUID. These are random 128-bit values, so the key cannot be
+// turned back into the identifier; but anyone who already has a PC's raw
+// identifier can compute its key and so link the two. When the OS gives no
+// identifier there is no key (no network card address is ever used: a
+// 48-bit address with a public vendor prefix could be found from its
+// hash). The identifier never leaves this package: not sent, not stored,
+// not logged; the key itself is not logged either.
 package machine
 
 import (
@@ -19,11 +23,8 @@ import (
 // app-specific machine id does it.
 const message = "ai-usage machine key v1"
 
-// Source names.
-const (
-	SourceOS  = "os"
-	SourceMAC = "mac"
-)
+// SourceOS names the only source: the OS's machine identifier.
+const SourceOS = "os"
 
 var (
 	once           sync.Once
@@ -31,22 +32,19 @@ var (
 )
 
 // Key returns the hashed machine key (32 lower-case hex characters) and
-// its source ("os" or "mac"), or ("", "") when neither is available. It is
+// its source ("os"), or ("", "") when the OS gives no identifier. It is
 // computed once per process.
 func Key() (key, source string) {
-	once.Do(func() { cachedKey, src = compute(osSource, interfaces) })
+	once.Do(func() { cachedKey, src = compute(osSource) })
 	return cachedKey, src
 }
 
-// compute derives the key from the OS source, else from a network card.
-func compute(fromOS func() (string, bool), ifs func() []iface) (string, string) {
+// compute derives the key from the OS's identifier.
+func compute(fromOS func() (string, bool)) (string, string) {
 	if raw, ok := fromOS(); ok {
 		if k := derive(raw); k != "" {
 			return k, SourceOS
 		}
-	}
-	if raw := pickMAC(ifs()); raw != "" {
-		return derive(raw), SourceMAC
 	}
 	return "", ""
 }

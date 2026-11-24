@@ -33,7 +33,7 @@ func (r RequestV2) MarshalJSON() ([]byte, error) {
 // MachineInfo is the hashed machine key (never the machine id itself).
 type MachineInfo struct {
 	Key    string `json:"key"`
-	Source string `json:"source"` // os | mac
+	Source string `json:"source"` // "os": the only source this agent sends
 }
 
 type ProviderBlock struct {

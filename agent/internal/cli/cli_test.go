@@ -289,7 +289,7 @@ func pf(v float64) *float64 { return &v }
 func TestStatusNamesTheMachineKeySource(t *testing.T) {
 	te := newEnv(t)
 	must(t, status.Write(te.Dirs.File(paths.StatusFile), status.Snapshot{Mode: "coordinated"}))
-	for src, want := range map[string]string{"os": "identified (OS machine id)", "mac": "identified (network card address)", "": "not identified"} {
+	for src, want := range map[string]string{"os": "identified (OS machine id)", "": "not identified (this OS gives no machine identifier; a reinstall counts as a new PC)"} {
 		te.Machine = func() (string, string) {
 			if src == "" {
 				return "", ""

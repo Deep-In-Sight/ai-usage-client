@@ -49,9 +49,13 @@ address, as any server you connect to does.)
 - This PC: a random ID made at the first run, the PC name, your OS user
   name, the OS and its version, and the CPU type
 - A key that tells the server this PC apart from others, so that the
-  dashboard counts a reinstalled PC once: a one-way hash of the OS's
-  machine identifier (or, when the OS has none, of a network card's
-  address). The identifier and the address themselves are never sent.
+  dashboard counts a reinstalled PC once: a keyed hash (HMAC-SHA256) of the
+  OS's own machine identifier (Linux machine-id, Windows MachineGuid, macOS
+  host UUID), which is sent only as this hash. The identifier is a random
+  128-bit value, so the key cannot be turned back into it; someone who
+  already has this PC's identifier could compute the key and so recognise
+  the PC, nothing more. When the OS gives no identifier, no key is sent and
+  a reinstall counts as a new PC. No network card address is used.
 - The agent: its version, and whether it shows a tray icon
 - The sign-in: whether Claude Code is signed in, and when the sign-in expires
 - Whether you asked for fresh numbers with **Refresh now**
@@ -87,7 +91,7 @@ for Claude only: `schema`, `client.version`, `client.os`,
 ### What it never sends
 
 Your token, your conversations, your files, this PC's machine identifier
-and its network card addresses.
+(only its keyed hash, above) and its network card addresses.
 
 - It reads the sign-in Claude Code keeps and never refreshes or changes it.
   The token goes only to `api.anthropic.com`, and redirects are refused.

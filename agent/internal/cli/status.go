@@ -101,7 +101,7 @@ func statusCmd(env Env, args []string) int {
 	// whether the PC is identified, and how; never the key (design D8)
 	_, source := env.machine()
 	fmt.Fprintf(w, "Machine:    %s\n", map[string]string{machine.SourceOS: "identified (OS machine id)",
-		machine.SourceMAC: "identified (network card address)", "": "not identified"}[source])
+		"": "not identified (this OS gives no machine identifier; a reinstall counts as a new PC)"}[source])
 	syncState := "ok"
 	if !snap.LastSyncOK {
 		syncState = "failing"
