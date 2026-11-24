@@ -9,6 +9,7 @@
 package tray
 
 import (
+	"math"
 	"net/url"
 	"slices"
 	"strconv"
@@ -55,7 +56,10 @@ const (
 func Bar(p *float64) string {
 	v := 0.0
 	if p != nil {
-		v = min(max(*p, 0), 100)
+		// the percent as the number next to the bar shows it
+		// (usage.FormatPercent), so the two agree: 99.6 is a full bar
+		// next to "100%"
+		v = min(max(math.Floor(*p+0.5), 0), 100)
 	}
 	full := int(v / 10)
 	var b strings.Builder
@@ -157,11 +161,18 @@ func problem(id provider.ID, ps status.ProviderStatus, s status.Snapshot) string
 	return ""
 }
 
+// maxLocal is the most characters of an e-mail's local part the header
+// shows; a longer one is cut, so the menu stays narrow.
+const maxLocal = 20
+
 // header is "<Provider> · <local>@… · <n> PCs" (Codex: " · <Plan>").
 func header(id provider.ID, ps status.ProviderStatus) string {
 	parts := []string{id.Name()}
 	if ps.AccountEmail != "" {
 		local, _, _ := strings.Cut(ps.AccountEmail, "@")
+		if r := []rune(local); len(r) > maxLocal {
+			local = string(r[:maxLocal-1]) + "…"
+		}
 		parts = append(parts, local+"@…")
 	}
 	switch {
@@ -362,7 +373,11 @@ func BuildIcon(p provider.ID, in MenuInputs) supervisor.IconView {
 			level = usage.LevelOf(usage.Limit{Percent: r.Percent, Severity: "normal"})
 		}
 		v.Icon.Level = string(level)
-		tip = append(tip, r.Label+" "+usage.FormatPercent(r.Percent)+blocked(r)+resetPart(r, in.Now))
+		pct := usage.FormatPercent(r.Percent)
+		if stale {
+			pct += text.StaleMark // as next to the icon (Windows shows only the tooltip)
+		}
+		tip = append(tip, r.Label+" "+pct+blocked(r)+resetPart(r, in.Now))
 	}
 	v.Title = usage.FormatPercent(v.Icon.Percent)
 	if stale {

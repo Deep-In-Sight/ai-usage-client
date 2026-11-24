@@ -136,7 +136,15 @@ func TestBar(t *testing.T) {
 		{pf(5), "▌░░░░░░░░░"},
 		{pf(10), "█░░░░░░░░░"},
 		{pf(65), "██████▌░░░"},
-		{pf(99.6), "█████████▌"},
+		// the bar shows the percent as the number next to it is rounded,
+		// so they agree (stage-2 review m-6: 99.6 drew 9½ cells by "100%")
+		{pf(99.6), "██████████"},
+		{pf(99.4), "█████████▌"},
+		{pf(94.4), "█████████░"},
+		{pf(94.5), "█████████▌"},
+		{pf(4.5), "▌░░░░░░░░░"},
+		{pf(4.4), "░░░░░░░░░░"},
+		{pf(9.5), "█░░░░░░░░░"},
 		{pf(100), "██████████"},
 		{pf(130), "██████████"},
 		{pf(-3), "░░░░░░░░░░"},
@@ -389,11 +397,14 @@ func TestViewStale(t *testing.T) {
 	v := BuildIcon(provider.Claude, in)
 	eq(t, v.Title, "71% ⚠")
 	eq(t, v.Icon.Stale, true)
+	// the tooltip says it too, like the label (Windows shows no label)
+	eq(t, v.Tooltip, "AI Usage · Claude\nWeekly 71% ⚠ · Sun 01:00 (1d 6h)\nUpdated 18:44")
 	eq(t, textOf(BuildMenu(in), "server"), "Server connected · Updated 18:44 ⚠ · fetching: TEST-PC-03")
 	set(&in, func(c *status.ProviderStatus) { c.LatestFetchedAt = now.Add(-14 * time.Minute) })
 	v = BuildIcon(provider.Claude, in)
 	eq(t, v.Title, "71%")
 	eq(t, v.Icon.Stale, false)
+	eq(t, v.Tooltip, "AI Usage · Claude\nWeekly 71% · Sun 01:00 (1d 6h)\nUpdated 18:46")
 }
 
 func TestViewWarningFlag(t *testing.T) {
@@ -438,6 +449,19 @@ func TestViewHeader(t *testing.T) {
 	eq(t, textOf(BuildMenu(in), "h.claude"), "Claude · team-a@…")
 	set(&in, func(c *status.ProviderStatus) { c.AccountEmail = "" })
 	eq(t, textOf(BuildMenu(in), "h.claude"), "Claude")
+	// a long account name is shortened, so the menu cannot grow without
+	// end (stage-2 review m-6)
+	set(&in, func(c *status.ProviderStatus) {
+		c.AccountEmail, c.PeersPCs = "a-very-long-local-part-for-a-shared-team-account@example.com", 2
+	})
+	eq(t, textOf(BuildMenu(in), "h.claude"), "Claude · a-very-long-local-p…@… · 2 PCs")
+	set(&in, func(c *status.ProviderStatus) { c.AccountEmail = "exactly-twenty-chars@example.com" })
+	eq(t, textOf(BuildMenu(in), "h.claude"), "Claude · exactly-twenty-chars@… · 2 PCs")
+	// cut by characters, never inside one
+	set(&in, func(c *status.ProviderStatus) {
+		c.AccountEmail = "αβγδεζηθικλμνξοπρστυφχψω@example.com"
+	})
+	eq(t, textOf(BuildMenu(in), "h.claude"), "Claude · αβγδεζηθικλμνξοπρστ…@… · 2 PCs")
 }
 
 func TestViewNewVersion(t *testing.T) {
