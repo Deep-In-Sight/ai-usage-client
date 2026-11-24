@@ -1,5 +1,8 @@
 //go:build (linux || freebsd || openbsd || netbsd) && !android
 
+//Modified from fyne.io/systray v1.12.2: SetLabel and the XAyatanaLabel and
+//XAyatanaLabelGuide properties were added (see PATCHED.md).
+
 //Note that you need to have github.com/knightpp/dbus-codegen-go installed from "custom" branch
 //go:generate dbus-codegen-go -prefix org.kde -package notifier -output internal/generated/notifier/status_notifier_item.go internal/StatusNotifierItem.xml
 //go:generate dbus-codegen-go -prefix com.canonical -package menu -output internal/generated/menu/dbus_menu.go internal/DbusMenu.xml
@@ -115,6 +118,34 @@ func SetTitle(t string) {
 	if err != nil {
 		log.Printf("systray error: failed to emit new title signal: %s\n", err)
 		return
+	}
+}
+
+// SetLabel sets the text shown next to the icon by hosts that support the
+// Ayatana label (Ubuntu's AppIndicator extension): the XAyatanaLabel and
+// XAyatanaLabelGuide properties, announced with the XAyatanaNewLabel signal.
+// guide is the widest text the label will hold, for hosts that reserve room.
+// Hosts without label support (KDE) ignore it. Linux and BSD only.
+//
+// Added to the upstream v1.12.2 code; see PATCHED.md.
+func SetLabel(label, guide string) {
+	instance.lock.Lock()
+	instance.label, instance.labelGuide = label, guide
+	props := instance.props
+	conn := instance.conn
+	defer instance.lock.Unlock()
+
+	if props == nil {
+		return
+	}
+	props.SetMust("org.kde.StatusNotifierItem", "XAyatanaLabelGuide", guide)
+	props.SetMust("org.kde.StatusNotifierItem", "XAyatanaLabel", label)
+	if conn == nil {
+		return
+	}
+	err := conn.Emit(path, "org.kde.StatusNotifierItem.XAyatanaNewLabel", label, guide)
+	if err != nil {
+		log.Printf("systray error: failed to emit new label signal: %s\n", err)
 	}
 }
 
@@ -319,6 +350,8 @@ type tray struct {
 	iconData []byte
 	// title and tooltip state
 	title, tooltipTitle string
+	// Ayatana label state (added, see PATCHED.md)
+	label, labelGuide string
 
 	lock             sync.Mutex
 	menu             *menuLayout
@@ -393,6 +426,19 @@ func (t *tray) createPropSpec() map[string]map[string]*prop.Prop {
 			"ToolTip": {
 				Value:    tooltip{V2: t.tooltipTitle},
 				Writable: true,
+				Emit:     prop.EmitTrue,
+				Callback: nil,
+			},
+			// XAyatanaLabel and XAyatanaLabelGuide: added, see PATCHED.md.
+			"XAyatanaLabel": {
+				Value:    t.label,
+				Writable: false,
+				Emit:     prop.EmitTrue,
+				Callback: nil,
+			},
+			"XAyatanaLabelGuide": {
+				Value:    t.labelGuide,
+				Writable: false,
 				Emit:     prop.EmitTrue,
 				Callback: nil,
 			},

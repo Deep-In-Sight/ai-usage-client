@@ -166,3 +166,42 @@ func TestScriptSubstitution(t *testing.T) {
 		}
 	}
 }
+
+// The CI tray check changes the weekly percentage to see the tray follow.
+func TestWeeklyCanBeChanged(t *testing.T) {
+	srv, _ := newTest(t)
+	weekly := func() any {
+		t.Helper()
+		_, m := post(t, srv, "Bearer "+key, syncBody("d1", "tray", false))
+		return m["latest"].(map[string]any)["usage"].(map[string]any)["limits"].([]any)[0].(map[string]any)["percent"]
+	}
+	setWeekly := func(v string) int {
+		t.Helper()
+		res, err := http.Post(srv.URL+"/weekly?percent="+v, "text/plain", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	if w := weekly(); w != 42.0 {
+		t.Fatalf("default %v", w)
+	}
+	if code := setWeekly("57"); code != 204 {
+		t.Fatalf("set: %d", code)
+	}
+	if w := weekly(); w != 57.0 {
+		t.Fatalf("after set %v", w)
+	}
+	for _, bad := range []string{"", "abc", "-1", "101", "1e9"} {
+		if code := setWeekly(bad); code != 400 {
+			t.Fatalf("%q: %d", bad, code)
+		}
+	}
+	if w := weekly(); w != 57.0 {
+		t.Fatalf("after bad values %v", w)
+	}
+	if code, _ := get(t, srv, "/weekly"); code != 405 {
+		t.Fatalf("GET /weekly: %d", code)
+	}
+}

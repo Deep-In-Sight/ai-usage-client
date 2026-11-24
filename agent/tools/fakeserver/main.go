@@ -2,6 +2,7 @@
 // takes syncs, always answers "standby" (so the agent never asks Anthropic),
 // serves the release files and the CI install scripts, and counts what it
 // saw. /stats shows counts and fake values only, never a key or a token.
+// POST /weekly?percent=N changes the weekly percentage it answers with.
 package main
 
 import (
@@ -15,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -44,15 +46,17 @@ type server struct {
 	badKey     int
 	tokenLeaks int
 	devices    map[string]*device
+	weekly     int // the weekly_all percentage syncs are answered with
 }
 
 func newServer(cfg Config) http.Handler {
-	s := &server{cfg: cfg, devices: map[string]*device{}}
+	s := &server{cfg: cfg, devices: map[string]*device{}, weekly: 42}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("POST /api/v1/sync", s.sync)
 	mux.HandleFunc("GET /files/{name}", s.file)
 	mux.HandleFunc("GET /stats", s.stats)
+	mux.HandleFunc("POST /weekly", s.setWeekly)
 	return s.leakCheck(mux)
 }
 
@@ -130,6 +134,7 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 	if req.WantFresh {
 		d.WantFresh++
 	}
+	weekly := s.weekly
 	s.mu.Unlock()
 
 	now := time.Now()
@@ -139,7 +144,7 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 		"latest": map[string]any{
 			"fetched_at": stamp(now.Add(-60 * time.Second)),
 			"usage": map[string]any{"limits": []any{
-				map[string]any{"kind": "weekly_all", "group": "weekly", "percent": 42, "severity": "normal", "resets_at": resets, "scope": nil},
+				map[string]any{"kind": "weekly_all", "group": "weekly", "percent": weekly, "severity": "normal", "resets_at": resets, "scope": nil},
 				map[string]any{"kind": "weekly_scoped", "group": "weekly", "percent": 40, "severity": "normal", "resets_at": resets,
 					"scope": map[string]any{"model": map[string]any{"id": nil, "display_name": "Fable"}, "surface": nil}},
 			}},
@@ -174,6 +179,20 @@ func (s *server) file(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeFile(w, r, p)
+}
+
+// setWeekly changes the weekly_all percentage of later sync answers
+// (POST /weekly?percent=0..100), so a check can watch the tray follow.
+func (s *server) setWeekly(w http.ResponseWriter, r *http.Request) {
+	v, err := strconv.Atoi(r.URL.Query().Get("percent"))
+	if err != nil || v < 0 || v > 100 {
+		writeJSON(w, 400, map[string]string{"error": "percent must be 0..100"})
+		return
+	}
+	s.mu.Lock()
+	s.weekly = v
+	s.mu.Unlock()
+	w.WriteHeader(204)
 }
 
 func (s *server) stats(w http.ResponseWriter, r *http.Request) {

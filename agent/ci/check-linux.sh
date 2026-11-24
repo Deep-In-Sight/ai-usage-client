@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Linux runner checks: one-line install (headless, systemd user service),
 # sync, status, no listening port, no token leak, in-place upgrade,
-# uninstall, and a desktop session without a tray host (falls back to
-# headless with XDG autostart). Results as annotations; exit 1 if a
+# uninstall, a desktop session without a tray host (falls back to
+# headless with XDG autostart), and one with a fake tray host (the
+# top-bar label over D-Bus). Results as annotations; exit 1 if a
 # required check failed.
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
@@ -95,6 +96,55 @@ sleep 2
 [ ! -e "$desktop" ] || problems="$problems desktop_file_left"
 [ "$(agent_count)" -eq 0 ] || problems="$problems processes_after_uninstall=$(agent_count)"
 if [ -z "$problems" ]; then pass desktop.fallback_headless "xdg-autostart, headless"; else fail desktop.fallback_headless "$problems"; fi
+
+# tray.label: a desktop session with a tray host (a fake StatusNotifierWatcher
+# on a private session bus). The item must export XAyatanaLabel (the text
+# Ubuntu's AppIndicator extension shows next to the icon) and send
+# XAyatanaNewLabel when the percentage changes.
+tray_label_check() {
+  local bus_addr="" bus_pid="" wpid="" svc="" label="" guide="" label2="" rc problems=""
+  : > "$out/bus.addr"; : > "$out/bus.pid"
+  if ! dbus-daemon --session --fork --print-address=5 --print-pid=6 5>"$out/bus.addr" 6>"$out/bus.pid"; then
+    fail tray.label "dbus-daemon did not start"; return
+  fi
+  bus_ready() { bus_addr=$(head -n 1 "$out/bus.addr") && [ -n "$bus_addr" ] && bus_pid=$(head -n 1 "$out/bus.pid") && [ -n "$bus_pid" ]; }
+  wait_for 10 bus_ready || { fail tray.label "no bus address"; return; }
+  DBUS_SESSION_BUS_ADDRESS="$bus_addr" "$CI_BIN/fakewatcher" watch > "$out/watcher.log" 2> "$out/watcher.err" &
+  wpid=$!
+  watcher_ready() { grep -q '^ready$' "$out/watcher.log"; }
+  if wait_for 10 watcher_ready; then
+    XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS="$bus_addr" oneliner > "$out/install-tray.log" 2>&1
+    rc=$?
+    [ $rc -eq 0 ] || problems="$problems rc=$rc"
+    registered() { svc=$(awk '$1 == "registered" { s = $2 } END { print s }' "$out/watcher.log") && [ -n "$svc" ]; }
+    get_prop() { DBUS_SESSION_BUS_ADDRESS="$bus_addr" "$CI_BIN/fakewatcher" get "$svc" "$1" 2>>"$out/watcher.err"; }
+    label_is() { label=$(get_prop XAyatanaLabel) && [ "$label" = "$1" ]; }
+    if wait_for 90 registered; then
+      wait_for 30 label_is 42% || problems="$problems label=[$label]"
+      guide=$(get_prop XAyatanaLabelGuide)
+      [ -n "$guide" ] || problems="$problems guide_empty"
+      device4=$(cat "$data/device-id" 2>/dev/null)
+      [ "$(dev "$device4" last_mode)" = tray ] || problems="$problems mode=$(dev "$device4" last_mode)"
+      curl -fsS --max-time 10 -X POST "$BASE/weekly?percent=57" || problems="$problems set_weekly_failed"
+      signalled() { grep -q "^label $svc \"57%\" " "$out/watcher.log"; }
+      wait_for 60 signalled || problems="$problems no_signal_57"
+      label2=$(get_prop XAyatanaLabel)
+      [ "$label2" = 57% ] || problems="$problems label_after=[$label2]"
+      curl -fsS --max-time 10 -X POST "$BASE/weekly?percent=42" > /dev/null || true
+    else
+      problems="$problems not_registered"
+    fi
+    "$exe" uninstall > "$out/uninstall-tray.log" 2>&1 || problems="$problems uninstall_rc=$?"
+    sleep 2
+    [ "$(agent_count)" -eq 0 ] || problems="$problems processes_after_uninstall=$(agent_count)"
+  else
+    problems="watcher not ready: $(head -c 200 "$out/watcher.err")"
+  fi
+  kill "$wpid" 2>/dev/null
+  kill "$bus_pid" 2>/dev/null
+  if [ -z "$problems" ]; then pass tray.label "label 42% -> 57% (signal), guide [$guide]"; else fail tray.label "$problems"; fi
+}
+tray_label_check
 
 info linger "$(loginctl show-user "$USER" -p Linger 2>&1)"
 finish

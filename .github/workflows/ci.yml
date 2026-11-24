@@ -75,9 +75,11 @@ jobs:
         with:
           name: release-files
           path: dist
-      - name: fake server
+      - name: fake server and tray host
         working-directory: agent
-        run: go build -o "$RUNNER_TEMP/bin/fakeserver" ./tools/fakeserver
+        run: |
+          go build -o "$RUNNER_TEMP/bin/fakeserver" ./tools/fakeserver
+          go build -o "$RUNNER_TEMP/bin/fakewatcher" ./tools/fakewatcher
       - name: checks
         env:
           CI_DIST: ${{ github.workspace }}/dist

@@ -134,9 +134,9 @@ func apply(menu []*systray.MenuItem, last *shown, v View, iconDir string) {
 		setIcon(img, iconDir)
 		last.icon = img
 	}
-	if runtime.GOOS == "darwin" && v.Title != last.title {
-		systray.SetTitle(v.Title)
-		last.title = v.Title
+	if t, ok := NextToIcon(runtime.GOOS, v); ok && t != last.title {
+		setNextToIcon(t)
+		last.title = t
 	}
 	if v.Tooltip != last.tooltip {
 		systray.SetTooltip(v.Tooltip)

@@ -142,8 +142,10 @@ The menu, from top to bottom:
   under the `^` arrow on the taskbar; drag it onto the taskbar to keep it in
   view.
 - **macOS:** the ring and the percentage in the menu bar.
-- **Ubuntu:** the ring with the percentage inside it, in the top bar (through
-  the AppIndicator extension Ubuntu has on by default).
+- **Ubuntu:** the ring with the percentage inside it and the percentage as
+  text next to it, in the top bar (through the AppIndicator extension Ubuntu
+  has on by default). Desktops that show only tray icons, such as KDE, show
+  the ring with the percentage inside it.
 - Without a tray, such as a server with no desktop, it runs without an icon.
   Ask it what it is doing with `~/.local/bin/claude-usage status`.
 

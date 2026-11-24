@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/icon"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
 )
@@ -242,4 +243,65 @@ func TestTooltipMaxIsWindowsLimit(t *testing.T) {
 	got := truncateUTF16(strings.Repeat("x", 300), tooltipMax)
 	eq(t, len(utf16.Encode([]rune(got))), 127)
 	eq(t, strings.HasSuffix(got, "…"), true)
+}
+
+func TestNextToIconPerOS(t *testing.T) {
+	v := Build(base())
+	for _, c := range []struct {
+		goos string
+		text string
+		show bool
+	}{{"linux", "71%", true}, {"darwin", "71%", true}, {"windows", "", false}} {
+		got, show := NextToIcon(c.goos, v)
+		if got != c.text || show != c.show {
+			t.Fatalf("%s: got %q %v, want %q %v", c.goos, got, show, c.text, c.show)
+		}
+	}
+}
+
+func TestLinuxLabelText(t *testing.T) {
+	label := func(in Inputs) string {
+		t.Helper()
+		s, show := NextToIcon("linux", Build(in))
+		if !show {
+			t.Fatal("linux shows no label")
+		}
+		return s
+	}
+	in := base()
+	eq(t, label(in), "71%")
+	in.Snap.WeeklyPercent = pf(99.6)
+	eq(t, label(in), "100%")
+	in = base()
+	in.Snap.LatestFetchedAt = now.Add(-16 * time.Minute)
+	eq(t, label(in), "71% ⚠")
+	in = base()
+	in.Snap.AuthState = "not_signed_in"
+	eq(t, label(in), "–%")
+	in = base()
+	in.Snap.WeeklyPercent = nil
+	eq(t, label(in), "–%")
+	// the guide is at least as wide as any label
+	for _, s := range []string{"100%", "100% ⚠", "–% ⚠"} {
+		if len([]rune(LabelGuide)) < len([]rune(s)) {
+			t.Fatalf("guide %q shorter than %q", LabelGuide, s)
+		}
+	}
+}
+
+// A desktop that ignores the label (KDE) must still show the number: the
+// Linux icon keeps it in the ring whether or not a label is shown.
+func TestLinuxIconKeepsNumberWithLabel(t *testing.T) {
+	v := Build(base())
+	if _, show := NextToIcon("linux", v); !show {
+		t.Fatal("no label on linux")
+	}
+	withNumber := v.Icon
+	withNumber.Number = true
+	eq(t, icon.TrayImage("linux", v.Icon), icon.PNG(icon.Ring(withNumber, 48)))
+	without := v.Icon
+	without.Number = false
+	if reflect.DeepEqual(icon.TrayImage("linux", v.Icon), icon.PNG(icon.Ring(without, 48))) {
+		t.Fatal("linux icon has no number")
+	}
 }

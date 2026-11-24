@@ -43,7 +43,7 @@ type Item struct {
 // View is everything the tray shows.
 type View struct {
 	Icon    icon.Spec
-	Title   string // the text next to the icon (macOS only)
+	Title   string // the text next to the icon (macOS, Linux); see NextToIcon
 	Tooltip string
 	Items   []Item
 }
@@ -57,6 +57,22 @@ type Inputs struct {
 	AutostartOn  bool
 	RemoveArmed  bool
 	DashboardURL string
+}
+
+// LabelGuide is the widest text next to the icon, for Linux tray hosts
+// that reserve its room (XAyatanaLabelGuide).
+const LabelGuide = "100%" + text.StaleMark
+
+// NextToIcon is the text shown next to the tray icon on goos, and whether
+// that OS shows one: the menu bar title on macOS, the label in Ubuntu's top
+// bar (AppIndicator) on Linux. Windows shows none. The Linux icon keeps the
+// number in its ring too (icon.TrayImage), for hosts that ignore the label.
+func NextToIcon(goos string, v View) (string, bool) {
+	switch goos {
+	case "darwin", "linux":
+		return v.Title, true
+	}
+	return "", false
 }
 
 // tooltipMax is in UTF-16 units (Windows NOTIFYICONDATA szTip holds 128
