@@ -85,9 +85,9 @@ func (c *Client) Sync(ctx context.Context, baseURL string, req Request) (Respons
 }
 
 // SyncV2 sends one schema 2 request. A server that does not speak schema 2
-// answers 400 {"error":"unsupported_schema"} (a v5 server), or a reply
-// without "providers" (a server that ignored the schema): both give
-// ErrUnsupportedSchema.
+// answers 400 {"error":"unsupported_schema"} (a v5 server): that alone
+// gives ErrUnsupportedSchema. A 200 without "providers" is ErrBadResponse
+// (it may come from a captive portal or a proxy; review m-R).
 func (c *Client) SyncV2(ctx context.Context, baseURL string, req RequestV2) (ResponseV2, error) {
 	data, err := c.post(ctx, baseURL, req, false)
 	if err != nil {
@@ -101,7 +101,7 @@ func (c *Client) SyncV2(ctx context.Context, baseURL string, req RequestV2) (Res
 		return ResponseV2{}, fmt.Errorf("%w: not JSON", ErrBadResponse)
 	}
 	if out.Providers == nil {
-		return ResponseV2{}, ErrUnsupportedSchema
+		return ResponseV2{}, fmt.Errorf("%w: no providers", ErrBadResponse)
 	}
 	resp := out.ResponseV2
 	resp.Providers = *out.Providers

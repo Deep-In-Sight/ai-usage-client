@@ -71,10 +71,14 @@ func TestUnsupportedSchemaError(t *testing.T) {
 	eq(t, len(r.Providers), 1)
 	eq(t, r.Providers[0].Role, "poller")
 	eq(t, *r.Providers[0].Peers.PollerHostname, "TEST-PC-A")
-	for _, c := range []string{"unsupported", "schema1"} {
-		if _, err := run(c); !errors.Is(err, ErrUnsupportedSchema) {
-			t.Errorf("%s: %v", c, err)
-		}
+	if _, err := run("unsupported"); !errors.Is(err, ErrUnsupportedSchema) {
+		t.Errorf("unsupported: %v", err)
+	}
+	// a 200 without "providers" (a captive portal's or proxy's JSON, a
+	// server that ignored the schema) is no answer, not a reason for an
+	// hour of schema 1: only the server's own 400 body is (review m-R)
+	if _, err := run("schema1"); !errors.Is(err, ErrBadResponse) || errors.Is(err, ErrUnsupportedSchema) {
+		t.Errorf("200 without providers: %v", err)
 	}
 	var se *StatusError
 	if _, err := run("other400"); !errors.As(err, &se) || se.Status != 400 {
