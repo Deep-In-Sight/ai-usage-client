@@ -84,7 +84,10 @@ func TestWatcherAgainAfterAFailedTry(t *testing.T) {
 		t.Fatalf("%+v", hello)
 	}
 	w2.exit(trayproto.ExitDesktopBack) // the try was just now: two minutes after it
-	h.event(func(e Event) bool { return isExit(e) && e.Provider == provider.Claude })
+	// the watcher's own exit (not the try's before it, review m-5)
+	h.event(func(e Event) bool {
+		return isExit(e) && e.Provider == provider.Claude && *e.Exit == trayproto.ExitDesktopBack
+	})
 	h.clk.Advance(2*time.Minute - time.Millisecond)
 	h.noSpawn()
 	h.clk.Advance(time.Millisecond)

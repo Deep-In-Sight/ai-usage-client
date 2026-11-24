@@ -407,12 +407,15 @@ func (s *Supervisor) ended(sl *slot, code int, now time.Time) {
 		return
 	case sl.standby:
 		sl.standby = false
-		s.queue.put(ev)
+		// the try is planned before the exit is reported, so that whoever
+		// acts on the report (a test moving a fake clock) finds it planned
+		// (review m-5)
 		if code == trayproto.ExitDesktopBack {
 			s.probe(sl, "the desktop came back")
 		} else {
 			s.o.Log.Printf("tray helper %s: the watch for the desktop ended (exit %d); trying again at the planned time", name(sl.id), code)
 		}
+		s.queue.put(ev)
 		return
 	}
 	s.retry(sl, ev, code, lived, now)
