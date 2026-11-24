@@ -148,7 +148,9 @@ func TestRequestFreshConcurrent(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	waitFor(t, 2*time.Second, func() bool { return r.syncer.count() >= 2 })
+	// All the wakes and clock moves can land before Run's first wait; the
+	// time goes on moving, so syncing must go on.
+	waitFor(t, 2*time.Second, func() bool { r.clk.Advance(time.Second); return r.syncer.count() >= 2 })
 	cancel()
 	<-done
 }
