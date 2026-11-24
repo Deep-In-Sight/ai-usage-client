@@ -548,3 +548,72 @@ func TestQuitHelperIsNotRestarted(t *testing.T) {
 	h.noSpawn()
 	a.none(t)
 }
+
+// A helper no longer wanted that ignores quit (hung in the tray library)
+// is killed after 3 s, as Stop does, so its provider can get a working
+// icon again (stage-2 review m-2).
+func TestDroppedHelperThatIgnoresQuitIsKilled(t *testing.T) {
+	h := newHarness(t)
+	h.ignoreQuit = true
+	h.sup.Want([]provider.ID{provider.Claude})
+	p := h.spawned()
+	h.sup.Want([]provider.ID{provider.Codex})
+	_ = h.spawned()
+	if m := p.next(t); m.Type != trayproto.TypeQuit {
+		t.Fatalf("%+v", m)
+	}
+	h.clk.Advance(stopTimeout - time.Millisecond)
+	select {
+	case <-p.killed:
+		t.Fatal("killed before 3 s")
+	case <-time.After(50 * time.Millisecond):
+	}
+	h.clk.Advance(time.Millisecond)
+	select {
+	case <-p.killed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("not killed")
+	}
+	h.event(func(e Event) bool { return isExit(e) && e.Provider == provider.Claude })
+	h.sup.Want([]provider.ID{provider.Claude, provider.Codex})
+	if c := h.spawned(); c.id != provider.Claude {
+		t.Fatalf("%q", c.id)
+	}
+}
+
+// Wanted again while it ignores the quit: it is killed and a new one
+// starts.
+func TestRewantedHelperThatIgnoresQuitIsReplaced(t *testing.T) {
+	h := newHarness(t)
+	h.ignoreQuit = true
+	h.sup.Want([]provider.ID{provider.Claude})
+	p := h.spawned()
+	h.sup.Want([]provider.ID{provider.Codex})
+	_ = h.spawned()
+	h.sup.Want([]provider.ID{provider.Claude})
+	h.clk.Advance(stopTimeout)
+	select {
+	case <-p.killed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("not killed")
+	}
+	if c := h.spawned(); c.id != provider.Claude {
+		t.Fatalf("%q", c.id)
+	}
+}
+
+// A helper that ends on quit is not killed later.
+func TestKillTimerEndsWithTheHelper(t *testing.T) {
+	h := newHarness(t)
+	h.sup.Want([]provider.ID{provider.Claude})
+	p := h.spawned()
+	h.sup.Want([]provider.ID{provider.Codex})
+	_ = h.spawned()
+	h.event(func(e Event) bool { return isExit(e) && e.Provider == provider.Claude })
+	h.clk.Advance(time.Hour)
+	select {
+	case <-p.killed:
+		t.Fatal("killed after it ended")
+	case <-time.After(50 * time.Millisecond):
+	}
+}

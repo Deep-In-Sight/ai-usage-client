@@ -135,8 +135,8 @@ func (s *Supervisor) Events() <-chan Event { return s.queue.out }
 
 // Want sets the helpers to run: one per provider, in this order; none
 // means one neutral helper (provider ""). Helpers no longer wanted are
-// asked to quit; new ones start; a helper stopped after repeated failures
-// is tried again.
+// asked to quit (and killed when they have not ended 3 s later); new ones
+// start; a helper stopped after repeated failures is tried again.
 func (s *Supervisor) Want(ids []provider.ID) {
 	if len(ids) == 0 {
 		ids = []provider.ID{""}
@@ -151,7 +151,7 @@ func (s *Supervisor) Want(ids []provider.ID) {
 		if !slices.Contains(ids, id) {
 			sl.wanted = false
 			if sl.proc != nil {
-				s.quit(sl)
+				s.quitOrKill(sl)
 			} else {
 				delete(s.slots, id)
 			}
@@ -408,6 +408,27 @@ func (s *Supervisor) read(id provider.ID, gen int, p Proc) {
 		}
 		s.mu.Unlock()
 	}
+}
+
+// quitOrKill asks sl's helper to quit and kills it when it has not ended
+// stopTimeout later, as Stop does: a helper hung in the tray library
+// would keep its icon, and a slot wanted again would wait for its end
+// for ever (s.mu held).
+func (s *Supervisor) quitOrKill(sl *slot) {
+	if sl.proc == nil || sl.quitSent {
+		return
+	}
+	s.quit(sl)
+	p, exited := sl.proc, sl.exited
+	timer := s.o.Clock.After(stopTimeout)
+	go func() {
+		select {
+		case <-timer:
+			s.o.Log.Printf("tray helper %s did not quit; ending it", name(sl.id))
+			p.Kill()
+		case <-exited:
+		}
+	}()
 }
 
 func (s *Supervisor) quit(sl *slot) {
