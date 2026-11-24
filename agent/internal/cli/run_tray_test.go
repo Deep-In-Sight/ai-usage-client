@@ -321,8 +321,9 @@ func TestControllerRefreshSendsWantFresh(t *testing.T) {
 	cancel, code := te.mainAsync("run")
 	h := te.helpers.ready()
 	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 1 })
+	n := len(fs.requests())
 	h.click("refresh")
-	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 2 && r[len(r)-1].WantFresh })
+	fs.waitFor(t, 10*time.Second, func(r []protocol.Request) bool { return freshAfter(r, n) })
 	cancel()
 	eq(t, waitCode(t, code), 0)
 }
@@ -493,7 +494,7 @@ func TestTwoHelpersShowOneMenu(t *testing.T) {
 	}
 	before := len(fs.requests())
 	c.click("refresh")
-	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) > before && r[len(r)-1].WantFresh })
+	fs.waitFor(t, 10*time.Second, func(r []protocol.Request) bool { return freshAfter(r, before) })
 	cancel()
 	eq(t, waitCode(t, code), 0)
 	for _, h := range []*fakeHelper{n, c} {
@@ -510,4 +511,15 @@ func asCIBuild(t *testing.T) {
 	old := buildVersion
 	buildVersion = func() string { return "0.0.0-ci" }
 	t.Cleanup(func() { buildVersion = old })
+}
+
+// freshAfter: a request after the first n asked for fresh numbers (the
+// tray switching to "tray" can wake a sync of its own around it).
+func freshAfter(r []protocol.Request, n int) bool {
+	for i := n; i < len(r); i++ {
+		if r[i].WantFresh {
+			return true
+		}
+	}
+	return false
 }

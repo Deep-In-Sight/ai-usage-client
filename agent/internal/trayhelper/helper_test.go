@@ -424,8 +424,8 @@ func TestHelperMenuGetsASectionWhenAProviderAppears(t *testing.T) {
 	eq(t, r.next().Type, trayproto.TypeReady)
 	r.send(view("42%", true))
 	waitFor(t, "the Codex section", func() bool {
-		layout, _, _, _, _, _ := r.ui.snapshot()
-		return strings.Contains(strings.Join(layout, " "), "h.codex")
+		layout, items, _, _, _, _ := r.ui.snapshot()
+		return strings.Contains(strings.Join(layout, " "), "h.codex") && layout[len(layout)-1] == "quit" && items["quit"].visible
 	})
 	layout, items, _, _, _, resets := r.ui.snapshot()
 	eq(t, resets, 1)
