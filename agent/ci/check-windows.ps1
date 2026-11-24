@@ -416,7 +416,8 @@ if ($Desktop) {
         if (-not (WaitFor 20 { try { $null = Invoke-RestMethod -TimeoutSec 5 "$admin/healthz"; $true } catch { $false } })) {
             Fail 'release.no_codex_cli' "fakevendor did not start: $(Get-Content -Raw (Join-Path $out 'fakevendor.log') -ErrorAction SilentlyContinue)"; ReleaseCleanup; return
         }
-        $der = [Convert]::FromBase64String(((Get-Content -Raw -LiteralPath $ca) -replace '-----[A-Z ]+-----', '') -replace '\s', '')
+        $b64 = ((Get-Content -Raw -LiteralPath $ca) -replace '-----[A-Z ]+-----', '') -replace '\s', ''
+        $der = [Convert]::FromBase64String($b64)
         $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList (, $der)
         $store = New-Object System.Security.Cryptography.X509Certificates.X509Store -ArgumentList 'Root', 'LocalMachine'
         $store.Open('ReadWrite'); $store.Add($cert); $store.Close()

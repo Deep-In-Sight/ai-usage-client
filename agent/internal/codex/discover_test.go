@@ -214,6 +214,10 @@ func TestRelativePathsAreNeverCandidates(t *testing.T) {
 func TestShimCheckIsBounded(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "codex")
 	must(t, os.WriteFile(p, []byte("#!/bin/sh\nexec node codex.js\n"), 0o755))
+	// the file isShim reads is the link-resolved one (macOS and Windows
+	// temporary folders resolve to another spelling)
+	p, err := filepath.EvalSymlinks(p)
+	must(t, err)
 	eq(t, isShim(p), true)
 	release, holding := make(chan struct{}), make(chan struct{})
 	go func() {
