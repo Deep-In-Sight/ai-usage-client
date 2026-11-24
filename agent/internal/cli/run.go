@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -50,12 +51,28 @@ func runCmd(env Env, args []string) int {
 		}
 		headlessFlag = true
 	}
-	unlock, err := procs.Lock(env.Dirs.File(paths.LockFile))
-	if errors.Is(err, procs.ErrLocked) {
+	started := env.Clock.Now()
+	// 1: the mode this process starts in.
+	headless := headlessFlag || env.goos() == "linux" && osinfo.Headless(env.Getenv)
+	clientMode := "tray"
+	if headless {
+		clientMode = "headless"
+	}
+
+	ctx, stop := signal.NotifyContext(env.ctx(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	unlock, replaced, err := lockRun(ctx, env, headless)
+	var newer *newerError
+	switch {
+	case errors.As(err, &newer):
+		fmt.Fprintf(env.Stderr, "ai-usage: already running (pid %d, started after this one)\n", newer.holder.PID)
+		return 1
+	case errors.Is(err, procs.ErrLocked):
 		fmt.Fprintln(env.Stderr, "ai-usage: already running")
 		return 1
-	}
-	if err != nil {
+	case err != nil && ctx.Err() != nil:
+		return 0 // stopped while waiting for the lock
+	case err != nil:
 		fmt.Fprintln(env.Stderr, "ai-usage: lock:", err)
 		return 1
 	}
@@ -95,13 +112,6 @@ func runCmd(env Env, args []string) int {
 	if err != nil {
 		fmt.Fprintln(env.Stderr, "ai-usage: backlog:", err)
 		return 1
-	}
-
-	// 1: the mode this process starts in.
-	headless := headlessFlag || env.goos() == "linux" && osinfo.Headless(env.Getenv)
-	clientMode := "tray"
-	if headless {
-		clientMode = "headless"
 	}
 
 	ro := readerOptions(cfg, env.Dirs)
@@ -158,9 +168,10 @@ func runCmd(env Env, args []string) int {
 	})
 	ctrl.eng = e
 
-	ctx, stop := signal.NotifyContext(env.ctx(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	logger.Printf("ai-usage %s started (pid %d, device %s, data %s, %s)", version.Version, os.Getpid(), deviceID, env.Dirs.Data, clientMode)
+	if replaced.PID != 0 {
+		logger.Printf("took over from the agent that ran before (pid %d)", replaced.PID)
+	}
 
 	// 3: the engine runs first, whatever happens with the tray.
 	engCtx, cancelEngine := context.WithCancel(ctx)
@@ -240,7 +251,35 @@ func runCmd(env Env, args []string) int {
 	if show == nil {
 		show = tray.Run
 	}
-	if err := show(ctx, ctrl, updates, notice); err != nil {
+	err = show(ctx, ctrl, updates, notice)
+	if errors.Is(err, tray.ErrSessionLost) {
+		// The tray cannot reconnect: this run is replaced by a new one,
+		// which connects to the session bus again and waits for a tray
+		// host. Meanwhile (and while a restart wait keeps restarts from
+		// coming in a loop) the engine goes on.
+		e.SetClientMode("headless")
+		wait, next := restartPlan(restartsFrom(env.Getenv), env.Clock.Now().Sub(started))
+		logger.Printf("tray: the connection to the session bus was lost; restarting in %s", wait.Round(time.Second))
+		select {
+		case <-ctx.Done():
+			return finish()
+		case <-env.Clock.After(wait):
+		}
+		cancelEngine()
+		<-engineDone
+		logger.Print("ai-usage restarting")
+		release()
+		restart := env.Restart
+		if restart == nil {
+			restart = restartSelf
+		}
+		if err := restart(append([]string{"run"}, args...), next); err != nil {
+			fmt.Fprintln(env.Stderr, "ai-usage: restart:", err)
+			return 1
+		}
+		return 0
+	}
+	if err != nil {
 		e.SetClientMode("headless")
 		logger.Printf("tray: %v: running without an icon", err)
 		return withoutTray()
@@ -248,6 +287,75 @@ func runCmd(env Env, args []string) int {
 	// 6: Quit, Remove or a signal.
 	return finish()
 }
+
+// lockRun takes run.lock, writing this process's identity into it. A
+// desktop run on Linux or macOS takes it over from an older holder (the
+// newest instance wins: at login the new session's run replaces one that
+// outlived the old session); a headless run, or any run on Windows, gives
+// up when it is held. replaced is the holder that was stopped.
+func lockRun(ctx context.Context, env Env, headless bool) (unlock func(), replaced procs.Identity, err error) {
+	path := env.Dirs.File(paths.LockFile)
+	self, err := procs.Self()
+	if err != nil {
+		unlock, err := procs.Lock(path)
+		return unlock, procs.Identity{}, err
+	}
+	if headless || env.goos() != "linux" && env.goos() != "darwin" {
+		unlock, err := procs.LockAs(path, self)
+		return unlock, procs.Identity{}, err
+	}
+	takeOver := env.TakeOver
+	if takeOver == nil {
+		takeOver = func(ctx context.Context, path string, self procs.Identity) (func(), procs.Identity, error) {
+			return procs.TakeOver(ctx, path, self, procs.TakeOverOptions{})
+		}
+	}
+	unlock, replaced, err = takeOver(ctx, path, self)
+	if errors.Is(err, procs.ErrNewer) {
+		return nil, procs.Identity{}, &newerError{replaced}
+	}
+	return unlock, replaced, err
+}
+
+// newerError: run.lock is held by a run that started after this one.
+type newerError struct{ holder procs.Identity }
+
+func (e *newerError) Error() string { return "held by a newer run" }
+
+// Restarts after a lost session bus: each run lives at least restartBase
+// doubled for every quick restart before it (at most restartMax), so that a
+// bus that keeps failing cannot make restarts spin. A run that lived
+// restartReset starts the count again.
+var (
+	restartBase  = 5 * time.Second
+	restartMax   = 10 * time.Minute
+	restartReset = 10 * time.Minute
+)
+
+// restartPlan: how long a run that lived for lived waits before it
+// restarts, and the count the new run gets, after prev quick restarts.
+func restartPlan(prev int, lived time.Duration) (wait time.Duration, next int) {
+	if lived >= restartReset || prev < 0 {
+		prev = 0
+	}
+	life := restartMax
+	if prev < 20 {
+		life = min(restartBase<<prev, restartMax)
+	}
+	return max(0, life-lived), prev + 1
+}
+
+// restartsFrom reads the count a restarted run was given.
+func restartsFrom(getenv func(string) string) int {
+	n, err := strconv.Atoi(getenv(restartsEnv))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// restartsEnv carries the count of quick restarts to the new run.
+const restartsEnv = "AI_USAGE_RESTARTS"
 
 // trayRecheck is how often a run without a tray looks for one again even
 // when no tray host appeared on the bus.

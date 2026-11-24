@@ -49,6 +49,12 @@ type Env struct {
 	// TrayWait waits up to limit for a tray host to appear (nil means
 	// tray.WaitForHost).
 	TrayWait func(ctx context.Context, limit time.Duration) bool
+	// TakeOver takes run.lock from an older run (nil means procs.TakeOver).
+	TakeOver func(ctx context.Context, path string, self procs.Identity) (unlock func(), replaced procs.Identity, err error)
+	// Restart replaces this process with "ai-usage <args>", passing the
+	// count of quick restarts (nil means the real exec); it returns only
+	// on failure.
+	Restart func(args []string, restarts int) error
 	// Syncer makes the sync client (nil means the real one).
 	Syncer func(cfg config.Config, userAgent string) engine.Syncer
 	// HasConsole (nil means true) and Alert (nil means none): a Windows GUI

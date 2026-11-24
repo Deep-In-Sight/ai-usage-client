@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
@@ -26,11 +27,17 @@ const (
 )
 
 // Run shows the tray icon and menu and blocks until Quit, Remove or the end
-// of ctx. It must be called on the main goroutine (macOS draws there).
+// of ctx; it returns ErrSessionLost when the tray's connection to the
+// session went away (Linux: the session bus). It must be called on the
+// main goroutine (macOS draws there).
 func Run(ctx context.Context, c Controller, updates <-chan struct{}, notice string) error {
-	systray.Run(func() { go loop(ctx, c, updates, notice) }, func() {})
+	var lost atomic.Bool
+	systray.Run(func() { go loop(ctx, c, updates, notice, &lost) }, func() {})
 	if runtime.GOOS == "windows" {
 		removeIconFiles(c.IconDir())
+	}
+	if lost.Load() {
+		return ErrSessionLost
 	}
 	return nil
 }
@@ -43,7 +50,7 @@ type shown struct {
 	items    []Item
 }
 
-func loop(ctx context.Context, c Controller, updates <-chan struct{}, notice string) {
+func loop(ctx context.Context, c Controller, updates <-chan struct{}, notice string, lost *atomic.Bool) {
 	menu := make([]*systray.MenuItem, itemCount)
 	for id := ItemID(0); id < itemCount; id++ {
 		if id == ItemAutostart {
@@ -82,6 +89,10 @@ func loop(ctx context.Context, c Controller, updates <-chan struct{}, notice str
 	for {
 		select {
 		case <-ctx.Done():
+			systray.Quit()
+			return
+		case <-sessionLost():
+			lost.Store(true)
 			systray.Quit()
 			return
 		case <-updates:
