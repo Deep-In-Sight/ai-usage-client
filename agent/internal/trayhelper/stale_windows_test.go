@@ -12,6 +12,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
 )
 
 const staleChildEnv = "AI_USAGE_TEST_STALE_ICON_CHILD"
@@ -99,33 +101,36 @@ func iconThere(window uint64, id uint32) bool {
 	return r == 0
 }
 
-// A helper killed after it added its icon leaves the icon; another process
-// removes it with the dead helper's window and id (review n-2). Needs a
-// taskbar (CI's Windows runners have one). The measurements go into the
-// failure message: whether the icon outlives a killed process, and
-// whether another process may remove a live or a dead one's icon.
-func TestAnotherProcessRemovesAStaleIcon(t *testing.T) {
+// A helper killed after it added its icon must leave no icon once the
+// next helper started (review n-2). Measured on CI's windows-2025 (run
+// 45403865840): another process may remove a live process's icon, and the
+// shell drops a killed process's icon by itself; older shells kept it
+// (until the pointer passed over it), and the next helper's removal is
+// for them. Needs a taskbar (CI's Windows runners have one).
+func TestAKilledHelpersIconIsGoneAfterTheNextHelperStarts(t *testing.T) {
+	// another process removes an icon by its window and id
 	live, lw := startStaleChild(t, "1")
-	liveThere := iconThere(lw, staleTestID)
-	liveRemoved := removeIcon(lw, staleTestID)
+	if !iconThere(lw, staleTestID) {
+		t.Fatal("the child's icon is not in the notification area")
+	}
+	if !removeIcon(lw, staleTestID) || iconThere(lw, staleTestID) {
+		t.Fatal("another process could not remove the icon")
+	}
 	_ = live.Process.Kill()
 	_ = live.Wait()
 
+	// a killed one: what the next helper does leaves no icon either way
 	cmd, window := startStaleChild(t, "1")
-	before := iconThere(window, staleTestID)
-	if err := cmd.Process.Kill(); err != nil { // TerminateProcess: the icon is not removed
+	if err := cmd.Process.Kill(); err != nil { // TerminateProcess: the icon is not removed by its owner
 		t.Fatal(err)
 	}
 	_ = cmd.Wait()
-	time.Sleep(200 * time.Millisecond)
-	after := iconThere(window, staleTestID)
-	removed := removeIcon(window, staleTestID)
-	gone := !iconThere(window, staleTestID)
-	again := removeIcon(window, staleTestID)
-	if !removed || again {
-		t.Fatalf("measured: live icon there %v, removed by another process %v; killed child's icon there before %v, after the kill %v, removed by another process %v, gone after %v, removed twice %v",
-			liveThere, liveRemoved, before, after, removed, gone, again)
+	stayed := iconThere(window, staleTestID)
+	removeStaleIcons([]trayproto.StaleIcon{{Window: window, UID: staleTestID}})
+	if iconThere(window, staleTestID) {
+		t.Fatal("the killed helper's icon is still there after the next helper removed it")
 	}
+	t.Logf("the icon stayed after the kill until removed: %v", stayed)
 }
 
 // iconWindow finds this process's window of the tray library's class.
