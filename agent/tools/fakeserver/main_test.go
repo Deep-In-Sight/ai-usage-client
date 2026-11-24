@@ -205,3 +205,71 @@ func TestWeeklyCanBeChanged(t *testing.T) {
 		t.Fatalf("GET /weekly: %d", code)
 	}
 }
+
+const v2body = `{"schema":2,"client":{"version":"0.0.0-ci","os":"linux","mode":"headless"},"device":{"id":"dev-2"},
+ "machine":{"key":"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a","source":"os"},"event":null,
+ "providers":[{"provider":"claude","account":{"key":"acc-ci-1","email":"user-a@example.com"},"auth":{"state":"ok","token_expires_at":null},
+  "parse_problem":null,"results":[],"want_fresh":true},
+  {"provider":"codex","account":null,"auth":{"state":"not_signed_in","token_expires_at":null},"parse_problem":null,"results":[],"want_fresh":true}]}`
+
+// Schema 2: one standby block per provider, Claude's with today's fake
+// reply; the device's Claude sign-in, e-mail, machine part and refreshes
+// are recorded as for schema 1.
+func TestSchema2Sync(t *testing.T) {
+	srv, _ := newTest(t)
+	code, m := post(t, srv, "Bearer "+key, v2body)
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	ps, _ := m["providers"].([]any)
+	if len(ps) != 2 {
+		t.Fatalf("%v", m)
+	}
+	c := ps[0].(map[string]any)
+	if c["provider"] != "claude" || c["role"] != "standby" || c["latest"] == nil || c["peers"].(map[string]any)["pcs"] == nil {
+		t.Fatalf("%v", c)
+	}
+	if x := ps[1].(map[string]any); x["provider"] != "codex" || x["latest"] != nil {
+		t.Fatalf("%v", x)
+	}
+	s, _ := stats(t, srv)
+	d := s.Devices["dev-2"]
+	if d.Syncs != 1 || d.LastAuthState != "ok" || d.LastEmail != "user-a@example.com" || d.WantFresh != 1 || d.LastMode != "headless" {
+		t.Fatalf("%+v", d)
+	}
+	var raw map[string]map[string]map[string]any
+	_, body := get(t, srv, "/stats")
+	_ = json.Unmarshal([]byte(body), &raw)
+	dev := raw["devices"]["dev-2"]
+	if dev["last_schema"] != 2.0 || dev["machine"] != true || dev["uninstall_events"] != 0.0 {
+		t.Fatalf("%v", dev)
+	}
+	if strings.Contains(body, "0a0a0a0a0a0a0a0a") {
+		t.Fatal("the machine key is shown")
+	}
+	// the uninstall event is counted and answered with no blocks
+	code, m = post(t, srv, "Bearer "+key, `{"schema":2,"client":{"version":"0.0.0-ci","os":"linux"},"device":{"id":"dev-2"},"machine":null,"event":"uninstall","providers":[]}`)
+	if code != 200 || len(m["providers"].([]any)) != 0 {
+		t.Fatalf("%d %v", code, m)
+	}
+	_, body = get(t, srv, "/stats")
+	_ = json.Unmarshal([]byte(body), &raw)
+	if raw["devices"]["dev-2"]["uninstall_events"] != 1.0 || raw["devices"]["dev-2"]["syncs"] != 2.0 {
+		t.Fatalf("%v", raw["devices"]["dev-2"])
+	}
+}
+
+// -schema1-only is a server from before schema 2: 400 unsupported_schema.
+func TestSchema1Only(t *testing.T) {
+	files, scripts := t.TempDir(), t.TempDir()
+	srv := httptest.NewServer(newServer(Config{Key: key, Token: token, Files: files, Scripts: scripts, Schema1Only: true}))
+	defer srv.Close()
+	code, m := post(t, srv, "Bearer "+key, v2body)
+	if code != 400 || m["error"] != "unsupported_schema" {
+		t.Fatalf("%d %v", code, m)
+	}
+	code, _ = post(t, srv, "Bearer "+key, `{"schema":1,"client":{"version":"0.0.0-ci","mode":"headless"},"device":{"id":"dev-1"},"auth":{"state":"ok"},"results":[],"want_fresh":false}`)
+	if code != 200 {
+		t.Fatalf("schema 1: %d", code)
+	}
+}

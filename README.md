@@ -48,12 +48,35 @@ address, as any server you connect to does.)
   plan and rate-limit tier
 - This PC: a random ID made at the first run, the PC name, your OS user
   name, the OS and its version, and the CPU type
+- A key that tells the server this PC apart from others, so that the
+  dashboard counts a reinstalled PC once: a one-way hash of the OS's
+  machine identifier (or, when the OS has none, of a network card's
+  address). The identifier and the address themselves are never sent.
 - The agent: its version, and whether it shows a tray icon
 - The sign-in: whether Claude Code is signed in, and when the sign-in expires
 - Whether you asked for fresh numbers with **Refresh now**
+- When you remove the agent: one last request that says so, so the server
+  stops counting this PC at once
 
 Field by field, every sync request carries `schema`, `client.version`,
 `client.os`, `client.os_version`, `client.arch`, `client.mode`, `device.id`,
+`device.hostname`, `device.os_user`, `machine.key`, `machine.source`,
+`event`, and one entry per provider with `providers[].provider`,
+`providers[].account.key`, `providers[].account.email`,
+`providers[].account.display_name`, `providers[].account.organization_name`,
+`providers[].account.organization_type`,
+`providers[].account.subscription_type`,
+`providers[].account.rate_limit_tier`, `providers[].account.plan_type`,
+`providers[].auth.state`, `providers[].auth.token_expires_at`,
+`providers[].parse_problem` (whether the agent could read the reply),
+`providers[].results[].account_key`, `providers[].results[].fetched_at`,
+`providers[].results[].http_status`, `providers[].results[].usage`,
+`providers[].results[].source`, `providers[].results[].cli_version`,
+`providers[].results[].detail`, `providers[].results[].retry_after_seconds`
+(how long the service asked to wait) and `providers[].want_fresh`.
+A server that does not know this request yet gets the older one instead,
+for Claude only: `schema`, `client.version`, `client.os`,
+`client.os_version`, `client.arch`, `client.mode`, `device.id`,
 `device.hostname`, `device.os_user`, `account.uuid`, `account.email`,
 `account.display_name`, `account.organization_name`,
 `account.organization_type`, `account.subscription_type`,
@@ -63,7 +86,8 @@ Field by field, every sync request carries `schema`, `client.version`,
 
 ### What it never sends
 
-Your token, your conversations, your files.
+Your token, your conversations, your files, this PC's machine identifier
+and its network card addresses.
 
 - It reads the sign-in Claude Code keeps and never refreshes or changes it.
   The token goes only to `api.anthropic.com`, and redirects are refused.

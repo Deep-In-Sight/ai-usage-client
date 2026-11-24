@@ -1,0 +1,353 @@
+{
+  "name": "13-mixed-schema-same-account",
+  "description": "A schema 1 device and a schema 2 device on the same Claude account share one poller; each reply is in its own schema",
+  "ingest_key": "test-ingest-key-0123456789",
+  "server": {
+    "server_urls": [
+      "http://ai-usage.local",
+      "http://ai-usage.local:8700",
+      "http://192.0.2.10:8700"
+    ],
+    "client_latest_version": null
+  },
+  "steps": [
+    {
+      "at": "2026-01-05T09:00:00.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 1,
+          "client": {
+            "version": "0.8.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "tray"
+          },
+          "device": {
+            "id": "dev-a",
+            "hostname": "TEST-PC-A",
+            "os_user": "user-a"
+          },
+          "account": {
+            "uuid": "acc-1",
+            "email": "user-a@example.com",
+            "display_name": "User A",
+            "organization_name": "Example",
+            "organization_type": "claude_max",
+            "subscription_type": "max",
+            "rate_limit_tier": "default_claude_max_20x"
+          },
+          "auth": {
+            "state": "ok",
+            "token_expires_at": "2026-01-05T17:00:00.000Z"
+          },
+          "results": [],
+          "want_fresh": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "role": "poller",
+          "fetch_now": true,
+          "peers": {
+            "devices": 1,
+            "poller_hostname": "TEST-PC-A"
+          }
+        }
+      }
+    },
+    {
+      "at": "2026-01-05T09:00:10.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 2,
+          "client": {
+            "version": "0.9.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "tray"
+          },
+          "device": {
+            "id": "dev-b",
+            "hostname": "TEST-PC-B",
+            "os_user": "user-b"
+          },
+          "machine": {
+            "key": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+            "source": "os"
+          },
+          "event": null,
+          "providers": [
+            {
+              "provider": "claude",
+              "account": {
+                "key": "acc-1",
+                "email": "user-a@example.com",
+                "display_name": "User A",
+                "organization_name": "Example",
+                "organization_type": "claude_max",
+                "subscription_type": "max",
+                "rate_limit_tier": "default_claude_max_20x"
+              },
+              "auth": {
+                "state": "ok",
+                "token_expires_at": "2026-01-05T20:00:00.000Z"
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            },
+            {
+              "provider": "codex",
+              "account": null,
+              "auth": {
+                "state": "not_signed_in",
+                "token_expires_at": null
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "providers": [
+            {
+              "provider": "claude",
+              "role": "standby",
+              "fetch_now": false,
+              "latest": null,
+              "peers": {
+                "devices": 2,
+                "pcs": 2,
+                "poller_hostname": "TEST-PC-A"
+              }
+            },
+            {
+              "provider": "codex",
+              "role": "standby",
+              "fetch_now": false,
+              "latest": null,
+              "peers": {
+                "devices": 0,
+                "pcs": 0,
+                "poller_hostname": null
+              }
+            }
+          ],
+          "next_sync_seconds": 60,
+          "server_urls": [
+            "http://ai-usage.local",
+            "http://ai-usage.local:8700",
+            "http://192.0.2.10:8700"
+          ],
+          "client_latest_version": null
+        }
+      }
+    },
+    {
+      "at": "2026-01-05T09:00:15.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 1,
+          "client": {
+            "version": "0.8.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "tray"
+          },
+          "device": {
+            "id": "dev-a",
+            "hostname": "TEST-PC-A",
+            "os_user": "user-a"
+          },
+          "account": {
+            "uuid": "acc-1",
+            "email": "user-a@example.com",
+            "display_name": "User A",
+            "organization_name": "Example",
+            "organization_type": "claude_max",
+            "subscription_type": "max",
+            "rate_limit_tier": "default_claude_max_20x"
+          },
+          "auth": {
+            "state": "ok",
+            "token_expires_at": "2026-01-05T17:00:00.000Z"
+          },
+          "results": [
+            {
+              "account_uuid": "acc-1",
+              "fetched_at": "2026-01-05T09:00:14.000Z",
+              "http_status": 200,
+              "usage": {
+                "five_hour": null,
+                "seven_day": {
+                  "utilization": 42.0,
+                  "resets_at": "2026-01-08T21:00:00.000000+00:00"
+                },
+                "limits": [
+                  {
+                    "kind": "weekly_all",
+                    "group": "weekly",
+                    "percent": 42,
+                    "severity": "normal",
+                    "resets_at": "2026-01-08T21:00:00.000000+00:00",
+                    "scope": null,
+                    "is_active": true
+                  }
+                ]
+              }
+            }
+          ],
+          "want_fresh": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "role": "poller",
+          "fetch_now": false,
+          "latest": {
+            "fetched_at": "2026-01-05T09:00:14.000Z"
+          },
+          "peers": {
+            "devices": 2,
+            "poller_hostname": "TEST-PC-A"
+          }
+        }
+      }
+    },
+    {
+      "at": "2026-01-05T09:00:20.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 2,
+          "client": {
+            "version": "0.9.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "tray"
+          },
+          "device": {
+            "id": "dev-b",
+            "hostname": "TEST-PC-B",
+            "os_user": "user-b"
+          },
+          "machine": {
+            "key": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+            "source": "os"
+          },
+          "event": null,
+          "providers": [
+            {
+              "provider": "claude",
+              "account": {
+                "key": "acc-1",
+                "email": "user-a@example.com",
+                "display_name": "User A",
+                "organization_name": "Example",
+                "organization_type": "claude_max",
+                "subscription_type": "max",
+                "rate_limit_tier": "default_claude_max_20x"
+              },
+              "auth": {
+                "state": "ok",
+                "token_expires_at": "2026-01-05T20:00:00.000Z"
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            },
+            {
+              "provider": "codex",
+              "account": null,
+              "auth": {
+                "state": "not_signed_in",
+                "token_expires_at": null
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "providers": [
+            {
+              "provider": "claude",
+              "role": "standby",
+              "fetch_now": false,
+              "latest": {
+                "fetched_at": "2026-01-05T09:00:14.000Z",
+                "source": null,
+                "usage": {
+                  "five_hour": null,
+                  "seven_day": {
+                    "utilization": 42.0,
+                    "resets_at": "2026-01-08T21:00:00.000000+00:00"
+                  },
+                  "limits": [
+                    {
+                      "kind": "weekly_all",
+                      "group": "weekly",
+                      "percent": 42,
+                      "severity": "normal",
+                      "resets_at": "2026-01-08T21:00:00.000000+00:00",
+                      "scope": null,
+                      "is_active": true
+                    }
+                  ]
+                }
+              },
+              "peers": {
+                "devices": 2,
+                "pcs": 2,
+                "poller_hostname": "TEST-PC-A"
+              }
+            },
+            {
+              "provider": "codex",
+              "role": "standby",
+              "fetch_now": false,
+              "latest": null,
+              "peers": {
+                "devices": 0,
+                "pcs": 0,
+                "poller_hostname": null
+              }
+            }
+          ],
+          "next_sync_seconds": 60,
+          "server_urls": [
+            "http://ai-usage.local",
+            "http://ai-usage.local:8700",
+            "http://192.0.2.10:8700"
+          ],
+          "client_latest_version": null
+        }
+      }
+    }
+  ]
+}

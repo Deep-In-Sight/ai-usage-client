@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,6 +35,7 @@ type fakeServer struct {
 	*httptest.Server
 	mu   sync.Mutex
 	reqs []protocol.Request
+	v2   []protocol.RequestV2
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -44,19 +46,50 @@ func newFakeServer(t *testing.T) *fakeServer {
 			http.NotFound(w, r)
 			return
 		}
-		var req protocol.Request
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		body, _ := io.ReadAll(r.Body)
+		var req protocol.Request // schema 1, or the device part of schema 2
+		if err := json.Unmarshal(body, &req); err != nil {
 			http.Error(w, "bad", 400)
 			return
 		}
+		var v2 protocol.RequestV2
+		if req.Schema == protocol.SchemaV2 {
+			if err := json.Unmarshal(body, &v2); err != nil {
+				http.Error(w, "bad", 422)
+				return
+			}
+			for _, b := range v2.Providers { // recorded in schema 1 terms
+				if b.Provider == "claude" {
+					req.WantFresh = b.WantFresh
+					req.Auth = protocol.AuthInfo{State: b.Auth.State, TokenExpiresAt: b.Auth.TokenExpiresAt}
+				}
+			}
+		}
 		fs.mu.Lock()
 		fs.reqs = append(fs.reqs, req)
+		if req.Schema == protocol.SchemaV2 {
+			fs.v2 = append(fs.v2, v2)
+		}
 		fs.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"role":"standby","fetch_now":false,"next_sync_seconds":15,"latest":null,"peers":{"devices":1,"poller_hostname":null},"server_urls":[],"client_latest_version":null}`)
+		switch {
+		case req.Schema != protocol.SchemaV2:
+			fmt.Fprint(w, `{"role":"standby","fetch_now":false,"next_sync_seconds":15,"latest":null,"peers":{"devices":1,"poller_hostname":null},"server_urls":[],"client_latest_version":null}`)
+		case v2.Event != nil:
+			fmt.Fprint(w, `{"providers":[],"next_sync_seconds":60,"server_urls":[],"client_latest_version":null}`)
+		default:
+			fmt.Fprint(w, `{"providers":[{"provider":"claude","role":"standby","fetch_now":false,"latest":null,"peers":{"devices":1,"pcs":1,"poller_hostname":null},"problem":null}],"next_sync_seconds":15,"server_urls":[],"client_latest_version":null}`)
+		}
 	}))
 	t.Cleanup(fs.Close)
 	return fs
+}
+
+// v2requests are the schema 2 requests the server got.
+func (fs *fakeServer) v2requests() []protocol.RequestV2 {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	return append([]protocol.RequestV2(nil), fs.v2...)
 }
 
 func (fs *fakeServer) requests() []protocol.Request {
@@ -88,6 +121,25 @@ func (o onlyTo) Sync(ctx context.Context, base string, req protocol.Request) (pr
 		return protocol.Response{}, errors.New("test: address refused")
 	}
 	return o.next.Sync(ctx, base, req)
+}
+
+func (o onlyTo) SyncV2(ctx context.Context, base string, req protocol.RequestV2) (protocol.ResponseV2, error) {
+	if base != o.base {
+		return protocol.ResponseV2{}, errors.New("test: address refused")
+	}
+	return o.next.SyncV2(ctx, base, req)
+}
+
+// refuseAll is every test's syncer unless the test gives one: no test ever
+// reaches a server outside the test.
+type refuseAll struct{}
+
+func (refuseAll) Sync(context.Context, string, protocol.Request) (protocol.Response, error) {
+	return protocol.Response{}, errors.New("test: address refused")
+}
+
+func (refuseAll) SyncV2(context.Context, string, protocol.RequestV2) (protocol.ResponseV2, error) {
+	return protocol.ResponseV2{}, errors.New("test: address refused")
 }
 
 // trayEnv prepares a run in tray mode against a fake server. There is no

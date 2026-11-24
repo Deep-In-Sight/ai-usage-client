@@ -42,6 +42,12 @@ synced_now() { device=$(cat "$data/device-id" 2>/dev/null) && sync_ok "$device" 
 if wait_for 90 synced_now; then pass sync.arrives "device $device"
 else fail sync.arrives "device=$device stats=$(stats | jget - devices "$device")"; fi
 
+# sync.schema2: the agent speaks schema 2 with a machine key (the fake
+# server records only that one was there)
+sc=$(dev "$device" last_schema); mk=$(dev "$device" machine)
+if [ "$sc" = 2 ] && [ "$mk" = True ]; then pass sync.schema2 "schema $sc, machine key sent"
+else fail sync.schema2 "schema=$sc machine=$mk"; fi
+
 # status.json
 "$exe" status --json > "$out/status.json" 2>&1
 st="$out/status.json"
@@ -77,8 +83,9 @@ fi
 rc=$?
 sleep 2
 n=$(agent_count)
-if [ $rc -eq 0 ] && [ ! -e "$unit" ] && [ ! -e "$exe" ] && [ ! -e "$data" ] && [ "$n" -eq 0 ]; then pass uninstall "rc=0"
-else fail uninstall "rc=$rc unit=$([ -e "$unit" ] && echo left) exe=$([ -e "$exe" ] && echo left) data=$([ -e "$data" ] && echo left) processes=$n"; fi
+ev=$(dev "$device" uninstall_events)
+if [ $rc -eq 0 ] && [ ! -e "$unit" ] && [ ! -e "$exe" ] && [ ! -e "$data" ] && [ "$n" -eq 0 ] && [ "$ev" = 1 ]; then pass uninstall "rc=0, server told once"
+else fail uninstall "rc=$rc unit=$([ -e "$unit" ] && echo left) exe=$([ -e "$exe" ] && echo left) data=$([ -e "$data" ] && echo left) processes=$n uninstall_events=$ev"; fi
 
 # desktop.fallback_headless: a desktop session whose bus is gone
 XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent oneliner > "$out/install-desktop.log" 2>&1

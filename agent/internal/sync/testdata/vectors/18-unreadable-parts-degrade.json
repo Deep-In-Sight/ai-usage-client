@@ -1,0 +1,223 @@
+{
+  "name": "18-unreadable-parts-degrade",
+  "description": "A malformed machine part counts as no key, an unknown event is ignored, a provider block whose results cannot be read is dropped alone and reported as unreadable_block (the client then keeps that provider's backlog and sends it again); the other blocks are served",
+  "ingest_key": "test-ingest-key-0123456789",
+  "server": {
+    "server_urls": [
+      "http://ai-usage.local",
+      "http://ai-usage.local:8700",
+      "http://192.0.2.10:8700"
+    ],
+    "client_latest_version": null
+  },
+  "steps": [
+    {
+      "at": "2026-01-05T09:00:00.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 2,
+          "client": {
+            "version": "0.9.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "tray"
+          },
+          "device": {
+            "id": "dev-a",
+            "hostname": "TEST-PC-A",
+            "os_user": "user-a"
+          },
+          "machine": {
+            "key": "NOT-A-HEX-KEY",
+            "source": "os"
+          },
+          "event": "reboot",
+          "providers": [
+            {
+              "provider": "claude",
+              "account": {
+                "key": "acc-1",
+                "email": "user-a@example.com",
+                "display_name": "User A",
+                "organization_name": "Example",
+                "organization_type": "claude_max",
+                "subscription_type": "max",
+                "rate_limit_tier": "default_claude_max_20x"
+              },
+              "auth": {
+                "state": "ok",
+                "token_expires_at": "2026-01-05T17:00:00.000Z"
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            },
+            {
+              "provider": "codex",
+              "account": {
+                "key": "codex:acc-c1:user-c1",
+                "email": "user-a@example.com",
+                "plan_type": "plus"
+              },
+              "auth": {
+                "state": "ok",
+                "token_expires_at": "2026-01-12T09:00:00.000Z"
+              },
+              "parse_problem": null,
+              "results": "not a list",
+              "want_fresh": false
+            },
+            {
+              "provider": "gemini",
+              "auth": 1
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "providers": [
+            {
+              "provider": "claude",
+              "role": "poller",
+              "fetch_now": true,
+              "latest": null,
+              "peers": {
+                "devices": 1,
+                "pcs": 1,
+                "poller_hostname": "TEST-PC-A"
+              },
+              "problem": null
+            },
+            {
+              "provider": "codex",
+              "role": "standby",
+              "fetch_now": false,
+              "latest": null,
+              "peers": {
+                "devices": 0,
+                "pcs": 0,
+                "poller_hostname": null
+              },
+              "problem": "unreadable_block"
+            }
+          ],
+          "next_sync_seconds": 60,
+          "server_urls": [
+            "http://ai-usage.local",
+            "http://ai-usage.local:8700",
+            "http://192.0.2.10:8700"
+          ],
+          "client_latest_version": null
+        }
+      }
+    },
+    {
+      "at": "2026-01-05T09:00:30.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 2,
+          "client": {
+            "version": "0.9.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "tray"
+          },
+          "device": {
+            "id": "dev-a",
+            "hostname": "TEST-PC-A",
+            "os_user": "user-a"
+          },
+          "machine": {
+            "key": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+            "source": "os"
+          },
+          "event": "reboot",
+          "providers": [
+            {
+              "provider": "claude",
+              "account": {
+                "key": "acc-1",
+                "email": "user-a@example.com",
+                "display_name": "User A",
+                "organization_name": "Example",
+                "organization_type": "claude_max",
+                "subscription_type": "max",
+                "rate_limit_tier": "default_claude_max_20x"
+              },
+              "auth": {
+                "state": "ok",
+                "token_expires_at": "2026-01-05T17:00:00.000Z"
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            },
+            {
+              "provider": "codex",
+              "account": {
+                "key": "codex:acc-c1:user-c1",
+                "email": "user-a@example.com",
+                "plan_type": "plus"
+              },
+              "auth": {
+                "state": "ok",
+                "token_expires_at": "2026-01-12T09:00:00.000Z"
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "providers": [
+            {
+              "provider": "claude",
+              "role": "poller",
+              "fetch_now": false,
+              "latest": null,
+              "peers": {
+                "devices": 1,
+                "pcs": 1,
+                "poller_hostname": "TEST-PC-A"
+              },
+              "problem": null
+            },
+            {
+              "provider": "codex",
+              "role": "poller",
+              "fetch_now": true,
+              "latest": null,
+              "peers": {
+                "devices": 1,
+                "pcs": 1,
+                "poller_hostname": "TEST-PC-A"
+              },
+              "problem": null
+            }
+          ],
+          "next_sync_seconds": 60,
+          "server_urls": [
+            "http://ai-usage.local",
+            "http://ai-usage.local:8700",
+            "http://192.0.2.10:8700"
+          ],
+          "client_latest_version": null
+        }
+      }
+    }
+  ]
+}

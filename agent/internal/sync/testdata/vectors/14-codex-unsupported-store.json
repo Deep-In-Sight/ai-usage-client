@@ -1,0 +1,103 @@
+{
+  "name": "14-codex-unsupported-store",
+  "description": "A Codex login kept in the OS keychain is reported without an account: standby, nothing to fetch",
+  "ingest_key": "test-ingest-key-0123456789",
+  "server": {
+    "server_urls": [
+      "http://ai-usage.local",
+      "http://ai-usage.local:8700",
+      "http://192.0.2.10:8700"
+    ],
+    "client_latest_version": null
+  },
+  "steps": [
+    {
+      "at": "2026-01-05T09:00:00.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 2,
+          "client": {
+            "version": "0.9.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "tray"
+          },
+          "device": {
+            "id": "dev-a",
+            "hostname": "TEST-PC-A",
+            "os_user": "user-a"
+          },
+          "machine": {
+            "key": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+            "source": "os"
+          },
+          "event": null,
+          "providers": [
+            {
+              "provider": "claude",
+              "account": null,
+              "auth": {
+                "state": "not_signed_in",
+                "token_expires_at": null
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            },
+            {
+              "provider": "codex",
+              "account": null,
+              "auth": {
+                "state": "unsupported_store",
+                "token_expires_at": null
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "providers": [
+            {
+              "provider": "claude",
+              "role": "standby",
+              "fetch_now": false,
+              "latest": null,
+              "peers": {
+                "devices": 0,
+                "pcs": 0,
+                "poller_hostname": null
+              }
+            },
+            {
+              "provider": "codex",
+              "role": "standby",
+              "fetch_now": false,
+              "latest": null,
+              "peers": {
+                "devices": 0,
+                "pcs": 0,
+                "poller_hostname": null
+              }
+            }
+          ],
+          "next_sync_seconds": 60,
+          "server_urls": [
+            "http://ai-usage.local",
+            "http://ai-usage.local:8700",
+            "http://192.0.2.10:8700"
+          ],
+          "client_latest_version": null
+        }
+      }
+    }
+  ]
+}

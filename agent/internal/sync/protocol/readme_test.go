@@ -47,8 +47,9 @@ func TestReadmeListsEveryField(t *testing.T) {
 		t.Fatal(err)
 	}
 	readme := string(b)
-	names := fieldNames(reflect.TypeOf(Request{}), "")
-	if len(names) < 20 {
+	// schema 2 (what this agent sends) and schema 1 (its fallback)
+	names := append(fieldNames(reflect.TypeOf(RequestV2{}), ""), fieldNames(reflect.TypeOf(Request{}), "")...)
+	if len(names) < 40 {
 		t.Fatalf("only %d fields found: %v", len(names), names)
 	}
 	for _, n := range names {

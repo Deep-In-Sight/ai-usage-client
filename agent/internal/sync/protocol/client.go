@@ -68,15 +68,62 @@ func NewClient(ingestKey, userAgent string, dial DialFunc) *Client {
 	}
 }
 
-// Sync sends one request to baseURL (scheme://host[:port]).
+// Sync sends one schema 1 request to baseURL (scheme://host[:port]).
 func (c *Client) Sync(ctx context.Context, baseURL string, req Request) (Response, error) {
+	data, err := c.post(ctx, baseURL, req, true)
+	if err != nil {
+		return Response{}, err
+	}
+	var out Response
+	if err := json.Unmarshal(data, &out); err != nil {
+		return Response{}, fmt.Errorf("%w: not JSON", ErrBadResponse)
+	}
+	if out.Role != "poller" && out.Role != "standby" {
+		return Response{}, fmt.Errorf("%w: unknown role", ErrBadResponse)
+	}
+	return out, nil
+}
+
+// SyncV2 sends one schema 2 request. A server that does not speak schema 2
+// answers 400 {"error":"unsupported_schema"} (a v5 server), or a reply
+// without "providers" (a server that ignored the schema): both give
+// ErrUnsupportedSchema.
+func (c *Client) SyncV2(ctx context.Context, baseURL string, req RequestV2) (ResponseV2, error) {
+	data, err := c.post(ctx, baseURL, req, false)
+	if err != nil {
+		return ResponseV2{}, err
+	}
+	var out struct {
+		ResponseV2
+		Providers *[]ProviderReply `json:"providers"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return ResponseV2{}, fmt.Errorf("%w: not JSON", ErrBadResponse)
+	}
+	if out.Providers == nil {
+		return ResponseV2{}, ErrUnsupportedSchema
+	}
+	resp := out.ResponseV2
+	resp.Providers = *out.Providers
+	for _, p := range resp.Providers {
+		if p.Role != "poller" && p.Role != "standby" {
+			return ResponseV2{}, fmt.Errorf("%w: unknown role", ErrBadResponse)
+		}
+	}
+	return resp, nil
+}
+
+// post sends a request body and returns the reply of a 200. For schema 1
+// any 400 is ErrUnsupportedSchema (as before); otherwise only a 400 whose
+// body says "unsupported_schema".
+func (c *Client) post(ctx context.Context, baseURL string, req any, any400 bool) ([]byte, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return Response{}, fmt.Errorf("sync: encode request: %w", err)
+		return nil, fmt.Errorf("sync: encode request: %w", err)
 	}
 	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/api/v1/sync", bytes.NewReader(body))
 	if err != nil {
-		return Response{}, errors.New("sync: bad server URL")
+		return nil, errors.New("sync: bad server URL")
 	}
 	if c.key != "" {
 		hr.Header.Set("Authorization", "Bearer "+c.key)
@@ -89,33 +136,32 @@ func (c *Client) Sync(ctx context.Context, baseURL string, req Request) (Respons
 	}
 	resp, err := c.hc.Do(hr)
 	if err != nil {
-		return Response{}, fmt.Errorf("sync: %s", describe(err))
+		return nil, fmt.Errorf("sync: %s", describe(err))
 	}
 	defer resp.Body.Close()
 	data, rerr := io.ReadAll(io.LimitReader(resp.Body, maxReplySize+1))
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusUnauthorized:
-		return Response{}, ErrBadIngestKey
+		return nil, ErrBadIngestKey
 	case http.StatusBadRequest:
-		return Response{}, ErrUnsupportedSchema
+		var e struct {
+			Error string `json:"error"`
+		}
+		if any400 || json.Unmarshal(data, &e) == nil && e.Error == "unsupported_schema" {
+			return nil, ErrUnsupportedSchema
+		}
+		return nil, &StatusError{Status: resp.StatusCode}
 	default:
-		return Response{}, &StatusError{Status: resp.StatusCode}
+		return nil, &StatusError{Status: resp.StatusCode}
 	}
 	if rerr != nil {
-		return Response{}, fmt.Errorf("%w: body could not be read", ErrBadResponse)
+		return nil, fmt.Errorf("%w: body could not be read", ErrBadResponse)
 	}
 	if len(data) > maxReplySize {
-		return Response{}, fmt.Errorf("%w: larger than 1 MiB", ErrBadResponse)
+		return nil, fmt.Errorf("%w: larger than 1 MiB", ErrBadResponse)
 	}
-	var out Response
-	if err := json.Unmarshal(data, &out); err != nil {
-		return Response{}, fmt.Errorf("%w: not JSON", ErrBadResponse)
-	}
-	if out.Role != "poller" && out.Role != "standby" {
-		return Response{}, fmt.Errorf("%w: unknown role", ErrBadResponse)
-	}
-	return out, nil
+	return data, nil
 }
 
 // describe keeps the transport error without the request URL.

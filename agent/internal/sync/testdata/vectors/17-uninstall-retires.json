@@ -1,0 +1,279 @@
+{
+  "name": "17-uninstall-retires",
+  "description": "An uninstall event retires the device at once and gets an empty providers list; another device on the account takes over on its next sync",
+  "ingest_key": "test-ingest-key-0123456789",
+  "server": {
+    "server_urls": [
+      "http://ai-usage.local",
+      "http://ai-usage.local:8700",
+      "http://192.0.2.10:8700"
+    ],
+    "client_latest_version": null
+  },
+  "steps": [
+    {
+      "at": "2026-01-05T09:00:00.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 2,
+          "client": {
+            "version": "0.9.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "tray"
+          },
+          "device": {
+            "id": "dev-a",
+            "hostname": "TEST-PC-A",
+            "os_user": "user-a"
+          },
+          "machine": {
+            "key": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+            "source": "os"
+          },
+          "event": null,
+          "providers": [
+            {
+              "provider": "claude",
+              "account": {
+                "key": "acc-1",
+                "email": "user-a@example.com",
+                "display_name": "User A",
+                "organization_name": "Example",
+                "organization_type": "claude_max",
+                "subscription_type": "max",
+                "rate_limit_tier": "default_claude_max_20x"
+              },
+              "auth": {
+                "state": "ok",
+                "token_expires_at": "2026-01-05T17:00:00.000Z"
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "providers": [
+            {
+              "provider": "claude",
+              "role": "poller",
+              "fetch_now": true,
+              "latest": null,
+              "peers": {
+                "devices": 1,
+                "pcs": 1,
+                "poller_hostname": "TEST-PC-A"
+              }
+            }
+          ],
+          "next_sync_seconds": 60,
+          "server_urls": [
+            "http://ai-usage.local",
+            "http://ai-usage.local:8700",
+            "http://192.0.2.10:8700"
+          ],
+          "client_latest_version": null
+        }
+      }
+    },
+    {
+      "at": "2026-01-05T09:00:10.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 2,
+          "client": {
+            "version": "0.9.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "tray"
+          },
+          "device": {
+            "id": "dev-b",
+            "hostname": "TEST-PC-B",
+            "os_user": "user-b"
+          },
+          "machine": {
+            "key": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+            "source": "os"
+          },
+          "event": null,
+          "providers": [
+            {
+              "provider": "claude",
+              "account": {
+                "key": "acc-1",
+                "email": "user-a@example.com",
+                "display_name": "User A",
+                "organization_name": "Example",
+                "organization_type": "claude_max",
+                "subscription_type": "max",
+                "rate_limit_tier": "default_claude_max_20x"
+              },
+              "auth": {
+                "state": "ok",
+                "token_expires_at": "2026-01-05T16:00:00.000Z"
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "providers": [
+            {
+              "provider": "claude",
+              "role": "standby",
+              "fetch_now": false,
+              "latest": null,
+              "peers": {
+                "devices": 2,
+                "pcs": 2,
+                "poller_hostname": "TEST-PC-A"
+              }
+            }
+          ],
+          "next_sync_seconds": 60,
+          "server_urls": [
+            "http://ai-usage.local",
+            "http://ai-usage.local:8700",
+            "http://192.0.2.10:8700"
+          ],
+          "client_latest_version": null
+        }
+      }
+    },
+    {
+      "at": "2026-01-05T09:00:20.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 2,
+          "client": {
+            "version": "0.9.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "tray"
+          },
+          "device": {
+            "id": "dev-a",
+            "hostname": "TEST-PC-A",
+            "os_user": "user-a"
+          },
+          "machine": {
+            "key": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+            "source": "os"
+          },
+          "event": "uninstall",
+          "providers": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "providers": [],
+          "next_sync_seconds": 60,
+          "server_urls": [
+            "http://ai-usage.local",
+            "http://ai-usage.local:8700",
+            "http://192.0.2.10:8700"
+          ],
+          "client_latest_version": null
+        }
+      }
+    },
+    {
+      "at": "2026-01-05T09:00:30.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 2,
+          "client": {
+            "version": "0.9.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "tray"
+          },
+          "device": {
+            "id": "dev-b",
+            "hostname": "TEST-PC-B",
+            "os_user": "user-b"
+          },
+          "machine": {
+            "key": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+            "source": "os"
+          },
+          "event": null,
+          "providers": [
+            {
+              "provider": "claude",
+              "account": {
+                "key": "acc-1",
+                "email": "user-a@example.com",
+                "display_name": "User A",
+                "organization_name": "Example",
+                "organization_type": "claude_max",
+                "subscription_type": "max",
+                "rate_limit_tier": "default_claude_max_20x"
+              },
+              "auth": {
+                "state": "ok",
+                "token_expires_at": "2026-01-05T16:00:00.000Z"
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "providers": [
+            {
+              "provider": "claude",
+              "role": "poller",
+              "fetch_now": true,
+              "latest": null,
+              "peers": {
+                "devices": 1,
+                "pcs": 1,
+                "poller_hostname": "TEST-PC-B"
+              }
+            }
+          ],
+          "next_sync_seconds": 60,
+          "server_urls": [
+            "http://ai-usage.local",
+            "http://ai-usage.local:8700",
+            "http://192.0.2.10:8700"
+          ],
+          "client_latest_version": null
+        }
+      }
+    }
+  ]
+}

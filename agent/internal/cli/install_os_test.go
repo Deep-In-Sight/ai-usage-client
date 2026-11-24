@@ -245,12 +245,15 @@ func TestRemovalSteps(t *testing.T) {
 		inProcess bool
 		want      []string
 	}{
-		{"windows", false, []string{"stop", "kill", "unregister-autostart", "unregister-app", "remove-exe", "remove-install-dir", "remove-data"}},
-		{"windows", true, []string{"stop-engine", "unlock", "unregister-autostart", "unregister-app", "remove-exe", "remove-install-dir", "remove-data"}},
-		{"darwin", false, []string{"stop", "kill", "unregister-autostart", "remove-data"}},
-		{"darwin", true, []string{"stop-engine", "unlock", "remove-plist", "remove-data", "bootout-self"}},
-		{"linux", false, []string{"stop", "kill", "unregister-autostart", "remove-exe", "remove-data"}},
-		{"linux", true, []string{"stop-engine", "unlock", "unregister-autostart", "remove-exe", "remove-data"}},
+		// notify-server (the uninstall sync) comes after every agent of this
+		// user stopped (a running one would undo the retirement with its
+		// next sync, design D8 rules 4-5) and before config.json is gone
+		{"windows", false, []string{"stop", "kill", "notify-server", "unregister-autostart", "unregister-app", "remove-exe", "remove-install-dir", "remove-data"}},
+		{"windows", true, []string{"stop-engine", "notify-server", "unlock", "unregister-autostart", "unregister-app", "remove-exe", "remove-install-dir", "remove-data"}},
+		{"darwin", false, []string{"stop", "kill", "notify-server", "unregister-autostart", "remove-data"}},
+		{"darwin", true, []string{"stop-engine", "notify-server", "unlock", "remove-plist", "remove-data", "bootout-self"}},
+		{"linux", false, []string{"stop", "kill", "notify-server", "unregister-autostart", "remove-exe", "remove-data"}},
+		{"linux", true, []string{"stop-engine", "notify-server", "unlock", "unregister-autostart", "remove-exe", "remove-data"}},
 	}
 	for _, c := range cases {
 		eq(t, removalSteps(c.goos, c.inProcess), c.want)
@@ -268,7 +271,7 @@ func TestInProcessRemoveReleasesLockFirst(t *testing.T) {
 	r.unlock = func() { rec.add("unlock"); unlock() }
 	must(t, r.run(removalSteps("windows", true)))
 	calls := rec.list()
-	eq(t, calls[:2], []string{"stop-engine", "unlock"})
+	eq(t, calls[:2], []string{"stop-engine", "unlock"}) // the uninstall sync between them records nothing here
 	if !slices.Contains(calls, "main.unregister") || !slices.Contains(calls, "winapp.unregister") {
 		t.Fatalf("%v", calls)
 	}

@@ -20,7 +20,9 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/osinfo"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/discover"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/engine"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/version"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/winapp"
@@ -95,6 +97,14 @@ func (env Env) winApp() WinApp {
 		return winAppFuncs{}
 	}
 	return env.WinApp
+}
+
+// syncer is the sync client (env.Syncer in tests).
+func (env Env) syncer(cfg config.Config, userAgent string) engine.Syncer {
+	if env.Syncer != nil {
+		return env.Syncer(cfg, userAgent)
+	}
+	return protocol.NewClient(cfg.IngestKey, userAgent, discover.PlatformDialer())
 }
 
 func (env Env) machine() (key, source string) {

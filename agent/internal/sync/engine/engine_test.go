@@ -77,21 +77,81 @@ func (f *fakeFetcher) Fetch(context.Context) (anthropic.Result, error) {
 
 type call struct {
 	base string
-	req  protocol.Request
+	req  protocol.Request    // schema 1, or the Claude part of a schema 2 request
+	v2   *protocol.RequestV2 // the schema 2 request, if it was one
 }
 
+// fakeSyncer is the server. fn answers in schema 1 terms; a schema 2
+// request is passed to fn as its Claude part and the answer goes back as
+// the Claude block, so every test runs through schema 2 unless v1only is
+// set (a server that does not speak schema 2: 400 unsupported_schema).
+// fn2, when set, answers schema 2 requests itself.
 type fakeSyncer struct {
-	mu    sync.Mutex
-	calls []call
-	fn    func(n int, base string, req protocol.Request) (protocol.Response, error)
+	mu          sync.Mutex
+	calls       []call
+	fn          func(n int, base string, req protocol.Request) (protocol.Response, error)
+	fn2         func(n int, base string, req protocol.RequestV2) (protocol.ResponseV2, error)
+	v1only      bool
+	unsupported int // schema 2 requests refused (v1only)
 }
 
 func (f *fakeSyncer) Sync(_ context.Context, base string, req protocol.Request) (protocol.Response, error) {
 	f.mu.Lock()
 	n := len(f.calls)
-	f.calls = append(f.calls, call{base, req})
+	f.calls = append(f.calls, call{base: base, req: req})
 	f.mu.Unlock()
 	return f.fn(n, base, req)
+}
+
+func (f *fakeSyncer) SyncV2(_ context.Context, base string, req protocol.RequestV2) (protocol.ResponseV2, error) {
+	f.mu.Lock()
+	if f.v1only {
+		f.unsupported++
+		f.mu.Unlock()
+		return protocol.ResponseV2{}, protocol.ErrUnsupportedSchema
+	}
+	n := len(f.calls)
+	f.calls = append(f.calls, call{base: base, req: claudePart(req), v2: &req})
+	f.mu.Unlock()
+	if f.fn2 != nil {
+		return f.fn2(n, base, req)
+	}
+	r, err := f.fn(n, base, claudePart(req))
+	if err != nil {
+		return protocol.ResponseV2{}, err
+	}
+	return asV2(r), nil
+}
+
+// claudePart is a schema 2 request's Claude block in schema 1 terms.
+func claudePart(r protocol.RequestV2) protocol.Request {
+	out := protocol.Request{Schema: r.Schema, Client: r.Client, Device: r.Device}
+	for _, b := range r.Providers {
+		if b.Provider != "claude" {
+			continue
+		}
+		out.Auth = protocol.AuthInfo{State: b.Auth.State, TokenExpiresAt: b.Auth.TokenExpiresAt}
+		out.WantFresh = b.WantFresh
+		if a := b.Account; a != nil {
+			out.Account = &protocol.AccountInfo{UUID: a.Key, Email: a.Email, DisplayName: a.DisplayName, OrganizationName: a.OrganizationName,
+				OrganizationType: a.OrganizationType, SubscriptionType: a.SubscriptionType, RateLimitTier: a.RateLimitTier}
+		}
+		for _, x := range b.Results {
+			out.Results = append(out.Results, protocol.Result{AccountUUID: x.AccountKey, FetchedAt: x.FetchedAt, HTTPStatus: x.HTTPStatus, Usage: x.Usage})
+		}
+	}
+	return out
+}
+
+// asV2 is a schema 1 answer as the Claude block of a schema 2 answer.
+func asV2(r protocol.Response) protocol.ResponseV2 {
+	b := protocol.ProviderReply{Provider: "claude", Role: r.Role, FetchNow: r.FetchNow,
+		Peers: protocol.PeersV2{Devices: r.Peers.Devices, PCs: r.Peers.Devices, PollerHostname: r.Peers.PollerHostname}}
+	if r.Latest != nil {
+		b.Latest = &protocol.LatestV2{FetchedAt: r.Latest.FetchedAt, Usage: r.Latest.Usage}
+	}
+	return protocol.ResponseV2{Providers: []protocol.ProviderReply{b}, NextSyncSeconds: r.NextSyncSeconds, ServerURLs: r.ServerURLs,
+		ClientLatestVersion: r.ClientLatestVersion}
 }
 
 func (f *fakeSyncer) count() int {
@@ -162,7 +222,7 @@ func (r *rig) build() *Engine {
 		LatestPath:       func(id provider.ID) string { return filepath.Join(r.dir, "latest-"+string(id)+".json") },
 		LegacyLatestPath: filepath.Join(r.dir, "latest.json"),
 		Identity: Identity{DeviceID: "dev-a", Hostname: "TEST-PC-A", OSUser: "user-a", OS: "linux", OSVersion: "24.04",
-			Arch: "amd64", Version: "0.0.0-dev", Mode: "headless"},
+			Arch: "amd64", Version: "0.0.0-dev", Mode: "headless", MachineKey: "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a", MachineSource: "os"},
 		Publish: func(s status.Snapshot) { r.snaps = append(r.snaps, s) },
 		Rand: func() float64 {
 			if len(r.rnd) == 0 {
@@ -246,9 +306,13 @@ func TestStandbyNeverFetches(t *testing.T) {
 	eq(t, r.fetcher.calls, 0)
 }
 
+// The schema 1 request (a server without schema 2) is built exactly as
+// v0.8 built it.
 func TestRequestFields(t *testing.T) {
 	r := newRig(t, always(resp("standby", false, 60), nil))
+	r.syncer.v1only = true
 	r.e.Step(ctx)
+	eq(t, r.syncer.unsupported, 1)
 	req := r.syncer.reqs()[0]
 	eq(t, req.Schema, 1)
 	eq(t, req.Client, protocol.ClientInfo{Version: "0.0.0-dev", OS: "linux", OSVersion: "24.04", Arch: "amd64", Mode: "headless"})
@@ -277,6 +341,44 @@ func TestRequestFields(t *testing.T) {
 		t.Fatal(string(b))
 	}
 	eq(t, r.cl().State, "not_signed_in")
+}
+
+// The schema 2 request: the device once, the machine key, no event, one
+// block per provider the agent knows, signed out ones included.
+func TestRequestV2Fields(t *testing.T) {
+	r := newRig(t, always(resp("standby", false, 60), nil))
+	other := &fakeProvider{id: provider.Codex, clk: r.clk, state: "not_signed_in"}
+	r.extra = []provider.Provider{other}
+	r.e = r.build()
+	r.e.Step(ctx)
+	req := *r.syncer.calls[0].v2
+	eq(t, req.Schema, 2)
+	eq(t, req.Client, protocol.ClientInfo{Version: "0.0.0-dev", OS: "linux", OSVersion: "24.04", Arch: "amd64", Mode: "headless"})
+	eq(t, req.Device, protocol.DeviceInfo{ID: "dev-a", Hostname: "TEST-PC-A", OSUser: "user-a"})
+	eq(t, *req.Machine, protocol.MachineInfo{Key: "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a", Source: "os"})
+	eq(t, req.Event == nil, true)
+	eq(t, len(req.Providers), 2)
+	c, x := req.Providers[0], req.Providers[1]
+	eq(t, c.Provider, "claude")
+	eq(t, *c.Account, protocol.AccountV2{Key: "acc-1", Email: "user-a@example.com", DisplayName: "User A", OrganizationName: "Example",
+		OrganizationType: "claude_max", SubscriptionType: "max", RateLimitTier: "default_claude_max_20x"})
+	eq(t, c.Auth.State, "ok")
+	eq(t, c.Auth.TokenExpiresAt.Time, t0.Add(8*time.Hour))
+	eq(t, x.Provider, "codex")
+	eq(t, x.Auth.State, "not_signed_in")
+	b, _ := json.Marshal(req)
+	for _, want := range []string{`"event":null`, `"provider":"codex","account":{"key":"codex:acc:user","email":"user-a@example.com","display_name":null,` +
+		`"organization_name":null,"organization_type":null,"subscription_type":null,"rate_limit_tier":null,"plan_type":"plus"}`, `"results":[]`} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("no %s in %s", want, b)
+		}
+	}
+	// without a machine key the part is null
+	d := r.e.d
+	d.Identity.MachineKey, d.Identity.MachineSource = "", ""
+	r.e = New(d)
+	r.e.Step(ctx)
+	eq(t, r.syncer.calls[1].v2.Machine == nil, true)
 }
 
 func TestLongTextsAreClipped(t *testing.T) {

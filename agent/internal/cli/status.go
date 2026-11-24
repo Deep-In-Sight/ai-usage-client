@@ -110,6 +110,9 @@ func statusCmd(env Env, args []string) int {
 		}
 	}
 	fmt.Fprintf(w, "Last sync:  %s %s\n", clockOf(snap.LastSyncAt), syncState)
+	if snap.SchemaFallback {
+		fmt.Fprintln(w, "Protocol:   schema 1, Claude only (the server does not support schema 2 yet)")
+	}
 	if snap.Mode == "standalone" && !snap.NextStandaloneFetch.IsZero() {
 		fmt.Fprintf(w, "Next fetch: %s (stand-alone)\n", clockOf(snap.NextStandaloneFetch))
 	}

@@ -26,9 +26,7 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider/claude"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/backlog"
-	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/discover"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/engine"
-	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/version"
@@ -120,6 +118,7 @@ func runCmd(env Env, args []string) int {
 	ro.Clock = env.Clock
 	reader := creds.NewReader(ro)
 	ua := version.UserAgent()
+	machineKey, machineSource := env.machine() // read once; never logged
 	statusPath := env.Dirs.File(paths.StatusFile)
 	statusFailed := false
 
@@ -137,25 +136,20 @@ func runCmd(env Env, args []string) int {
 	ctrl.offFile = env.Dirs.File(paths.AutostartOffFile)
 	updates := make(chan struct{}, 1)
 
-	newSyncer := env.Syncer
-	if newSyncer == nil {
-		newSyncer = func(cfg config.Config, ua string) engine.Syncer {
-			return protocol.NewClient(cfg.IngestKey, ua, discover.PlatformDialer())
-		}
-	}
 	e := engine.New(engine.Deps{
 		Clock: env.Clock,
 		// Claude: the reader hands the token to the usage client inside the
 		// call and nowhere else.
 		Providers:        []provider.Provider{claude.New(reader, anthropic.New(anthropic.UsageURL, ua, env.Clock), env.Clock)},
-		Syncer:           newSyncer(cfg, ua),
+		Syncer:           env.syncer(cfg, ua),
 		Backlog:          bl,
 		Config:           cfg,
 		StatePath:        env.Dirs.File(paths.StateFile),
 		LatestPath:       func(id provider.ID) string { return env.Dirs.File(paths.LatestFileFor(id)) },
 		LegacyLatestPath: env.Dirs.File(paths.LatestFile),
 		Identity: engine.Identity{DeviceID: deviceID, Hostname: info.Hostname, OSUser: info.OSUser, OS: info.OS,
-			OSVersion: info.OSVersion, Arch: info.Arch, Version: version.Version, Mode: clientMode},
+			OSVersion: info.OSVersion, Arch: info.Arch, Version: version.Version, Mode: clientMode,
+			MachineKey: machineKey, MachineSource: machineSource},
 		// 2: status file, the tray's snapshot and a wake-up for the tray.
 		Publish: func(s status.Snapshot) {
 			if err := status.Write(statusPath, s); err != nil && !statusFailed {

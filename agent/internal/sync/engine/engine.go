@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/anthropic"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/atomicfile"
@@ -59,14 +60,21 @@ const (
 	ModeStandalone  = "standalone"
 )
 
-// Syncer sends one sync request to one server URL.
+// Syncer sends one sync request to one server URL, in schema 2 or 1.
 type Syncer interface {
 	Sync(ctx context.Context, baseURL string, req protocol.Request) (protocol.Response, error)
+	SyncV2(ctx context.Context, baseURL string, req protocol.RequestV2) (protocol.ResponseV2, error)
 }
 
-// Identity is what the device reports about itself.
+// SchemaFallbackFor is how long the agent speaks schema 1 to a server
+// that refused schema 2, before it tries schema 2 again.
+const SchemaFallbackFor = time.Hour
+
+// Identity is what the device reports about itself. MachineKey is the
+// hashed machine key (internal/machine), never the machine id.
 type Identity struct {
 	DeviceID, Hostname, OSUser, OS, OSVersion, Arch, Version, Mode string
+	MachineKey, MachineSource                                      string
 }
 
 // Deps are the engine's inputs.
@@ -95,7 +103,10 @@ type lane struct {
 
 	login provider.Login // read at the start of each step
 
-	// from the server's last answer for this provider
+	// from the server's last answer for this provider; unserved: the last
+	// answer had no part for it (a schema 1 server knows Claude only), so
+	// it fetches on the stand-alone schedule
+	unserved      bool
 	role          string
 	fetchNow      bool
 	pcs           int
@@ -112,6 +123,7 @@ type lane struct {
 	lastFetchAt     time.Time
 	lastFetchStatus *int
 	lastFetchNote   string
+	parseProblem    string // of this PC's last 200 reply ("no_weekly"), sent as parse_problem
 }
 
 // reply is one provider's part of a server answer.
@@ -141,6 +153,10 @@ type Engine struct {
 	mode       string
 	failures   int
 	batchLimit int
+
+	// schema 1 until fallbackUntil: the server refused schema 2
+	fallbackUntil time.Time
+	fallback      bool
 
 	serverURL    string
 	lastSyncAt   time.Time
@@ -318,8 +334,10 @@ func (e *Engine) Step(ctx context.Context) time.Duration {
 		e.d.Log.Printf("backlog: %v", err)
 	}
 
-	if e.mode == ModeStandalone {
-		for _, l := range e.lanes {
+	for _, l := range e.lanes {
+		// stand-alone fetches: every lane without a server, and lanes the
+		// server does not serve
+		if e.mode == ModeStandalone || l.unserved {
 			if now.Before(l.nextStandalone) || !e.canFetch(l, now) {
 				continue
 			}
@@ -447,15 +465,41 @@ func (e *Engine) setMode(m string) {
 	}
 }
 
-// syncOnce tries the candidate URLs in order; the first success wins.
+// syncOnce tries the candidate URLs in order; the first success wins. It
+// speaks schema 2; a server that refuses it gets schema 1 (Claude only) at
+// once, and for SchemaFallbackFor after that.
 func (e *Engine) syncOnce(ctx context.Context, now time.Time, wantFresh bool) (answer, error) {
-	req, sent := e.requestV1(now)
-	req.WantFresh = wantFresh
 	var lastErr, serverErr error
 	for _, base := range discover.Candidates(e.state.LastGoodURL, e.state.ServerURLs, e.d.Config.ServerURLs) {
 		if ctx.Err() != nil {
 			break
 		}
+		if !now.Before(e.fallbackUntil) {
+			req, sent := e.requestV2(wantFresh)
+			resp, err := e.d.Syncer.SyncV2(ctx, base, req)
+			if err == nil {
+				if e.fallback {
+					e.d.Log.Printf("the server speaks sync schema 2 again")
+				}
+				e.fallback, e.fallbackUntil = false, time.Time{}
+				ans := answerV2(resp)
+				e.synced(base, ans, sent, e.d.Clock.Now())
+				return ans, nil
+			}
+			if !errors.Is(err, protocol.ErrUnsupportedSchema) {
+				lastErr = err
+				if isServerError(err) && serverErr == nil {
+					serverErr = err
+				}
+				continue
+			}
+			if !e.fallback {
+				e.d.Log.Printf("the server does not support sync schema 2 yet: sending schema 1 (Claude only) for %s", SchemaFallbackFor)
+			}
+			e.fallback, e.fallbackUntil = true, now.Add(SchemaFallbackFor)
+		}
+		req, sent := e.requestV1(now)
+		req.WantFresh = wantFresh
 		resp, err := e.d.Syncer.Sync(ctx, base, req)
 		if err != nil {
 			lastErr = err
@@ -465,7 +509,7 @@ func (e *Engine) syncOnce(ctx context.Context, now time.Time, wantFresh bool) (a
 			continue
 		}
 		ans := answerV1(resp)
-		e.synced(base, ans, sent, e.d.Clock.Now())
+		e.synced(base, ans, map[provider.ID][]backlog.Item{provider.Claude: sent}, e.d.Clock.Now())
 		return ans, nil
 	}
 	if serverErr != nil {
@@ -489,6 +533,29 @@ func answerV1(resp protocol.Response) answer {
 	}
 }
 
+// answerV2 is a schema 2 answer; the first part for a provider counts.
+func answerV2(resp protocol.ResponseV2) answer {
+	a := answer{lanes: map[provider.ID]reply{}, next: resp.NextSyncSeconds, serverURLs: resp.ServerURLs, clientLatest: resp.ClientLatestVersion}
+	for _, p := range resp.Providers {
+		id := provider.ID(p.Provider)
+		if _, seen := a.lanes[id]; seen {
+			continue
+		}
+		r := reply{role: p.Role, fetchNow: p.FetchNow, pcs: p.Peers.PCs, poller: p.Peers.PollerHostname}
+		if p.Problem != nil {
+			r.problem = *p.Problem
+		}
+		if l := p.Latest; l != nil {
+			r.latest = &protocol.Latest{FetchedAt: l.FetchedAt, Usage: l.Usage}
+			if l.Source != nil {
+				r.latest.Source = *l.Source
+			}
+		}
+		a.lanes[id] = r
+	}
+	return a
+}
+
 // isServerError: the server (or something posing as it) answered.
 func isServerError(err error) bool {
 	var se *protocol.StatusError
@@ -496,9 +563,18 @@ func isServerError(err error) bool {
 		errors.Is(err, protocol.ErrBadResponse) || errors.As(err, &se)
 }
 
-func (e *Engine) synced(base string, ans answer, sent []backlog.Item, now time.Time) {
-	if err := e.d.Backlog.Remove(sent); err != nil {
-		e.d.Log.Printf("backlog: %v", err)
+// synced takes in a successful answer. A provider's results count as
+// delivered only when the answer has a part for it that does not say
+// "unreadable_block" (the only "not stored" answer, design 6.8).
+func (e *Engine) synced(base string, ans answer, sent map[provider.ID][]backlog.Item, now time.Time) {
+	for id, items := range sent {
+		r, ok := ans.lanes[id]
+		if !ok || r.problem == protocol.ProblemUnreadableBlock {
+			continue
+		}
+		if err := e.d.Backlog.Remove(items); err != nil {
+			e.d.Log.Printf("backlog: %v", err)
+		}
 	}
 	if e.failures > 0 {
 		e.d.Log.Printf("sync ok again via %s after %d failures", base, e.failures)
@@ -513,9 +589,18 @@ func (e *Engine) synced(base string, ans answer, sent []backlog.Item, now time.T
 	for _, l := range e.lanes {
 		r, ok := ans.lanes[l.id]
 		if !ok {
-			// not part of this answer (a schema 1 server knows Claude only)
+			// not part of this answer (a schema 1 server knows Claude only):
+			// the lane fetches on the stand-alone schedule meanwhile
+			if !l.unserved {
+				l.unserved = true
+				l.nextStandalone = now.Add(time.Duration(e.d.Rand() * float64(StandaloneFirstMax)))
+			}
 			l.role, l.fetchNow, l.pcs, l.poller, l.serverProblem = "", false, 0, "", ""
 			continue
+		}
+		l.unserved = false
+		if r.problem != l.serverProblem && r.problem != "" {
+			e.d.Log.Printf("server: %s part of the sync: %s", l.id, r.problem)
 		}
 		l.role, l.fetchNow, l.pcs, l.serverProblem = r.role, r.fetchNow, r.pcs, r.problem
 		l.poller = ""
@@ -638,6 +723,7 @@ func (e *Engine) fetch(ctx context.Context, l *lane) {
 	// Like the extension: a 200 without the main number does not replace good numbers.
 	if st == 200 && res.Usage != nil {
 		parsed := l.p.Parse(res.Usage)
+		l.parseProblem = parsed.ParseProblem
 		if r, ok := parsed.Row(parsed.MainKey); ok && r.Percent != nil {
 			e.setLatest(l, protocol.Latest{FetchedAt: protocol.Time{Time: res.FetchedAt}.UTC().Format("2006-01-02T15:04:05.000Z"),
 				Source: res.Source, Usage: res.Usage})
@@ -710,6 +796,87 @@ func (e *Engine) requestV1(now time.Time) (protocol.Request, []backlog.Item) {
 	return req, items
 }
 
+// clipBytes cuts s to at most n bytes, at a rune boundary.
+func clipBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// Schema 2 length caps.
+const (
+	capKeyV2  = 128
+	capDetail = 200 // bytes
+)
+
+func (id Identity) clientV2(mode string) (protocol.ClientInfo, protocol.DeviceInfo, *protocol.MachineInfo) {
+	c := protocol.ClientInfo{Version: clip(id.Version, capShort), OS: clip(id.OS, capShort),
+		OSVersion: opt(id.OSVersion, capText), Arch: opt(id.Arch, capShort), Mode: opt(mode, capShort)}
+	d := protocol.DeviceInfo{ID: clip(id.DeviceID, capShort), Hostname: opt(id.Hostname, capText), OSUser: opt(id.OSUser, capText)}
+	var m *protocol.MachineInfo
+	if id.MachineKey != "" {
+		m = &protocol.MachineInfo{Key: id.MachineKey, Source: id.MachineSource}
+	}
+	return c, d, m
+}
+
+// requestV2 is the schema 2 request: one block per lane (signed-out ones
+// too), and the backlog items it carries, by provider.
+func (e *Engine) requestV2(wantFresh bool) (protocol.RequestV2, map[provider.ID][]backlog.Item) {
+	req := protocol.RequestV2{Schema: protocol.SchemaV2}
+	req.Client, req.Device, req.Machine = e.d.Identity.clientV2(e.currentClientMode())
+	byProvider := map[provider.ID][]backlog.Item{}
+	for _, it := range e.d.Backlog.Pending(e.batchLimit) {
+		byProvider[provider.ID(it.Provider)] = append(byProvider[provider.ID(it.Provider)], it)
+	}
+	sent := map[provider.ID][]backlog.Item{}
+	for _, l := range e.lanes {
+		login := l.login
+		state := login.State
+		if state == "" {
+			state = "not_signed_in"
+		}
+		b := protocol.ProviderBlock{Provider: string(l.id), Auth: protocol.AuthV2{State: clip(state, capShort)},
+			ParseProblem: opt(l.parseProblem, capShort), WantFresh: wantFresh}
+		if !login.ExpiresAt.IsZero() {
+			b.Auth.TokenExpiresAt = &protocol.Time{Time: login.ExpiresAt}
+		}
+		if login.AccountKey != "" {
+			a := &protocol.AccountV2{Key: clip(login.AccountKey, capKeyV2), Email: opt(login.Email, capText),
+				DisplayName: opt(login.DisplayName, capText), OrganizationName: opt(login.OrganizationName, capText),
+				OrganizationType: opt(login.OrganizationType, capShort), RateLimitTier: opt(login.RateLimitTier, capShort)}
+			if l.id == provider.Codex {
+				a.PlanType = opt(login.Plan, capShort)
+			} else {
+				a.SubscriptionType = opt(login.Plan, capShort)
+			}
+			b.Account = a
+		}
+		for _, it := range byProvider[l.id] {
+			b.Results = append(b.Results, protocol.ResultV2{AccountKey: clip(it.AccountKey, capKeyV2), FetchedAt: it.FetchedAt,
+				HTTPStatus: it.HTTPStatus, Usage: it.Usage, Source: protocol.Opt(it.Source), CLIVersion: opt(it.CLIVersion, capShort),
+				Detail: protocol.Opt(clipBytes(it.Detail, capDetail)), RetryAfterSeconds: it.RetryAfterSeconds})
+		}
+		sent[l.id] = byProvider[l.id]
+		req.Providers = append(req.Providers, b)
+	}
+	return req, sent
+}
+
+// UninstallRequest is the last sync before removal (design D8 rule 4):
+// schema 2, the device and machine key, event "uninstall", no provider
+// blocks. The server retires the device at once.
+func UninstallRequest(id Identity) protocol.RequestV2 {
+	ev := protocol.EventUninstall
+	req := protocol.RequestV2{Schema: protocol.SchemaV2, Event: &ev, Providers: []protocol.ProviderBlock{}}
+	req.Client, req.Device, req.Machine = id.clientV2(id.Mode)
+	return req
+}
+
 func (e *Engine) publish(now time.Time) {
 	s := status.Snapshot{
 		Version: e.d.Identity.Version, PID: os.Getpid(), UpdatedAt: now.UTC(), Mode: e.mode,
@@ -717,6 +884,7 @@ func (e *Engine) publish(now time.Time) {
 		SyncFailures: e.failures, SyncProblem: e.syncProblem, Backlog: e.d.Backlog.Len(),
 		ClientMode: e.currentClientMode(), FreshPending: e.fresh.Load() || e.freshWaiting,
 		ClientLatestVersion: e.clientLatest, Providers: map[provider.ID]status.ProviderStatus{},
+		SchemaFallback: e.fallback,
 	}
 	for _, l := range e.lanes {
 		if e.mode == ModeStandalone && (s.NextStandaloneFetch.IsZero() || l.nextStandalone.Before(s.NextStandaloneFetch)) {

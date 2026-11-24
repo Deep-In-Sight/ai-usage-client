@@ -1,5 +1,7 @@
 // fakeserver is a stand-in for the team's AI Usage server in CI: it
-// takes syncs, always answers "standby" (so the agent never asks Anthropic),
+// takes syncs in schema 1 and 2 (-schema1-only: a server from before
+// schema 2, which refuses it), always answers "standby" (so the agent
+// never asks Anthropic),
 // serves the release files and the CI install scripts, and counts what it
 // saw. /stats shows counts and fake values only, never a key or a token.
 // POST /weekly?percent=N changes the weekly percentage it answers with.
@@ -28,6 +30,8 @@ type Config struct {
 	Token   string // the fake access token that must never arrive here
 	Files   string // release files
 	Scripts string // install-ci.sh and install-ci.ps1
+	// Schema1Only answers schema 2 with 400 unsupported_schema.
+	Schema1Only bool
 }
 
 type device struct {
@@ -37,6 +41,9 @@ type device struct {
 	LastAuthState string `json:"last_auth_state"`
 	LastEmail     string `json:"last_email"`
 	WantFresh     int    `json:"want_fresh"`
+	LastSchema    int    `json:"last_schema"`
+	Machine       bool   `json:"machine"` // the last sync had a machine key (never shown)
+	Uninstalls    int    `json:"uninstall_events"`
 }
 
 type server struct {
@@ -100,6 +107,7 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
+		Schema int `json:"schema"`
 		Client struct {
 			Version string `json:"version"`
 			Mode    string `json:"mode"`
@@ -113,11 +121,34 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 		Account *struct {
 			Email string `json:"email"`
 		} `json:"account"`
-		WantFresh bool `json:"want_fresh"`
+		WantFresh bool            `json:"want_fresh"`
+		Machine   json.RawMessage `json:"machine"`
+		Event     *string         `json:"event"`
+		Providers []struct {
+			Provider string `json:"provider"`
+			Account  *struct {
+				Email string `json:"email"`
+			} `json:"account"`
+			Auth struct {
+				State string `json:"state"`
+			} `json:"auth"`
+			WantFresh bool `json:"want_fresh"`
+		} `json:"providers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad_request"})
 		return
+	}
+	if req.Schema != 1 && (req.Schema != 2 || s.cfg.Schema1Only) {
+		writeJSON(w, 400, map[string]string{"error": "unsupported_schema"})
+		return
+	}
+	if req.Schema == 2 { // the Claude block in schema 1 terms
+		for _, p := range req.Providers {
+			if p.Provider == "claude" {
+				req.Auth.State, req.Account, req.WantFresh = p.Auth.State, p.Account, p.WantFresh
+			}
+		}
 	}
 	s.mu.Lock()
 	s.syncs++
@@ -127,6 +158,14 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 		s.devices[req.Device.ID] = d
 	}
 	d.Syncs++
+	d.LastSchema = req.Schema
+	d.Machine = len(req.Machine) > 0 && string(req.Machine) != "null"
+	if req.Event != nil && *req.Event == "uninstall" {
+		d.Uninstalls++
+		s.mu.Unlock()
+		writeJSON(w, 200, map[string]any{"providers": []any{}, "next_sync_seconds": 60, "server_urls": []string{base(r)}, "client_latest_version": nil})
+		return
+	}
 	d.LastMode, d.LastVersion, d.LastAuthState = req.Client.Mode, req.Client.Version, req.Auth.State
 	if req.Account != nil {
 		d.LastEmail = req.Account.Email
@@ -139,16 +178,35 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	resets := stamp(now.Add(48 * time.Hour))
+	latest := map[string]any{
+		"fetched_at": stamp(now.Add(-60 * time.Second)),
+		"usage": map[string]any{"limits": []any{
+			map[string]any{"kind": "weekly_all", "group": "weekly", "percent": weekly, "severity": "normal", "resets_at": resets, "scope": nil},
+			map[string]any{"kind": "weekly_scoped", "group": "weekly", "percent": 40, "severity": "normal", "resets_at": resets,
+				"scope": map[string]any{"model": map[string]any{"id": nil, "display_name": "Fable"}, "surface": nil}},
+		}},
+	}
+	if req.Schema == 2 {
+		blocks := []any{}
+		for _, p := range req.Providers {
+			b := map[string]any{"provider": p.Provider, "role": "standby", "fetch_now": false, "latest": nil,
+				"peers": map[string]any{"devices": 0, "pcs": 0, "poller_hostname": nil}, "problem": nil}
+			if p.Provider == "claude" {
+				l := map[string]any{"source": nil}
+				for k, v := range latest {
+					l[k] = v
+				}
+				b["latest"] = l
+				b["peers"] = map[string]any{"devices": 2, "pcs": 2, "poller_hostname": "TEST-PC-01"}
+			}
+			blocks = append(blocks, b)
+		}
+		writeJSON(w, 200, map[string]any{"providers": blocks, "next_sync_seconds": 15, "server_urls": []string{base(r)}, "client_latest_version": nil})
+		return
+	}
 	writeJSON(w, 200, map[string]any{
 		"role": "standby", "fetch_now": false, "next_sync_seconds": 15,
-		"latest": map[string]any{
-			"fetched_at": stamp(now.Add(-60 * time.Second)),
-			"usage": map[string]any{"limits": []any{
-				map[string]any{"kind": "weekly_all", "group": "weekly", "percent": weekly, "severity": "normal", "resets_at": resets, "scope": nil},
-				map[string]any{"kind": "weekly_scoped", "group": "weekly", "percent": 40, "severity": "normal", "resets_at": resets,
-					"scope": map[string]any{"model": map[string]any{"id": nil, "display_name": "Fable"}, "surface": nil}},
-			}},
-		},
+		"latest":                latest,
 		"peers":                 map[string]any{"devices": 2, "poller_hostname": "TEST-PC-01"},
 		"server_urls":           []string{base(r)},
 		"client_latest_version": nil,
@@ -208,6 +266,7 @@ func main() {
 	flag.StringVar(&cfg.Token, "token", "", "fake access token to watch for")
 	flag.StringVar(&cfg.Files, "files", ".", "release files")
 	flag.StringVar(&cfg.Scripts, "scripts", ".", "install-ci scripts")
+	flag.BoolVar(&cfg.Schema1Only, "schema1-only", false, "refuse schema 2 (400 unsupported_schema), as a server from before it")
 	flag.Parse()
 	if cfg.Key == "" {
 		fmt.Fprintln(os.Stderr, "fakeserver: -key is required")

@@ -1,5 +1,5 @@
-// Package protocol is the wire format of POST /api/v1/sync (schema 1) and a
-// client for it. It knows nothing about the Claude sign-in: no token can
+// Package protocol is the wire format of POST /api/v1/sync (schema 1, and
+// schema 2 in wire_v2.go) and a client for it. It knows nothing about the Claude sign-in: no token can
 // reach a sync request through this package.
 package protocol
 

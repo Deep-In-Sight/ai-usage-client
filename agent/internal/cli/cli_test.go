@@ -19,6 +19,7 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/engine"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/winapp"
 )
@@ -103,6 +104,7 @@ func newEnv(t *testing.T) *testEnv {
 	}
 	te.Env.WinApp = noWinApp{}
 	te.Env.Machine = func() (string, string) { return fakeMachineKey, "os" }
+	te.Env.Syncer = func(config.Config, string) engine.Syncer { return refuseAll{} }
 	return te
 }
 

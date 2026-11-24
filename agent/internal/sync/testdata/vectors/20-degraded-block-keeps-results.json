@@ -1,0 +1,278 @@
+{
+  "name": "20-degraded-block-keeps-results",
+  "description": "A block with a wrong optional part (an over-long account name, an unknown result source, an over-long detail) is read with that part cut or null; its results are stored and the reply says degraded_block, so the client may drop its backlog",
+  "ingest_key": "test-ingest-key-0123456789",
+  "server": {
+    "server_urls": [
+      "http://ai-usage.local",
+      "http://ai-usage.local:8700",
+      "http://192.0.2.10:8700"
+    ],
+    "client_latest_version": null
+  },
+  "steps": [
+    {
+      "at": "2026-01-05T09:00:00.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 2,
+          "client": {
+            "version": "0.9.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "tray"
+          },
+          "device": {
+            "id": "dev-a",
+            "hostname": "TEST-PC-A",
+            "os_user": "user-a"
+          },
+          "machine": {
+            "key": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+            "source": "os"
+          },
+          "event": null,
+          "providers": [
+            {
+              "provider": "claude",
+              "account": {
+                "key": "acc-1",
+                "email": "user-a@example.com",
+                "display_name": "Name xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "organization_name": "Example",
+                "organization_type": "claude_max",
+                "subscription_type": "max",
+                "rate_limit_tier": "default_claude_max_20x"
+              },
+              "auth": {
+                "state": "ok",
+                "token_expires_at": "2026-01-05T17:00:00.000Z"
+              },
+              "parse_problem": null,
+              "results": [
+                {
+                  "account_key": "acc-1",
+                  "fetched_at": "2026-01-05T08:59:20.000Z",
+                  "http_status": 200,
+                  "usage": {
+                    "five_hour": null,
+                    "seven_day": {
+                      "utilization": 42.0,
+                      "resets_at": "2026-01-08T21:00:00.000Z"
+                    },
+                    "limits": []
+                  }
+                }
+              ],
+              "want_fresh": false
+            },
+            {
+              "provider": "codex",
+              "account": {
+                "key": "codex:acc-c1:user-c1",
+                "email": "user-a@example.com",
+                "plan_type": "plus"
+              },
+              "auth": {
+                "state": "ok",
+                "token_expires_at": "2026-01-12T09:00:00.000Z"
+              },
+              "parse_problem": null,
+              "results": [
+                {
+                  "account_key": "codex:acc-c1:user-c1",
+                  "fetched_at": "2026-01-05T08:59:30.000Z",
+                  "http_status": 200,
+                  "source": "oauth-v9",
+                  "cli_version": null,
+                  "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                  "retry_after_seconds": null,
+                  "usage": {
+                    "plan_type": "plus",
+                    "rate_limit": {
+                      "allowed": true,
+                      "limit_reached": false,
+                      "primary_window": {
+                        "used_percent": 38,
+                        "limit_window_seconds": 604800,
+                        "reset_after_seconds": 3600,
+                        "reset_at": 1767610800
+                      }
+                    },
+                    "credits": {
+                      "has_credits": false,
+                      "unlimited": false,
+                      "balance": "0"
+                    },
+                    "additional_rate_limits": []
+                  }
+                }
+              ],
+              "want_fresh": false
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "providers": [
+            {
+              "provider": "claude",
+              "role": "poller",
+              "fetch_now": false,
+              "latest": {
+                "fetched_at": "2026-01-05T08:59:20.000Z",
+                "source": null,
+                "usage": "<any>"
+              },
+              "peers": {
+                "devices": 1,
+                "pcs": 1,
+                "poller_hostname": "TEST-PC-A"
+              },
+              "problem": "degraded_block"
+            },
+            {
+              "provider": "codex",
+              "role": "poller",
+              "fetch_now": false,
+              "latest": {
+                "fetched_at": "2026-01-05T08:59:30.000Z",
+                "source": null,
+                "usage": "<any>"
+              },
+              "peers": {
+                "devices": 1,
+                "pcs": 1,
+                "poller_hostname": "TEST-PC-A"
+              },
+              "problem": "degraded_block"
+            }
+          ],
+          "next_sync_seconds": 60,
+          "server_urls": [
+            "http://ai-usage.local",
+            "http://ai-usage.local:8700",
+            "http://192.0.2.10:8700"
+          ],
+          "client_latest_version": null
+        }
+      }
+    },
+    {
+      "at": "2026-01-05T09:01:00.000Z",
+      "request": {
+        "headers": {
+          "Authorization": "Bearer test-ingest-key-0123456789"
+        },
+        "body": {
+          "schema": 2,
+          "client": {
+            "version": "0.9.0",
+            "os": "linux",
+            "os_version": "24.04",
+            "arch": "amd64",
+            "mode": "tray"
+          },
+          "device": {
+            "id": "dev-a",
+            "hostname": "TEST-PC-A",
+            "os_user": "user-a"
+          },
+          "machine": {
+            "key": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+            "source": "os"
+          },
+          "event": null,
+          "providers": [
+            {
+              "provider": "claude",
+              "account": {
+                "key": "acc-1",
+                "email": "user-a@example.com",
+                "display_name": "User A",
+                "organization_name": "Example",
+                "organization_type": "claude_max",
+                "subscription_type": "max",
+                "rate_limit_tier": "default_claude_max_20x"
+              },
+              "auth": {
+                "state": "ok",
+                "token_expires_at": "2026-01-05T17:00:00.000Z"
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            },
+            {
+              "provider": "codex",
+              "account": {
+                "key": "codex:acc-c1:user-c1",
+                "email": "user-a@example.com",
+                "plan_type": "plus"
+              },
+              "auth": {
+                "state": "ok",
+                "token_expires_at": "2026-01-12T09:00:00.000Z"
+              },
+              "parse_problem": null,
+              "results": [],
+              "want_fresh": false
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "providers": [
+            {
+              "provider": "claude",
+              "role": "poller",
+              "fetch_now": false,
+              "latest": {
+                "fetched_at": "2026-01-05T08:59:20.000Z",
+                "source": null,
+                "usage": "<any>"
+              },
+              "peers": {
+                "devices": 1,
+                "pcs": 1,
+                "poller_hostname": "TEST-PC-A"
+              },
+              "problem": null
+            },
+            {
+              "provider": "codex",
+              "role": "poller",
+              "fetch_now": false,
+              "latest": {
+                "fetched_at": "2026-01-05T08:59:30.000Z",
+                "source": null,
+                "usage": "<any>"
+              },
+              "peers": {
+                "devices": 1,
+                "pcs": 1,
+                "poller_hostname": "TEST-PC-A"
+              },
+              "problem": null
+            }
+          ],
+          "next_sync_seconds": 60,
+          "server_urls": [
+            "http://ai-usage.local",
+            "http://ai-usage.local:8700",
+            "http://192.0.2.10:8700"
+          ],
+          "client_latest_version": null
+        }
+      }
+    }
+  ]
+}
