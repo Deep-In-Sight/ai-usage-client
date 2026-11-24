@@ -73,13 +73,14 @@ var BorrowedCode = []Borrowed{
 			"twice, 50 ms apart, and when it needs renewing (the access token's expiry with a 5-minute window, else " +
 			"last_refresh plus 8 days) (agent/internal/codex)",
 			"reading chatgpt_base_url from Codex's config.toml line by line (agent/internal/codex)",
-			"finding the codex executable: the native binary an npm install ships, and the desktop apps' copies on macOS " +
-				"(agent/internal/codex)",
+			"finding the codex executable on PATH, resolving an npm install's launcher to the native binary it ships, " +
+				"which install only records (agent/internal/codex)",
 			"the Codex usage request: the address made from chatgpt_base_url (wham/usage or api/codex/usage), its headers " +
 				"with the product's own User-Agent and its 30-second limit (agent/internal/codex)",
 			"naming Codex limit windows by their length, never by their position in the reply (agent/internal/codex)",
 			"asking the Codex CLI's app-server for the rate limits (initialize, initialized, account/rateLimits/read; " +
-				"replies matched by id) and ending it by closing its input, then stopping its process tree (agent/internal/codex)"},
+				"replies matched by id) and ending it by closing its input, then stopping its process tree, in code that " +
+				"only test builds use: a released agent never starts the Codex CLI (agent/internal/codex)"},
 		File: "borrowed/CodexBar/LICENSE"},
 }
 

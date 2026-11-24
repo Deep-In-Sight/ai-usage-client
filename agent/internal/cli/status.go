@@ -214,24 +214,25 @@ func writeProvider(w io.Writer, env Env, id provider.ID, ps status.ProviderStatu
 		fmt.Fprintln(w, indent+strings.Join(numbers, " · "))
 	}
 	if id == provider.Codex && (ps.LastFetchSource != "" || ps.FallbackCLI != "" || ps.FallbackProblem != "") {
-		// how this PC got Codex's numbers, and the Codex CLI the fallback
-		// would run (design 6.12)
+		// how this PC got Codex's numbers (design 6.12): a released agent
+		// only ever asks directly; the Codex CLI fallback and its line
+		// exist only in a CI build with its test switch (ruling F1)
 		src := map[string]string{"wham": "direct", "app-server": "Codex CLI", "": "no fetch from this PC yet"}[ps.LastFetchSource]
 		if src == "" {
 			src = ps.LastFetchSource
 		}
-		cli := "no fallback CLI found"
+		cli := ""
 		switch {
 		case ps.FallbackProblem != "":
-			cli = "fallback CLI: " + ps.FallbackProblem
+			cli = "  (fallback CLI: " + ps.FallbackProblem + ")"
 		case ps.FallbackCLI != "":
 			path, ver := ps.FallbackCLI, ""
 			if i := strings.LastIndexByte(path, ' '); i > 0 {
 				path, ver = path[:i], path[i:]
 			}
-			cli = "fallback CLI: " + displayPath(env, path) + ver
+			cli = "  (fallback CLI: " + displayPath(env, path) + ver + ")"
 		}
-		fmt.Fprintf(w, "%ssource: %s  (%s)\n", indent, src, cli)
+		fmt.Fprintf(w, "%ssource: %s%s\n", indent, src, cli)
 	}
 }
 

@@ -109,21 +109,18 @@ Your token, your conversations, your files, this PC's machine identifier
   when you installed), opening them read-only, and never refreshes,
   rewrites or locks them. The Codex token goes only to
   `chatgpt.com/backend-api/wham/usage` (or another address on
-  `chatgpt.com` or `chat.openai.com` over HTTPS that `chatgpt_base_url` in
-  `config.toml` names; any other host, even one under `openai.com`, gets no
-  request), with this agent's own name as
-  its User-Agent. An expired sign-in makes no request: running Codex once
-  renews it.
-- Only when `chatgpt.com` turns the direct request away (HTTP 403 or 404, or
-  a reply without usage numbers) does the agent ask the Codex CLI installed
-  on this PC instead: it runs `codex app-server` once, asks it for the rate
-  limits and ends it (and anything it started) within the same 35-second
-  limit as every fetch. It does so only while the sign-in has more than 30
-  minutes left, so that the Codex it runs never renews the sign-in, never
-  after the token was refused, and at most once every 10 minutes. The agent
-  gives that Codex no token (Codex reads its own sign-in); Codex then
-  connects to `chatgpt.com` itself and writes its own logs and caches in
-  its folder, as when you run it. On Windows it runs without a window.
+  `chatgpt.com` or `chat.openai.com` over HTTPS that `chatgpt_base_url`
+  names at the top of `config.toml`, outside any profile; any other host,
+  even one under `openai.com`, gets no request), with this agent's own name
+  as its User-Agent. An expired sign-in makes no request: running Codex
+  once renews it.
+- Codex usage comes only from that one direct request, made with the
+  sign-in found on this PC. The agent never starts the Codex CLI or any
+  other Codex program, so it never makes Codex renew or rewrite the
+  sign-in. When `chatgpt.com` turns the request away (an HTTP error, or a
+  reply without usage numbers), that answer is what the agent reports;
+  there is no second way. `install` notes where the `codex` command is,
+  only by looking at files.
 - It never listens on a port. Every connection goes out, to your server over
   HTTP and to Anthropic and OpenAI over HTTPS, so there is no firewall prompt.
 
@@ -449,10 +446,10 @@ licence:
   missing or partly written `auth.json` read again twice, 50 ms apart; when
   it needs renewing), how `chatgpt_base_url` is read from Codex's
   `config.toml`, where the codex executable is found (the native binary of
-  an npm install, the desktop apps' copies on macOS), the Codex usage
-  request (its address, its headers with this agent's own User-Agent, its
-  30-second limit), how Codex limit windows are named by their length, and
-  how the Codex CLI's `app-server` is asked for the rate limits when the
-  direct request is turned away (`initialize`, then
-  `account/rateLimits/read`, replies matched by id; ended by closing its
-  input, then stopping its whole process tree).
+  an npm install, which `install` only records), the Codex usage request
+  (its address, its headers with this agent's own User-Agent, its
+  30-second limit), how Codex limit windows are named by their length, and,
+  in code that only test builds use (a released agent never starts the
+  Codex CLI), how the Codex CLI's `app-server` is asked for the rate limits
+  (`initialize`, then `account/rateLimits/read`, replies matched by id;
+  ended by closing its input, then stopping its whole process tree).

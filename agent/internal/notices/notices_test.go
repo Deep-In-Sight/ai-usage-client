@@ -426,3 +426,39 @@ func TestLicensesCarryTheReadmesIndependenceNotice(t *testing.T) {
 		t.Fatal("ai-usage licenses does not carry the notice")
 	}
 }
+
+// Ruling F3 (review m-7): the README and `ai-usage licenses` say what a
+// released agent does with Codex: one direct request with the sign-in
+// found on the PC, never the Codex CLI, never a renewal; nothing describes
+// the CLI fallback as something it does.
+func TestTextsSayCodexIsNeverStarted(t *testing.T) {
+	b, err := os.ReadFile("../../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := strings.Join(strings.Fields(string(b)), " ")
+	for _, want := range []string{
+		"Codex usage comes only from that one direct request, made with the sign-in found on this PC.",
+		"The agent never starts the Codex CLI or any other Codex program, so it never makes Codex renew or rewrite the sign-in.",
+		"that answer is what the agent reports; there is no second way.",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Fatalf("README does not say %q", want)
+		}
+	}
+	var out strings.Builder
+	Write(&out, nil, "go1.27")
+	text := strings.Join(strings.Fields(out.String()), " ")
+	if !strings.Contains(text, "in code that only test builds use: a released agent never starts the Codex CLI") {
+		t.Fatal("ai-usage licenses describes the app-server code as something the agent does")
+	}
+	for _, name := range []string{"README", "licenses"} {
+		s := map[string]string{"README": readme, "licenses": text}[name]
+		for _, bad := range []string{"runs `codex app-server`", "the Codex it runs", "does the agent ask the Codex CLI",
+			"desktop apps' copies", "when the direct request is turned away"} {
+			if strings.Contains(s, bad) {
+				t.Fatalf("%s still says %q", name, bad)
+			}
+		}
+	}
+}

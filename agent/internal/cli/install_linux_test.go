@@ -344,7 +344,9 @@ func TestInstallRecordsCodexPaths(t *testing.T) {
 	eq(t, c.CodexPath, real)
 	out := te.out.String()
 	contains(t, out, "Codex folder: "+codexHome+"\n")
-	contains(t, out, "Codex CLI: "+real+"\n")
+	if strings.Contains(out, "Codex CLI") { // recorded, never used by a released agent: not shown (ruling F3)
+		t.Fatalf("install names the Codex CLI:\n%s", out)
+	}
 	if strings.Contains(out, "Codex sign-in:") {
 		t.Fatal("a Codex sign-in line without a sign-in")
 	}

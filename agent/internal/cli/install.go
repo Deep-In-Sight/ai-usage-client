@@ -313,9 +313,6 @@ func install(env Env, args []string) (int, string) {
 		}
 		fmt.Fprintln(env.Stdout, line)
 	}
-	if cfg.CodexPath != "" {
-		fmt.Fprintln(env.Stdout, "Codex CLI: "+cfg.CodexPath)
-	}
 	// only when there is a Codex sign-in of some kind: a PC without Codex
 	// sees the install output of v0.8
 	switch codex.NewReader(codex.Home(cfg, env.Dirs.Home), env.Clock).Login(ctx).State {
