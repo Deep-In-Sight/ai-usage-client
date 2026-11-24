@@ -13,6 +13,7 @@ import (
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/anthropic"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/autostart"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/codex"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/creds"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/logfile"
@@ -21,6 +22,7 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider/claude"
+	codexprov "github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider/codex"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/supervisor"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/backlog"
@@ -139,7 +141,14 @@ func runCmd(env Env, args []string) int {
 		Clock: env.Clock,
 		// Claude: the reader hands the token to the usage client inside the
 		// call and nowhere else.
-		Providers:        []provider.Provider{claude.New(reader, anthropic.New(anthropic.UsageURL, ua, env.Clock), env.Clock)},
+		// Codex: the same, with the Codex CLI's sign-in (read-only) and
+		// chatgpt.com; its lane is there on every PC (signed out: account
+		// null), as the server expects (design 6.8).
+		Providers: []provider.Provider{
+			claude.New(reader, anthropic.New(anthropic.UsageURL, ua, env.Clock), env.Clock),
+			codexprov.New(codex.NewReader(codex.Home(cfg, env.Dirs.Home), env.Clock),
+				codex.NewClientWith(codex.DefaultBaseURL, ua, env.Clock, env.CodexTransport), nil),
+		},
 		Syncer:           env.syncer(cfg, ua),
 		Backlog:          bl,
 		Config:           cfg,
@@ -211,7 +220,7 @@ func runCmd(env Env, args []string) int {
 	sup := supervisor.New(supervisor.Options{Spawn: env.helperSpawner(logger), IconDir: env.iconDir,
 		Standby: watchesDesktop(env.goos()), Clock: env.Clock, Log: logger})
 	loop := &trayLoop{env: env, ctrl: ctrl, sup: sup, updates: updates, log: logger, setMode: e.SetClientMode,
-		known: []provider.ID{provider.Claude}, extra: testHelpers(env)}
+		known: []provider.ID{provider.Claude, provider.Codex}, extra: testHelpers(env)}
 	// The tray's Remove: the helpers end, this process stops its engine
 	// and lets go of run.lock and the log before removing everything.
 	loop.remove = func() error {

@@ -345,3 +345,14 @@ func TestHome(t *testing.T) {
 	eq(t, Home(config.Config{}, "/h/u"), filepath.Join("/h/u", ".codex"))
 	eq(t, Home(config.Config{CodexHome: "/w/codex"}, "/h/u"), "/w/codex")
 }
+
+// Neither the sign-in the agent keeps nor the reader has a token field.
+func TestAuthHasNoTokenField(t *testing.T) {
+	for _, typ := range []reflect.Type{reflect.TypeOf(Auth{}), reflect.TypeOf(Reader{}), reflect.TypeOf(provider.Login{})} {
+		for i := 0; i < typ.NumField(); i++ {
+			if n := strings.ToLower(typ.Field(i).Name); strings.Contains(n, "token") || strings.Contains(n, "secret") {
+				t.Errorf("%s has field %s", typ.Name(), typ.Field(i).Name)
+			}
+		}
+	}
+}

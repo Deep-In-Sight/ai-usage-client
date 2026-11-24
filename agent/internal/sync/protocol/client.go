@@ -29,7 +29,7 @@ func (e *StatusError) Error() string { return fmt.Sprintf("sync: HTTP %d", e.Sta
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 const (
-	syncTimeout  = 15 * time.Second
+	SyncTimeout  = 15 * time.Second // one sync request at most (the engine's budget counts on it)
 	dialTimeout  = 5 * time.Second
 	maxReplySize = 1 << 20
 )
@@ -55,14 +55,14 @@ func NewClient(ingestKey, userAgent string, dial DialFunc) *Client {
 		DialContext:           dial,
 		MaxIdleConns:          4,
 		IdleConnTimeout:       90 * time.Second,
-		ResponseHeaderTimeout: syncTimeout,
+		ResponseHeaderTimeout: SyncTimeout,
 	}
 	return &Client{
 		key: ingestKey,
 		ua:  userAgent,
 		hc: &http.Client{
 			Transport:     tr,
-			Timeout:       syncTimeout,
+			Timeout:       SyncTimeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}

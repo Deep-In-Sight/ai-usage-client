@@ -223,7 +223,8 @@ tray_label_check
 # tray.menu_reset: a fresh install with nobody signed in whose first status
 # comes after the 5 s the tray waits for it (the server takes the sync and
 # does not answer): the neutral helper's menu is built without a section,
-# then rebuilt (systray ResetMenu) when "Sign in to Claude Code" comes. The
+# then rebuilt (systray ResetMenu) when "Sign in to Claude Code or Codex"
+# comes. The
 # menu is read as a tray host reads it (dbusmenu GetLayout) before and
 # after, and a click on the rebuilt menu reaches the agent.
 layout_of() { # layout_of FILE: the visible items as "label" lines, "-" for separators; first line the revision
@@ -272,13 +273,13 @@ menu_reset_check() {
       # before the first status: the server line and the actions, no section
       case "$got1" in "Connecting to the server…|-|Open dashboard|Refresh now|Start at login|Remove AI Usage|Quit|") ;;
         *) problems="$problems first_menu=[$got1]" ;; esac
-      signin() { getlayout "$out/menu-reset-2.json" && layout_of "$out/menu-reset-2.json" > "$out/menu-reset-2.txt" && grep -q ' Sign in to Claude Code$' "$out/menu-reset-2.txt"; }
+      signin() { getlayout "$out/menu-reset-2.json" && layout_of "$out/menu-reset-2.json" > "$out/menu-reset-2.txt" && grep -q ' Sign in to Claude Code or Codex$' "$out/menu-reset-2.txt"; }
       if wait_for 60 signin; then
         r2=$(head -n 1 "$out/menu-reset-2.txt")
         got2=$(tail -n +2 "$out/menu-reset-2.txt" | sed 's/^[0-9]* //' | tr '\n' '|')
         # rebuilt: the prompt in its section, a separator, the server line,
         # a separator, each action once
-        case "$got2" in "Sign in to Claude Code|-|"*"|-|Open dashboard|Refresh now|Start at login|Remove AI Usage|Quit|") ;;
+        case "$got2" in "Sign in to Claude Code or Codex|-|"*"|-|Open dashboard|Refresh now|Start at login|Remove AI Usage|Quit|") ;;
           *) problems="$problems rebuilt_menu=[$got2]" ;; esac
         [ "$r2" -gt "$r1" ] 2>/dev/null || problems="$problems revision=$r1->$r2"
         # a click on the rebuilt menu reaches the agent: Refresh now asks

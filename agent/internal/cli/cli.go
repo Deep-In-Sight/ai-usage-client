@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -76,6 +77,10 @@ type Env struct {
 	// Machine is this PC's machine key and its source (nil means
 	// machine.Key).
 	Machine func() (key, source string)
+	// CodexTransport carries the Codex usage request (nil means the
+	// default transport; tests point it at a fake server, and refuse
+	// everything by default).
+	CodexTransport http.RoundTripper
 }
 
 // autostartOptions are the autostart inputs for this user.

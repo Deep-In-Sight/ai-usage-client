@@ -74,7 +74,10 @@ var BorrowedCode = []Borrowed{
 			"last_refresh plus 8 days) (agent/internal/codex)",
 			"reading chatgpt_base_url from Codex's config.toml line by line (agent/internal/codex)",
 			"finding the codex executable: the native binary an npm install ships, and the desktop apps' copies on macOS " +
-				"(agent/internal/codex)"},
+				"(agent/internal/codex)",
+			"the Codex usage request: the address made from chatgpt_base_url (wham/usage or api/codex/usage), its headers " +
+				"with the product's own User-Agent and its 30-second limit (agent/internal/codex)",
+			"naming Codex limit windows by their length, never by their position in the reply (agent/internal/codex)"},
 		File: "borrowed/CodexBar/LICENSE"},
 }
 

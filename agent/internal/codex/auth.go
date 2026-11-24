@@ -264,6 +264,27 @@ type Reader struct {
 	authStamp  stamp
 	cfgStamp   stamp
 	expiryDone time.Time
+	// rejected: the usage service refused the token (401); the sign-in
+	// counts as expired until auth.json changes (design D2)
+	rejected      bool
+	rejectedStamp stamp
+}
+
+// Rejected notes that the usage service refused the token (HTTP 401):
+// until auth.json changes (Codex renewed the sign-in) the sign-in counts
+// as expired and WithToken calls nothing.
+func (r *Reader) Rejected() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rejected, r.rejectedStamp = true, stampOf(r.authPath())
+}
+
+// stillRejected reports whether a 401 still stands (s.mu held).
+func (r *Reader) stillRejected() bool {
+	if r.rejected && stampOf(r.authPath()) != r.rejectedStamp {
+		r.rejected = false
+	}
+	return r.rejected
 }
 
 // NewReader reads the sign-in in the Codex folder home. It reads nothing
@@ -321,8 +342,11 @@ func (r *Reader) login(now time.Time) provider.Login {
 	a := r.auth
 	l.AccountKey, l.Email, l.Plan, l.ExpiresAt = AccountKey(a), a.Email, a.Plan, a.ExpiresAt
 	l.State = "ok"
-	if Freshness(a, now) {
+	switch {
+	case Freshness(a, now):
 		l.State = "expired"
+	case r.stillRejected():
+		l.State, l.Problem = "expired", "the usage service refused the Codex sign-in (HTTP 401)"
 	}
 	if l.AccountKey == "" && l.Problem == "" {
 		l.Problem = "the Codex sign-in names no account"

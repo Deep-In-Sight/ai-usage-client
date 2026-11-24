@@ -141,7 +141,9 @@ func machineWords(m string) string {
 }
 
 // signInWords are the status text of the sign-in states.
-var signInWords = map[string]string{"ok": "signed in", "expired": "sign-in expired", "not_signed_in": "not signed in"}
+var signInWords = map[string]string{"ok": "signed in", "expired": "sign-in expired", "not_signed_in": "not signed in",
+	"unsupported_store": "sign-in in the system keychain (not supported)", "api_key": "API-key sign-in (no plan limits)",
+	"unsupported_base_url": "server address in config.toml not supported"}
 
 // writeProvider prints one provider's part (design 6.12): its sign-in and
 // role on the first line, then one line per limit, when the numbers were

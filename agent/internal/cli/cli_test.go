@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -106,6 +108,7 @@ func newEnv(t *testing.T) *testEnv {
 	te.Env.WinApp = noWinApp{}
 	te.Env.Machine = func() (string, string) { return fakeMachineKey, "os" }
 	te.Env.Syncer = func(config.Config, string) engine.Syncer { return refuseAll{} }
+	te.Env.CodexTransport = refuseTransport{} // never chatgpt.com from a test
 	te.helpers = newFakeHelpers(t)
 	te.Env.Helper = te.helpers.spawn
 	te.Env.OpenURL = func(string) error { return nil }
@@ -286,6 +289,48 @@ Backlog:    2
 
 func pf(v float64) *float64 { return &v }
 
+// Codex has its part below Claude's, in the same layout; a PC without it
+// says so in one line.
+func TestStatusShowsCodex(t *testing.T) {
+	old := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = old })
+	te := newEnv(t)
+	at := func(h, m int) time.Time { return time.Date(2026, 1, 5, h, m, 0, 0, time.UTC) }
+	ptr := func(v time.Time) *time.Time { return &v }
+	st := 200
+	snap := status.Snapshot{Version: "0.0.0-dev", PID: 1, Mode: "coordinated", ServerURL: "http://ai-usage.local", ClientMode: "tray",
+		LastSyncAt: at(8, 59), LastSyncOK: true, Machine: "os", Providers: map[provider.ID]status.ProviderStatus{
+			provider.Claude: {State: "ok", Role: "poller", ExpiresAt: at(17, 30), MainKey: "weekly_all",
+				Rows: []provider.Row{{Key: "weekly_all", Label: "Weekly", Percent: pf(30)}}},
+			provider.Codex: {State: "ok", Role: "poller", Plan: "plus", ExpiresAt: time.Date(2026, 1, 12, 9, 0, 0, 0, time.UTC),
+				LatestFetchedAt: at(8, 58), LastFetchAt: at(8, 58), LastFetchStatus: &st, LatestSource: "wham", MainKey: "codex:weekly",
+				Rows: []provider.Row{
+					{Key: "codex:5h", Label: "5-hour", Percent: pf(100), Blocked: true, ResetsAt: ptr(at(14, 20))},
+					{Key: "codex:weekly", Label: "Weekly", Percent: pf(38), ResetsAt: ptr(time.Date(2026, 1, 9, 6, 0, 0, 0, time.UTC))},
+				}},
+		}}
+	must(t, status.Write(te.Dirs.File(paths.StatusFile), snap))
+	eq(t, te.main("status"), 0)
+	contains(t, te.out.String(), `Claude:     signed in, expires 17:30 · poller
+            Weekly 30%
+Codex:      signed in, expires Jan 12 09:00 · poller
+            5-hour 100% blocked  Resets Mon 14:20 · in 5h 20m
+            Weekly  38%  Resets Fri 06:00 · in 3d 21h
+            Updated 08:58 · last fetch 08:58 HTTP 200
+Backlog:`)
+	snap.Providers[provider.Codex] = status.ProviderStatus{State: "not_signed_in", Problem: "no Codex sign-in found"}
+	must(t, status.Write(te.Dirs.File(paths.StatusFile), snap))
+	te.out.Reset()
+	eq(t, te.main("status"), 0)
+	contains(t, te.out.String(), "Codex:      not signed in (no Codex sign-in found)\nBacklog:")
+	snap.Providers[provider.Codex] = status.ProviderStatus{State: "unsupported_base_url", Problem: "chatgpt_base_url in Codex's config.toml is not an OpenAI address"}
+	must(t, status.Write(te.Dirs.File(paths.StatusFile), snap))
+	te.out.Reset()
+	eq(t, te.main("status"), 0)
+	contains(t, te.out.String(), "Codex:      server address in config.toml not supported (chatgpt_base_url in Codex's config.toml is not an OpenAI address)\n")
+}
+
 // status says whether the running agent sends a machine key, from what it
 // wrote to status.json (never the key, and nothing read by the status
 // process itself; review m-M).
@@ -350,3 +395,11 @@ type noWinApp struct{}
 
 func (noWinApp) Register(winapp.Entry) error { return nil }
 func (noWinApp) Unregister() error           { return nil }
+
+// refuseTransport refuses every request (the Codex usage request in run
+// tests that do not stand in a fake service).
+type refuseTransport struct{}
+
+func (refuseTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("test: Codex request refused")
+}

@@ -51,6 +51,12 @@ const (
 
 	defaultBatch = backlog.MaxItems
 	minWait      = time.Second
+
+	// FetchTimeout caps every fetch, whatever the provider does (each also
+	// has its own shorter limit: Claude 20 s, Codex 30 s). The lanes fetch
+	// one after the other, so two fetches and the sync that carries their
+	// results stay under the server's 90 s fetch timeout.
+	FetchTimeout = 35 * time.Second
 )
 
 // Modes.
@@ -94,6 +100,8 @@ type Deps struct {
 	Publish          func(status.Snapshot)
 	Rand             func() float64
 	Log              *log.Logger
+	// FetchTimeout caps each fetch (0: FetchTimeout).
+	FetchTimeout time.Duration
 }
 
 // lane is one provider's part of the engine. Engine goroutine only.
@@ -190,6 +198,9 @@ func New(d Deps) *Engine {
 	}
 	if d.Publish == nil {
 		d.Publish = func(status.Snapshot) {}
+	}
+	if d.FetchTimeout <= 0 {
+		d.FetchTimeout = FetchTimeout
 	}
 	e := &Engine{d: d, mode: ModeStarting, batchLimit: defaultBatch, wake: make(chan struct{}, 1), clientMode: d.Identity.Mode}
 	if d.StatePath != "" {
@@ -712,7 +723,10 @@ func newer(a, b string) bool {
 }
 
 func (e *Engine) fetch(ctx context.Context, l *lane) {
-	res, err := l.p.Fetch(ctx)
+	// one lane's service that hangs holds up the others by this much at most
+	fctx, cancel := context.WithTimeout(ctx, e.d.FetchTimeout)
+	defer cancel()
+	res, err := l.p.Fetch(fctx)
 	if err != nil {
 		e.noteFetch(l, "fetch not attempted: "+err.Error())
 		return

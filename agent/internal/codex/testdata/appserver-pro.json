@@ -1,0 +1,51 @@
+{
+  "ordinaryUsageAllowed": true,
+  "rateLimits": {
+    "limitId": "codex",
+    "limitName": null,
+    "normalModelSlug": null,
+    "primary": {
+      "usedPercent": 38,
+      "windowDurationMins": 10080,
+      "resetsAt": 1768046400
+    },
+    "secondary": null,
+    "credits": {
+      "hasCredits": true,
+      "unlimited": false,
+      "balance": "12.50"
+    },
+    "individualLimit": null,
+    "spendControlReached": false,
+    "planType": "pro",
+    "rateLimitReachedType": null
+  },
+  "rateLimitsByLimitId": {
+    "codex": {
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {
+        "usedPercent": 38,
+        "windowDurationMins": 10080,
+        "resetsAt": 1768046400
+      },
+      "secondary": null,
+      "credits": {
+        "hasCredits": true,
+        "unlimited": false,
+        "balance": "12.50"
+      },
+      "individualLimit": null,
+      "spendControlReached": false,
+      "planType": "pro",
+      "rateLimitReachedType": null
+    }
+  },
+  "rateLimitResetCredits": {
+    "availableCount": 3,
+    "credits": null
+  },
+  "accountId": "acct-fake-0001",
+  "rateLimitUpsell": null
+}

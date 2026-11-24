@@ -198,6 +198,10 @@ type rig struct {
 	rnd     []float64
 	ri      int
 	extra   []provider.Provider // lanes after Claude's
+	// codexFirst puts the extra lanes before Claude's; fetchTimeout is
+	// Deps.FetchTimeout
+	codexFirst   bool
+	fetchTimeout time.Duration
 }
 
 func newRig(t *testing.T, fn func(int, string, protocol.Request) (protocol.Response, error)) *rig {
@@ -214,8 +218,12 @@ func newRig(t *testing.T, fn func(int, string, protocol.Request) (protocol.Respo
 }
 
 func (r *rig) build() *Engine {
+	providers := append([]provider.Provider{claude.Wrap(r.logins, r.fetcher, r.clk)}, r.extra...)
+	if r.codexFirst {
+		providers = append(append([]provider.Provider{}, r.extra...), providers[0])
+	}
 	return New(Deps{
-		Clock: r.clk, Providers: append([]provider.Provider{claude.Wrap(r.logins, r.fetcher, r.clk)}, r.extra...),
+		Clock: r.clk, Providers: providers, FetchTimeout: r.fetchTimeout,
 		Syncer: r.syncer, Backlog: r.backlog,
 		Config:           config.Config{ServerURLs: []string{"http://192.0.2.10:8700"}, IngestKey: ingestKey},
 		StatePath:        filepath.Join(r.dir, "state.json"),

@@ -46,6 +46,11 @@ address, as any server you connect to does.)
   per-product breakdown and the extra-usage spend
 - The account: its ID, email, display name, organization name and type,
   plan and rate-limit tier
+- When Codex is signed in on this PC: OpenAI's whole Codex usage reply for
+  each fetch (the percentage, length and reset time of each limit window,
+  per-model limits, whether there are credits and their balance), with when
+  it was fetched, its HTTP status and how it was fetched; and the Codex
+  account: its e-mail, plan, ChatGPT account ID and user ID
 - This PC: a random ID made at the first run, the PC name, your OS user
   name, the OS and its version, and the CPU type
 - A key that tells the server this PC apart from others, so that the
@@ -57,7 +62,8 @@ address, as any server you connect to does.)
   the PC, nothing more. When the OS gives no identifier, no key is sent and
   a reinstall counts as a new PC. No network card address is used.
 - The agent: its version, and whether it shows a tray icon
-- The sign-in: whether Claude Code is signed in, and when the sign-in expires
+- The sign-in: whether Claude Code (and Codex) is signed in, and when the
+  sign-in expires; on a PC without Codex, that Codex is not signed in
 - Whether you asked for fresh numbers with **Refresh now**
 - When you remove the agent: one last request that says so, so the server
   stops counting this PC at once
@@ -98,8 +104,17 @@ Your token, your conversations, your files, this PC's machine identifier
   Normally only the one PC the server picks for an account uses it; while
   the server cannot be reached, each PC asks Anthropic on its own, every 30
   minutes.
+- The same for Codex: it reads `auth.json` and two settings of
+  `config.toml` in the Codex folder (`~/.codex`, or `CODEX_HOME` as it was
+  when you installed), opening them read-only, and never refreshes,
+  rewrites or locks them. The Codex token goes only to
+  `chatgpt.com/backend-api/wham/usage` (or another `chatgpt.com` or
+  `openai.com` address over HTTPS that `chatgpt_base_url` in `config.toml`
+  names; any other address gets no request), with this agent's own name as
+  its User-Agent. An expired sign-in makes no request: running Codex once
+  renews it.
 - It never listens on a port. Every connection goes out, to your server over
-  HTTP and to Anthropic over HTTPS, so there is no firewall prompt.
+  HTTP and to Anthropic and OpenAI over HTTPS, so there is no firewall prompt.
 
 ### Install
 
@@ -411,5 +426,7 @@ licence:
   `a26ca57`: how the Codex sign-in is read without ever writing it (a
   missing or partly written `auth.json` read again twice, 50 ms apart; when
   it needs renewing), how `chatgpt_base_url` is read from Codex's
-  `config.toml`, and where the codex executable is found (the native
-  binary of an npm install, the desktop apps' copies on macOS).
+  `config.toml`, where the codex executable is found (the native binary of
+  an npm install, the desktop apps' copies on macOS), the Codex usage
+  request (its address, its headers with this agent's own User-Agent, its
+  30-second limit) and how Codex limit windows are named by their length.

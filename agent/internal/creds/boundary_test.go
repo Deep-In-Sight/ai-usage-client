@@ -84,8 +84,10 @@ func TestOnlyAnthropicCallsWithToken(t *testing.T) {
 				return true
 			}
 			calls++
-			if !strings.HasPrefix(f.rel, "internal/anthropic/") {
-				t.Errorf("%s calls WithToken; only internal/anthropic may", f.rel)
+			// Claude's token reaches the request in internal/anthropic,
+			// Codex's in internal/codex (plan Global Constraint 1)
+			if !strings.HasPrefix(f.rel, "internal/anthropic/") && !strings.HasPrefix(f.rel, "internal/codex/") {
+				t.Errorf("%s calls WithToken; only internal/anthropic and internal/codex may", f.rel)
 			}
 			return true
 		})
@@ -99,7 +101,7 @@ func TestServerSideNeverImportsCredsOrAnthropic(t *testing.T) {
 	guarded := []string{"internal/sync/protocol/", "internal/sync/discover/", "internal/sync/backlog/", "internal/status/",
 		// the tray side: packages that do not exist yet are simply not found
 		"internal/tray/", "internal/notify/", "internal/icon/", "internal/autostart/", "internal/winapp/", "internal/procs/"}
-	banned := []string{module + "/internal/creds", module + "/internal/anthropic"}
+	banned := []string{module + "/internal/creds", module + "/internal/anthropic", module + "/internal/codex"}
 	for _, f := range sources(t) {
 		in := false
 		for _, g := range guarded {
