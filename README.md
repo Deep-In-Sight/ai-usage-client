@@ -353,3 +353,13 @@ The agent shows Clawd in its tray icon while Claude Code is signed in.
 Its program icon (`agent/winres/icon.ico`, drawn by `agent/tools/mkicon`)
 is our own drawing, a usage gauge split into a warm and a cool half, and
 contains no vendor's logo or mascot.
+
+The agent borrows proven methods from widely used public tools. Their logic
+is rewritten in Go, not copied; each ported piece names its source in a
+`Ported from` comment, and `ai-usage licenses` prints each project's
+licence:
+
+- [sirmalloc/ccstatusline](https://github.com/sirmalloc/ccstatusline)
+  (MIT), commit `0c94df7`: how Claude usage replies are read (the 5-hour
+  "session" entry, placeholder entries, model names matched in part, and
+  each value falling back to the older reply shape on its own).

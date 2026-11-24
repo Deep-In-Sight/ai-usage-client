@@ -29,10 +29,17 @@ type Limit struct {
 	Severity string
 }
 
-// Limits holds the all-models weekly limit and the one scoped to a model.
+// Limits holds the 5-hour limit, the all-models weekly limit and the
+// weekly limit scoped to a model. Problem is "no_weekly" when a reply (a
+// JSON object) had no weekly value in either shape, else "".
 type Limits struct {
-	Weekly, Scoped Limit
+	FiveHour, Weekly, Scoped Limit
+	Problem                  string
 }
+
+// ProblemNoWeekly: the reply has no weekly value; it is reported to the
+// server as the provider's parse_problem.
+const ProblemNoWeekly = "no_weekly"
 
 // ParseTime reads an RFC 3339 timestamp (microseconds allowed). It returns
 // nil for anything else. Like the JS version it keeps milliseconds at most.
@@ -63,9 +70,38 @@ func object(v any) map[string]any {
 	return m
 }
 
-// ParseLimits picks the all-models weekly limit and the weekly limit scoped
-// to model. It never fails: anything it cannot read is "no data".
+// sameWindowPoints: an older bucket's reset time fills a limits[] entry
+// without one only when their percentages agree within this many points
+// (both describe the same window); the server uses the same rule.
+const sameWindowPoints = 1.0
+
+// placeholder: a limits[] entry that is not a window. Ported from
+// sirmalloc/ccstatusline (MIT) src/utils/usage-fetch.ts @ 0c94df7:
+// isPlaceholderUsageApiLimit (0 % or no percent, and no reset time; a
+// named model's entry is real data, 0 until the model is first used).
+func placeholder(item map[string]any, model bool) bool {
+	if model {
+		return false
+	}
+	pct, _ := item["percent"].(float64)
+	return (item["percent"] == nil || pct == 0) && item["resets_at"] == nil
+}
+
+// Ported from sirmalloc/ccstatusline (MIT) src/utils/usage-fetch.ts @ 0c94df7:
+// findUsageApiLimit, isPlaceholderUsageApiLimit, findWeeklyScopedLimit and
+// parseUsageApiResponse: the 5-hour entry is kind "session", a model's
+// weekly entry is matched by its display name (case-insensitive, part of
+// the name), placeholders are skipped, and each value falls back to the
+// older five_hour / seven_day buckets on its own.
+// Our rules differ on purpose: limits[] comes first (as in v0.8), a null
+// older bucket is no value (not 0), and an older bucket's reset time fills
+// an entry only when both describe the same window.
+//
+// ParseLimits picks the 5-hour limit, the all-models weekly limit and the
+// weekly limit scoped to model. It never fails: anything it cannot read is
+// "no data".
 func ParseLimits(payload json.RawMessage, model string) Limits {
+	five := emptyLimit("5-hour")
 	weekly := emptyLimit("All models")
 	scoped := emptyLimit(model)
 	var root any
@@ -73,6 +109,8 @@ func ParseLimits(payload json.RawMessage, model string) Limits {
 		root = nil
 	}
 	p := object(root)
+	found := map[*Limit]bool{}
+	times := map[*Limit]*time.Time{} // reset times of entries without a percent
 	list, _ := p["limits"].([]any)
 	for _, raw := range list {
 		item := object(raw)
@@ -81,15 +119,28 @@ func ParseLimits(payload json.RawMessage, model string) Limits {
 		}
 		scopeModel, _ := object(object(item["scope"])["model"])["display_name"].(string)
 		var target *Limit
-		switch {
-		case item["kind"] == "weekly_all":
+		switch kind := item["kind"]; {
+		case kind == "session" || kind == "five_hour":
+			target = &five
+		case kind == "weekly_all":
 			target = &weekly
-		case item["kind"] == "weekly_scoped" && strings.EqualFold(scopeModel, model):
+		case kind == "weekly_scoped" && model != "" && strings.Contains(strings.ToLower(scopeModel), strings.ToLower(model)):
 			target = &scoped
 		default:
 			continue
 		}
-		target.Percent = number(item["percent"])
+		if found[target] || placeholder(item, target == &scoped) {
+			continue
+		}
+		pct := number(item["percent"])
+		if pct == nil {
+			if at := ParseTime(item["resets_at"]); at != nil && times[target] == nil {
+				times[target] = at
+			}
+			continue
+		}
+		found[target] = true
+		target.Percent = pct
 		target.ResetsAt = ParseTime(item["resets_at"])
 		switch sev := item["severity"].(type) {
 		case nil:
@@ -100,14 +151,33 @@ func ParseLimits(payload json.RawMessage, model string) Limits {
 			target.Severity = fmt.Sprint(sev)
 		}
 	}
-	if weekly.Percent == nil { // older reply shape without `limits`
-		sevenDay := object(p["seven_day"])
-		if u := number(sevenDay["utilization"]); u != nil {
-			weekly.Percent = u
-			weekly.ResetsAt = ParseTime(sevenDay["resets_at"])
+	// the older shape fills what limits[] lacks, value by value
+	for _, f := range []struct {
+		field  string
+		target *Limit
+	}{{"seven_day", &weekly}, {"five_hour", &five}} {
+		bucket := object(p[f.field])
+		pct, at := number(bucket["utilization"]), ParseTime(bucket["resets_at"])
+		if f.target == &five && (pct == nil || *pct == 0) && at == nil {
+			continue // a placeholder: no 5-hour window
+		}
+		switch {
+		case !found[f.target] && pct != nil:
+			f.target.Percent = pct
+			f.target.ResetsAt = at
+			if at == nil {
+				f.target.ResetsAt = times[f.target]
+			}
+		case found[f.target] && f.target.ResetsAt == nil && at != nil && pct != nil &&
+			math.Abs(*pct-*f.target.Percent) <= sameWindowPoints:
+			f.target.ResetsAt = at
 		}
 	}
-	return Limits{Weekly: weekly, Scoped: scoped}
+	l := Limits{FiveHour: five, Weekly: weekly, Scoped: scoped}
+	if p != nil && weekly.Percent == nil {
+		l.Problem = ProblemNoWeekly
+	}
+	return l
 }
 
 // Level is the colour step of a limit.

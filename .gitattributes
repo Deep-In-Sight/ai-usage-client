@@ -4,4 +4,5 @@
 # agent/third_party/systray.patch.
 /LICENSE -text
 agent/internal/notices/licenses/** -text
+agent/internal/notices/borrowed/** -text
 agent/third_party/systray/** -text

@@ -1,6 +1,7 @@
 // Package notices holds AI Usage's own licence and the licence texts of the
-// third-party code compiled into the agent, so they reach everyone who gets
-// the binary ("ai-usage licenses"). licenses/ai-usage/LICENSE is the
+// third-party code compiled into the agent and of the projects whose logic
+// it ports (borrowed/), so they reach everyone who gets the binary
+// ("ai-usage licenses"). licenses/ai-usage/LICENSE is the
 // repository's LICENSE (TestOwnLicenceIsTheRepositorysLicense); the other
 // files under licenses/ are the modules' own, unchanged
 // (TestNoticesAreTheModulesFiles), and every compiled-in module has an
@@ -16,7 +17,7 @@ import (
 	"strings"
 )
 
-//go:embed licenses
+//go:embed licenses borrowed
 var files embed.FS
 
 // OwnLicence is AI Usage's licence, a copy of the repository's LICENSE.
@@ -42,6 +43,31 @@ var Marks = []Mark{
 	{Name: "The Clawd artwork", Shown: "which the tray icon shows while Claude Code is signed in",
 		Depicts: "the Claude Code mascot", Owner: "Anthropic PBC", Licensor: "Anthropic",
 		Files: []string{"claude-usage@localhost/clawd.svg", "agent/internal/icon/mascot.go"}},
+}
+
+// Borrowed is a public project whose logic the agent ports (rewritten in
+// Go, not copied). Each ported piece has a source comment
+// "Ported from <Project> (<Licence>) <file> @ <Commit>: <what>."
+// (TestEveryPortedFromCommentHasALicence), and the project's licence is
+// embedded at File, with a SOURCE file (URL, commit, date retrieved) next to
+// it. The README's Credits section names it too
+// (TestReadmeCreditsListEveryBorrowedProject).
+type Borrowed struct {
+	Project string   // "sirmalloc/ccstatusline"
+	URL     string   // "https://github.com/sirmalloc/ccstatusline"
+	Commit  string   // the commit the logic was ported from
+	Licence string   // "MIT"
+	What    []string // one line per ported piece
+	File    string   // "borrowed/ccstatusline/LICENSE"
+}
+
+// BorrowedCode lists every project the agent ports logic from.
+var BorrowedCode = []Borrowed{
+	{Project: "sirmalloc/ccstatusline", URL: "https://github.com/sirmalloc/ccstatusline", Commit: "0c94df7", Licence: "MIT",
+		What: []string{"reading Claude usage replies: the 5-hour \"session\" entry, placeholder entries, " +
+			"model names matched in part, each value falling back to the older reply shape on its own " +
+			"(agent/internal/usage)"},
+		File: "borrowed/ccstatusline/LICENSE"},
 }
 
 // GoPath stands for the Go standard library and runtime.
@@ -149,6 +175,26 @@ func Write(w io.Writer, versions map[string]string, goVersion string) {
 			}
 			fmt.Fprintf(w, "\n%s:\n\n%s", f, b)
 			if len(b) > 0 && b[len(b)-1] != '\n' {
+				fmt.Fprintln(w)
+			}
+		}
+	}
+	if len(BorrowedCode) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\n%s\n\n", rule)
+	fmt.Fprintln(w, "AI Usage also contains logic ported from the projects below (rewritten in")
+	fmt.Fprintln(w, "Go, not copied), used under the licences shown. The full texts follow each")
+	fmt.Fprintln(w, "entry.")
+	for _, b := range BorrowedCode {
+		fmt.Fprintf(w, "\n%s\n", rule)
+		fmt.Fprintf(w, "%s @ %s\n%s\nLicence: %s\n", b.Project, b.Commit, b.URL, b.Licence)
+		for _, what := range b.What {
+			wrap(w, "- ", what)
+		}
+		if lic, err := files.ReadFile(b.File); err == nil { // always: TestEveryPortedFromCommentHasALicence
+			fmt.Fprintf(w, "\nLICENSE:\n\n%s", lic)
+			if len(lic) > 0 && lic[len(lic)-1] != '\n' {
 				fmt.Fprintln(w)
 			}
 		}

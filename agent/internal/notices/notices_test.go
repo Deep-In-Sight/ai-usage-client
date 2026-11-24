@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -236,7 +238,8 @@ func TestLicenceFilesKeepTheirBytesInGit(t *testing.T) {
 	for _, l := range strings.Split(string(b), "\n") {
 		lines[strings.TrimSpace(l)] = true
 	}
-	for _, want := range []string{"/LICENSE -text", "agent/internal/notices/licenses/** -text", "agent/third_party/systray/** -text"} {
+	for _, want := range []string{"/LICENSE -text", "agent/internal/notices/licenses/** -text", "agent/internal/notices/borrowed/** -text",
+		"agent/third_party/systray/** -text"} {
 		if !lines[want] {
 			t.Fatalf(".gitattributes has no line %q", want)
 		}
@@ -265,6 +268,143 @@ func TestSystrayLicenceAgreesWithTheReadme(t *testing.T) {
 		"Only the files added to the copy", "are under the MIT licence"} {
 		if !strings.Contains(readme, want) {
 			t.Fatalf("the README does not say %q", want)
+		}
+	}
+}
+
+// portedRE finds the source comments of ported logic.
+var portedRE = regexp.MustCompile(`Ported from ([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`)
+
+// portedProjects are the projects named by a "Ported from" comment in the
+// agent's Go files (the systray copy is upstream code, not a port).
+func portedProjects(t *testing.T) map[string][]string {
+	t.Helper()
+	found := map[string][]string{}
+	err := filepath.WalkDir("../..", func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && filepath.ToSlash(p) == "../../third_party" {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || !strings.HasSuffix(p, ".go") {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		for _, m := range portedRE.FindAllStringSubmatch(string(b), -1) {
+			found[m[1]] = append(found[m[1]], p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return found
+}
+
+// Every "Ported from <owner>/<repo>" comment has a BorrowedCode entry whose
+// licence file is embedded, and every entry is cited by a comment.
+func TestEveryPortedFromCommentHasALicence(t *testing.T) {
+	found := portedProjects(t)
+	if len(found) == 0 {
+		t.Fatal("no Ported from comment found (the Claude parser has one)")
+	}
+	byProject := map[string]Borrowed{}
+	for _, b := range BorrowedCode {
+		byProject[b.Project] = b
+	}
+	for project, where := range found {
+		b, ok := byProject[project]
+		if !ok {
+			t.Fatalf("%v: Ported from %s, but BorrowedCode has no entry for it", where, project)
+		}
+		if _, err := files.ReadFile(b.File); err != nil {
+			t.Fatalf("%s: licence file %s not embedded", project, b.File)
+		}
+	}
+	for _, b := range BorrowedCode {
+		if len(found[b.Project]) == 0 {
+			t.Fatalf("BorrowedCode lists %s, but no source comment ports from it", b.Project)
+		}
+		if b.URL != "https://github.com/"+b.Project || len(b.Commit) < 7 || b.Licence == "" || len(b.What) == 0 {
+			t.Fatalf("incomplete entry %+v", b)
+		}
+		src, err := files.ReadFile(path.Join(path.Dir(b.File), "SOURCE"))
+		if err != nil {
+			t.Fatalf("%s: no SOURCE next to the licence", b.Project)
+		}
+		lines := strings.Split(strings.TrimSpace(string(src)), "\n")
+		if len(lines) != 3 || lines[0] != b.URL || lines[1] != b.Commit {
+			t.Fatalf("%s: SOURCE %q does not name %s @ %s (and a date)", b.Project, src, b.URL, b.Commit)
+		}
+	}
+}
+
+// The borrowed projects are all MIT licensed; their LICENSE files are
+// kept as they are.
+func TestBorrowedLicencesAreMIT(t *testing.T) {
+	for _, b := range BorrowedCode {
+		src, err := files.ReadFile(b.File)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first, _, _ := strings.Cut(string(src), "\n"); strings.TrimSpace(first) != "MIT License" || b.Licence != "MIT" {
+			t.Fatalf("%s: licence %q, file starts with %q", b.Project, b.Licence, first)
+		}
+	}
+}
+
+// ai-usage licenses names each borrowed project with its URL and commit,
+// and then prints its licence text.
+func TestTextNamesEveryBorrowedProject(t *testing.T) {
+	var b bytes.Buffer
+	Write(&b, nil, "go1.27.4")
+	s := b.String()
+	for _, bc := range BorrowedCode {
+		head := strings.Index(s, bc.Project+" @ "+bc.Commit)
+		url := strings.Index(s, bc.URL)
+		lic, _ := files.ReadFile(bc.File)
+		text := strings.Index(s, string(lic))
+		if head < 0 || url < 0 || text < 0 || !(head < text && url < text) {
+			t.Fatalf("%s: header %d, URL %d, licence text %d", bc.Project, head, url, text)
+		}
+		for _, w := range bc.What {
+			if !strings.Contains(strings.Join(strings.Fields(s), " "), w) {
+				t.Fatalf("%s: %q not listed", bc.Project, w)
+			}
+		}
+	}
+}
+
+// The README's Credits section has a bullet for every borrowed project:
+// its name, link and licence.
+func TestReadmeCreditsListEveryBorrowedProject(t *testing.T) {
+	b, err := os.ReadFile("../../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := strings.ReplaceAll(string(b), "\r\n", "\n")
+	i := strings.Index(s, "\n## Credits\n")
+	if i < 0 {
+		t.Fatal("README has no Credits section")
+	}
+	s = s[i+1:]
+	if j := strings.Index(s[3:], "\n## "); j >= 0 {
+		s = s[:j+3]
+	}
+	for _, bc := range BorrowedCode {
+		found := false
+		for _, line := range strings.Split(strings.Join(strings.Split(s, "\n  "), " "), "\n") {
+			if strings.HasPrefix(line, "- ") && strings.Contains(line, bc.Project) && strings.Contains(line, bc.URL) &&
+				strings.Contains(line, bc.Licence) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("no Credits bullet names %s with %s and its %s licence", bc.Project, bc.URL, bc.Licence)
 		}
 	}
 }

@@ -142,3 +142,101 @@ func TestFetchErrorText(t *testing.T) {
 	eq(t, FetchErrorText(200), "")
 	eq(t, NotSignedInText, "Not signed in: no Claude Code login found")
 }
+
+// Design D5 / B6 (ccstatusline's rules): the new shape names the 5-hour
+// window "session"; "five_hour" is taken as well.
+func TestSessionKindIsFiveHour(t *testing.T) {
+	for _, kind := range []string{"session", "five_hour"} {
+		p := `{"limits":[{"kind":"` + kind + `","percent":40,"resets_at":"2026-11-24T14:00:00Z"},
+		 {"kind":"weekly_all","percent":10,"resets_at":"2026-11-28T14:00:00Z"}]}`
+		l := ParseLimits(json.RawMessage(p), ScopedModel)
+		eq(t, *l.FiveHour.Percent, 40.0)
+		eq(t, l.FiveHour.ResetsAt.UTC(), time.Date(2026, 11, 24, 14, 0, 0, 0, time.UTC))
+		eq(t, l.FiveHour.Label, "5-hour")
+		eq(t, *l.Weekly.Percent, 10.0)
+		eq(t, l.Problem, "")
+	}
+}
+
+// A non-model entry at 0 % (or none) with no reset time is a placeholder,
+// not a window: the older field is used.
+func TestPlaceholderLimitIgnored(t *testing.T) {
+	p := `{"five_hour":{"utilization":12,"resets_at":"2026-11-24T14:00:00Z"},
+	 "limits":[{"kind":"session","percent":0,"resets_at":null},{"kind":"weekly_all","resets_at":null},
+	 {"kind":"weekly_all","percent":33,"resets_at":"2026-11-28T14:00:00Z"}]}`
+	l := ParseLimits(json.RawMessage(p), ScopedModel)
+	eq(t, *l.FiveHour.Percent, 12.0)
+	eq(t, l.FiveHour.ResetsAt != nil, true)
+	eq(t, *l.Weekly.Percent, 33.0) // the placeholder before it did not win
+	// a model's entry at 0 % with no reset is real (the model is not used yet)
+	m := ParseLimits(json.RawMessage(`{"limits":[{"kind":"weekly_scoped","percent":0,"resets_at":null,"scope":{"model":{"display_name":"Fable"}}}]}`), ScopedModel)
+	eq(t, *m.Scoped.Percent, 0.0)
+}
+
+// Model names may carry a family prefix: case-insensitive, part of the
+// name; the first match wins.
+func TestScopedSubstringMatch(t *testing.T) {
+	p := `{"limits":[{"kind":"weekly_scoped","percent":25,"scope":{"model":{"display_name":"Claude 3.5 Fable"}}},
+	 {"kind":"weekly_scoped","percent":99,"scope":{"model":{"display_name":"Fable"}}}]}`
+	l := ParseLimits(json.RawMessage(p), ScopedModel)
+	eq(t, *l.Scoped.Percent, 25.0)
+	eq(t, l.Scoped.Label, "Fable")
+}
+
+// Each field falls back to the older shape on its own.
+func TestFieldwiseFallback(t *testing.T) {
+	p := `{"five_hour":{"utilization":30,"resets_at":"2026-11-24T14:00:00Z"},
+	 "limits":[{"kind":"weekly_all","percent":20,"resets_at":"2026-11-28T14:00:00Z"}]}`
+	l := ParseLimits(json.RawMessage(p), ScopedModel)
+	eq(t, *l.FiveHour.Percent, 30.0)
+	eq(t, *l.Weekly.Percent, 20.0)
+	// an entry with a reset time but no percent lends its time to the older value
+	q := `{"seven_day":{"utilization":25},"limits":[{"kind":"weekly_all","resets_at":"2026-11-28T14:00:00Z"}]}`
+	w := ParseLimits(json.RawMessage(q), ScopedModel).Weekly
+	eq(t, *w.Percent, 25.0)
+	eq(t, w.ResetsAt.UTC(), time.Date(2026, 11, 28, 14, 0, 0, 0, time.UTC))
+	// an entry's missing reset time is taken from the older bucket only when
+	// both describe the same window (percentages within 1 point)
+	same := `{"seven_day":{"utilization":20.5,"resets_at":"2026-11-28T14:00:00Z"},"limits":[{"kind":"weekly_all","percent":20}]}`
+	eq(t, ParseLimits(json.RawMessage(same), ScopedModel).Weekly.ResetsAt != nil, true)
+	other := `{"seven_day":{"utilization":40,"resets_at":"2026-11-28T14:00:00Z"},"limits":[{"kind":"weekly_all","percent":20}]}`
+	ow := ParseLimits(json.RawMessage(other), ScopedModel).Weekly
+	eq(t, *ow.Percent, 20.0)
+	eq(t, ow.ResetsAt == nil, true)
+}
+
+// A null older bucket is "no value", not 0 (the menu hides absent rows);
+// so is an older 5-hour bucket at 0 % with no reset time.
+func TestNullOldBucketIsNoValue(t *testing.T) {
+	for _, p := range []string{`{"five_hour":null,"seven_day":{"utilization":5}}`, `{"five_hour":{"utilization":0,"resets_at":null},"seven_day":{"utilization":5}}`} {
+		l := ParseLimits(json.RawMessage(p), ScopedModel)
+		eq(t, l.FiveHour.Percent == nil, true)
+		eq(t, *l.Weekly.Percent, 5.0)
+	}
+}
+
+// A JSON object without any weekly value is a reply the agent could not
+// read: Problem "no_weekly". Anything that is not an object is no reply.
+func TestNoWeeklyProblem(t *testing.T) {
+	eq(t, ParseLimits(json.RawMessage(`{"limits":[]}`), ScopedModel).Problem, "no_weekly")
+	eq(t, ParseLimits(json.RawMessage(`{}`), ScopedModel).Problem, "no_weekly")
+	eq(t, ParseLimits(json.RawMessage(`{"five_hour":{"utilization":3}}`), ScopedModel).Problem, "no_weekly")
+	for _, p := range []string{`null`, ``, `[1,2]`, `not json`} {
+		eq(t, ParseLimits(json.RawMessage(p), ScopedModel).Problem, "")
+	}
+	eq(t, ParseLimits(json.RawMessage(sample), ScopedModel).Problem, "")
+}
+
+// The reply shape this host's account gives (stage 0, fake numbers): the
+// older five_hour is null, both shapes carry the weekly value.
+func TestThisHostShape(t *testing.T) {
+	p := `{"five_hour":null,"seven_day":{"utilization":30.0,"resets_at":"2026-11-28T16:00:00.000000+00:00"},
+	 "seven_day_opus":null,"extra_usage":{"is_enabled":false},
+	 "limits":[{"kind":"weekly_all","group":"weekly","percent":30,"severity":"normal","resets_at":"2026-11-28T16:00:00.000000+00:00","scope":null,"is_active":true},
+	 {"kind":"weekly_scoped","group":"weekly","percent":25,"severity":"normal","resets_at":"2026-11-28T16:00:00.000000+00:00","scope":{"model":{"id":null,"display_name":"Fable"},"surface":null},"is_active":false}]}`
+	l := ParseLimits(json.RawMessage(p), ScopedModel)
+	eq(t, *l.Weekly.Percent, 30.0)
+	eq(t, *l.Scoped.Percent, 25.0)
+	eq(t, l.FiveHour.Percent == nil, true)
+	eq(t, l.Problem, "")
+}
