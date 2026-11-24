@@ -177,6 +177,10 @@ type runOpts struct {
 	waitHost  func(context.Context) bool
 	watch     func(context.Context) bool
 	ui        *fakeUI
+	// removeStale and window: the Windows icons of helpers that ended
+	// without removing them, and this helper's icon window
+	removeStale func([]trayproto.StaleIcon)
+	window      func() uint64
 }
 
 func startRun(t *testing.T, ro runOpts) *run {
@@ -200,6 +204,8 @@ func startRun(t *testing.T, ro runOpts) *run {
 		goos: ro.goos, getenv: func(k string) string { return map[string]string{"XDG_CURRENT_DESKTOP": "ubuntu:GNOME"}[k] },
 		newUI: func(o Options) ui { r.opts <- o; return ro.ui }, available: ro.available, waitHost: ro.waitHost, watch: ro.watch,
 		notify:       func(title, text string) error { r.notices <- title + ": " + text; return nil },
+		removeStale:  ro.removeStale,
+		window:       ro.window,
 		tick:         20 * time.Millisecond,
 		readyTimeout: 2 * time.Second,
 		giveUp:       func() { r.gaveUp.Store(true); ro.ui.Quit() },
@@ -637,4 +643,55 @@ func TestHelperOnReadyReturnsWithoutAView(t *testing.T) {
 	}
 	r.send(view("42%", false))
 	eq(t, r.next().Type, trayproto.TypeReady)
+}
+
+// Icons left in the Windows notification area by helpers that crashed or
+// were killed come in the first line; the helper removes them before it
+// shows anything, a watcher too (review n-2: no ghost icon per try).
+func TestHelperRemovesStaleIconsFirst(t *testing.T) {
+	stale := []trayproto.StaleIcon{{Window: 4242, UID: 100}, {Window: 99, UID: 101}}
+	for _, standby := range []bool{false, true} {
+		got := make(chan []trayproto.StaleIcon, 1)
+		var r *run
+		r = startRun(t, runOpts{goos: "windows", watch: func(ctx context.Context) bool { <-ctx.Done(); return false },
+			removeStale: func(s []trayproto.StaleIcon) {
+				select {
+				case <-r.ui.ran:
+					t.Error("removed after the tray started")
+				default:
+				}
+				got <- s
+			}})
+		r.send(trayproto.Msg{Type: trayproto.TypeHello, Token: "tok-0123456789", Provider: "claude", UID: 100, Standby: standby, Stale: stale})
+		select {
+		case s := <-got:
+			eq(t, s, stale)
+		case <-time.After(5 * time.Second):
+			t.Fatal("not removed")
+		}
+		r.send(trayproto.Msg{Type: trayproto.TypeQuit})
+		eq(t, r.exitCode(), trayproto.ExitOK)
+	}
+	// none: nothing to remove
+	r := startRun(t, runOpts{goos: "windows", removeStale: func([]trayproto.StaleIcon) { t.Error("called without stale icons") }})
+	r.hello()
+	r.send(view("42%", false))
+	eq(t, r.next().Type, trayproto.TypeReady)
+}
+
+// A Windows helper's ready names the window of its icon, so the agent can
+// tell the next helper to remove it should this one end without doing so.
+func TestHelperReadyNamesItsWindow(t *testing.T) {
+	r := startRun(t, runOpts{goos: "windows", window: func() uint64 { return 777 }})
+	r.hello()
+	r.send(view("42%", false))
+	m := r.next()
+	eq(t, m.Type, trayproto.TypeReady)
+	eq(t, m.Window, uint64(777))
+	r = startRun(t, runOpts{goos: "linux", window: func() uint64 { return 777 }})
+	r.hello()
+	r.send(view("42%", false))
+	m = r.next()
+	eq(t, m.Type, trayproto.TypeReady)
+	eq(t, m.Window, uint64(0))
 }

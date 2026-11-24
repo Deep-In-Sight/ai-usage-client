@@ -63,7 +63,13 @@ type Msg struct {
 	IconDir  string `json:"icon_dir,omitempty"`
 	// hello: watch the desktop only, show nothing (the helper is stopped
 	// after repeated failures); end with ExitDesktopBack when it came back
-	Standby bool   `json:"standby,omitempty"`
+	Standby bool `json:"standby,omitempty"`
+	// hello: Windows icons that helpers which crashed or were killed left
+	// behind; the helper removes them before it shows anything
+	Stale []StaleIcon `json:"stale,omitempty"`
+	// ready (Windows): the window that owns the icon, so that a successor
+	// can remove the icon should this helper end without doing so
+	Window  uint64 `json:"window,omitempty"`
 	Icon    *Icon  `json:"icon,omitempty"`    // view: the tray icon
 	Title   string `json:"title,omitempty"`   // view: the text next to the icon (Linux label, macOS title)
 	Tooltip string `json:"tooltip,omitempty"` // view
@@ -71,6 +77,12 @@ type Msg struct {
 	Text    string `json:"text,omitempty"`    // notice
 	ID      string `json:"id,omitempty"`      // click: the item's id
 	Why     string `json:"why,omitempty"`     // waiting: "no StatusNotifierWatcher", "no taskbar", …
+}
+
+// StaleIcon names a Windows notification icon: its window and id.
+type StaleIcon struct {
+	Window uint64 `json:"window"`
+	UID    uint32 `json:"uid"`
 }
 
 // Icon is what the tray icon shows; the helper draws it (icon.TrayImage).

@@ -51,6 +51,8 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, token string) int {
 		available:    func(ctx context.Context) (bool, string) { return Available(ctx, os.Getenv) },
 		waitHost:     func(ctx context.Context) bool { return WaitForHost(ctx, 0) },
 		notify:       notify.Show,
+		removeStale:  removeStaleIcons,
+		window:       iconWindow,
 		tick:         2 * time.Second,
 		readyTimeout: 60 * time.Second,
 		giveUp:       func() { log.Print("the tray did not start within a minute; ending"); os.Exit(1) },
@@ -71,6 +73,11 @@ type deps struct {
 	available func(ctx context.Context) (bool, string)
 	waitHost  func(ctx context.Context) bool
 	notify    func(title, text string) error
+	// removeStale removes Windows notification icons that helpers which
+	// crashed or were killed left behind (nil: nothing to do on this OS);
+	// window is the window of this helper's icon (Windows; nil: none)
+	removeStale func([]trayproto.StaleIcon)
+	window      func() uint64
 	// tick: how often the icon's state is checked (Windows: still in the
 	// notification area, its size).
 	tick time.Duration
@@ -113,6 +120,11 @@ func runWith(ctx context.Context, in io.Reader, out io.Writer, token string, d d
 	if err != nil || first.Type != trayproto.TypeHello || first.V != trayproto.Version || token == "" || first.Token != token {
 		log.Print("tray-helper: this command is started by the agent itself")
 		return trayproto.ExitRefused
+	}
+	if len(first.Stale) > 0 && d.removeStale != nil {
+		// first: an icon of a crashed helper stays until the pointer
+		// passes over it (review n-2)
+		d.removeStale(first.Stale)
 	}
 	if first.Standby {
 		return standby(ctx, br, d)
@@ -354,7 +366,11 @@ func (h *helper) check() {
 	if h.d.ui.Shown() {
 		if !h.ready {
 			h.ready, h.waitingFor = true, ""
-			h.send(trayproto.Msg{Type: trayproto.TypeReady})
+			m := trayproto.Msg{Type: trayproto.TypeReady}
+			if h.d.goos == "windows" && h.d.window != nil {
+				m.Window = h.d.window() // so that the next helper can remove the icon should this one crash
+			}
+			h.send(m)
 		}
 		if h.notice != "" {
 			if err := h.d.notify(text.App, h.notice); err != nil && err != notify.ErrUnsupported {

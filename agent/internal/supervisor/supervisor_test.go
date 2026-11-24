@@ -334,9 +334,20 @@ func TestHelperRestartPolicy(t *testing.T) {
 	h.clk.Advance(time.Minute) // 5 minutes later it is tried again (stage-2 review m-3: was 30)
 	p = h.spawned()
 
-	// the count starts again: the next failure waits 1 s
+	// a try that fails stops it again at once (review n-2: no new series
+	// of five), until the next try 5 minutes later
 	p.exit(3)
-	h.event(isExit)
+	h.event(func(e Event) bool { return isExit(e) && e.RestartIn == stoppedFor })
+	h.clk.Advance(stoppedFor - time.Millisecond)
+	h.noSpawn()
+	h.clk.Advance(time.Millisecond)
+	p = h.spawned()
+
+	// a try that runs for 10 minutes ends the stop: the count starts
+	// again, the next failure waits 1 s
+	h.clk.Advance(healthyAfter)
+	p.exit(3)
+	h.event(func(e Event) bool { return isExit(e) && e.RestartIn == time.Second })
 	h.clk.Advance(time.Second)
 	p = h.spawned()
 
@@ -697,11 +708,14 @@ func TestStoppedHelperRetriesWhenTheViewChanges(t *testing.T) {
 	h.clk.Advance(time.Millisecond)
 	p := h.spawned()
 	h.noSpawn()
-	// it fails again: stopped again at once (the failures are still
-	// recent), and the next change a minute after this start
+	// it fails again: stopped again at once, and a change tries it again
+	// two minutes after this start (review n-2: each failed try doubles
+	// the gap)
 	p.exit(3)
 	h.event(func(e Event) bool { return isExit(e) && e.RestartIn == stoppedFor })
 	h.sup.Show(view("43%"))
+	h.noSpawn()
+	h.clk.Advance(time.Minute)
 	h.noSpawn()
 	h.clk.Advance(time.Minute)
 	_ = h.spawned()
@@ -776,10 +790,12 @@ func TestStopTimerEndsTheWatcher(t *testing.T) {
 		t.Fatalf("%+v", m)
 	}
 	p := h.spawned()
-	p.exit(3) // the failures were forgotten: 1 s
-	h.event(func(e Event) bool { return isExit(e) && e.RestartIn == time.Second })
-	h.clk.Advance(time.Second)
-	_ = h.spawned()
+	p.exit(3) // the try failed: stopped again, watched again (review n-2)
+	h.event(func(e Event) bool { return isExit(e) && e.RestartIn == stoppedFor })
+	w = <-h.spawns
+	if m := w.next(t); m.Type != trayproto.TypeHello || !m.Standby {
+		t.Fatalf("%+v", m)
+	}
 }
 
 // A watcher that ends on its own (not 77) is not started again: the

@@ -77,11 +77,12 @@ const (
 	failWindow    = 10 * time.Minute // failures counted over this long
 	failLimit     = 5                // this many in failWindow stop the helper …
 	stoppedFor    = 5 * time.Minute  // … for this long (or until Want changes, the view changes or the desktop came back)
-	probeGap      = time.Minute      // a stopped helper is tried at most this often besides its stop timer
+	probeGap      = time.Minute      // a stopped helper is tried at most this often besides its stop timer, doubled after each failed try (up to stoppedFor)
 	healthyAfter  = 10 * time.Minute // a helper that lived this long starts the backoff again
 	quickLoss     = 10 * time.Second // a session loss sooner than this after start counts as a failure
 	stopTimeout   = 3 * time.Second  // Stop waits this long for helpers to quit, then kills them
 	maxBackoffIdx = 6
+	maxStale      = 8 // icons left behind that the next helper removes
 )
 
 // backoff is the wait before the n-th failure restart in a row.
@@ -110,6 +111,9 @@ type Supervisor struct {
 	stop   bool
 	done   chan struct{} // closed by Stop: pending restarts end
 	queue  *eventQueue
+	// stale: Windows icons of helpers that ended without removing them
+	// (a crash, a kill); the next helper started removes them
+	stale []trayproto.StaleIcon
 }
 
 type slot struct {
@@ -132,6 +136,20 @@ type slot struct {
 	lastStart   time.Time   // the last start of an icon helper (or its attempt)
 	plan        int         // counts planned starts; a start voids older ones
 	probeAt     time.Time   // a retry of the stopped helper is planned then
+	trying      bool        // the process is a try of the stopped helper
+	tries       int         // tries of the stopped helper that failed (each doubles the gap to the next)
+	window      uint64      // Windows: the window of the process's icon (from its ready)
+}
+
+// tryGap is how long after its last start a stopped helper may be tried
+// again (review n-2): a minute, doubled after each failed try, at most
+// stoppedFor.
+func tryGap(tries int) time.Duration {
+	g := probeGap
+	for i := 0; i < tries && g < stoppedFor; i++ {
+		g *= 2
+	}
+	return min(g, stoppedFor)
 }
 
 // New makes a supervisor; it starts nothing until Want.
@@ -184,7 +202,7 @@ func (s *Supervisor) Want(ids []provider.ID) {
 			// once it has
 			sl.wanted = true
 		case sl.stopped:
-			sl.stopped, sl.failures, sl.consecutive = false, nil, 0
+			sl.stopped, sl.failures, sl.consecutive, sl.tries = false, nil, 0, 0
 			if sl.proc != nil {
 				s.quitOrKill(sl) // its watcher: the helper starts once it ended
 			} else {
@@ -281,6 +299,9 @@ func (s *Supervisor) start(sl *slot) {
 	}
 	now := s.o.Clock.Now()
 	sl.plan++ // pending retries are void
+	// a start while stopped is a try: if it fails, the helper is stopped
+	// again at once, with a longer gap before the next try
+	sl.trying = sl.stopped
 	sl.stopped, sl.probeAt, sl.lastStart = false, time.Time{}, now
 	p, token, ok := s.spawn(sl, false, now)
 	if !ok {
@@ -333,6 +354,10 @@ func (s *Supervisor) launch(sl *slot, p Proc, token string) {
 	if s.o.IconDir != nil {
 		hello.IconDir = s.o.IconDir(sl.id)
 	}
+	// icons left by helpers that crashed or were killed: this process
+	// removes them first (a Windows notification icon outlives its process
+	// until the pointer passes over it)
+	hello.Stale, s.stale = s.stale, nil
 	sl.out.send(hello)
 	exited := sl.exited
 	go s.read(sl.id, gen, p)
@@ -352,7 +377,14 @@ func (s *Supervisor) launch(sl *slot, p Proc, token string) {
 // ended handles the end of sl's process (s.mu held).
 func (s *Supervisor) ended(sl *slot, code int, now time.Time) {
 	lived := now.Sub(sl.started)
-	sl.proc, sl.ready = nil, false
+	if sl.window != 0 && !(code == trayproto.ExitOK && sl.quitSent) {
+		// it did not remove its icon itself
+		s.stale = append(s.stale, trayproto.StaleIcon{Window: sl.window, UID: UIDFor(sl.id)})
+		if n := len(s.stale); n > maxStale {
+			s.stale = s.stale[n-maxStale:]
+		}
+	}
+	sl.proc, sl.ready, sl.window = nil, false, 0
 	if sl.out != nil {
 		sl.out.close()
 		sl.out = nil
@@ -387,14 +419,15 @@ func (s *Supervisor) ended(sl *slot, code int, now time.Time) {
 }
 
 // probe tries a stopped helper again, now or, when its last start was less
-// than probeGap ago, then (s.mu held). It never starts more than one
-// helper a minute.
+// than tryGap ago, then (s.mu held). It never starts more than one helper
+// a minute, and after each failed try it waits twice as long, up to
+// stoppedFor (review n-2: the view changes every minute).
 func (s *Supervisor) probe(sl *slot, why string) {
 	if s.stop || !sl.wanted || !sl.stopped || sl.proc != nil && !sl.standby {
 		return
 	}
 	now := s.o.Clock.Now()
-	if at := sl.lastStart.Add(probeGap); now.Before(at) {
+	if at := sl.lastStart.Add(tryGap(sl.tries)); now.Before(at) {
 		if sl.probeAt.IsZero() {
 			sl.probeAt = at
 			timer := s.o.Clock.After(at.Sub(now))
@@ -431,15 +464,17 @@ func (s *Supervisor) retry(sl *slot, ev Event, code int, lived time.Duration, no
 		s.queue.put(ev)
 		return
 	}
+	trying := sl.trying
+	sl.trying = false
 	if lived >= healthyAfter {
-		sl.consecutive = 0
+		sl.consecutive, sl.tries, trying = 0, 0, false
 	}
 	var wait time.Duration
 	switch {
 	case code == trayproto.ExitSessionLost && lived >= quickLoss:
-		wait = lostDelay
+		wait, sl.tries = lostDelay, 0
 	case code == trayproto.ExitSessionEnded:
-		wait = endedDelay
+		wait, sl.tries = endedDelay, 0
 	default:
 		sl.consecutive++
 		kept := sl.failures[:0]
@@ -449,11 +484,20 @@ func (s *Supervisor) retry(sl *slot, ev Event, code int, lived time.Duration, no
 			}
 		}
 		sl.failures = append(kept, now)
-		if len(sl.failures) >= failLimit {
-			s.o.Log.Printf("tray helper %s stopped after repeated failures (exit %d); trying again in %s", name(sl.id), code, stoppedFor)
+		switch {
+		case trying:
+			// a try of the stopped helper failed: stopped again at once
+			sl.tries++
+			s.o.Log.Printf("tray helper %s failed again (exit %d); trying again in %s at the soonest, %s at the latest",
+				name(sl.id), code, tryGap(sl.tries), stoppedFor)
 			sl.stopped = true
 			wait = stoppedFor
-		} else {
+		case len(sl.failures) >= failLimit:
+			s.o.Log.Printf("tray helper %s stopped after repeated failures (exit %d); trying again in %s", name(sl.id), code, stoppedFor)
+			sl.stopped, sl.tries = true, 0
+			wait = stoppedFor
+		default:
+			sl.tries = 0
 			wait = backoff[min(sl.consecutive-1, maxBackoffIdx)]
 			s.o.Log.Printf("tray helper %s ended (exit %d); starting it again in %s", name(sl.id), code, wait)
 		}
@@ -518,6 +562,9 @@ func (s *Supervisor) read(id provider.ID, gen int, p Proc) {
 			switch m.Type {
 			case trayproto.TypeReady:
 				sl.ready = true
+				if m.Window != 0 {
+					sl.window = m.Window
+				}
 				s.queue.put(Event{Provider: id, Ready: true})
 				// a tray icon came up: the desktop may be back for a
 				// stopped helper too
