@@ -471,9 +471,6 @@ schema1_check
 # answers 403 for three fetch rounds, then 200 with both limit fields
 # null for three more: codex must never have run, and every Codex result
 # the server got must be the direct request's own answer.
-# What the release check changed on this runner, for release_cleanup
-# (also run by the exit trap, so an interrupted run undoes it too).
-REL_HOSTS_SAVED="" REL_CA="" REL_PORT_OLD="" REL_PATH_OLD="" REL_SWITCH="" REL_VPID=""
 release_codex_check() {
   local problems="" relbin="$RUNNER_TEMP/relbin" ca="$out/fakevendor-ca.pem" marker="$out/codex-ran.txt"
   local base2=http://127.0.0.1:18702 admin=http://127.0.0.1:18799 dev2="" h code got results v
@@ -533,33 +530,11 @@ release_codex_check() {
   "$exe" uninstall > "$out/uninstall-release.log" 2>&1 || problems="$problems uninstall_rc=$?"
   sleep 2
   [ "$(agent_count)" -eq 0 ] || problems="$problems processes_after_uninstall=$(agent_count)"
+  # nothing the check started may outlive the fake vendors (re-review R-3)
+  release_stop_agents || problems="$problems agents_left_unkillable"
   release_cleanup
   if [ -z "$problems" ]; then pass release.no_codex_cli "$v: Codex results $results, all direct; fakecodex (PATH, codex_path, switch) never run"
   else fail release.no_codex_cli "$problems"; fi
-}
-# release_cleanup undoes what the release check changed, each part once.
-release_cleanup() {
-  [ -n "$REL_VPID" ] && kill "$REL_VPID" 2>/dev/null
-  REL_VPID=""
-  pkill -f -- "-listen 127.0.0.1:18702" 2>/dev/null
-  if [ -n "$REL_SWITCH" ]; then
-    [ -n "$REL_PATH_OLD" ] && systemctl --user set-environment PATH="$REL_PATH_OLD"
-    systemctl --user unset-environment AI_USAGE_TEST_CODEX_FALLBACK 2>/dev/null
-    REL_SWITCH=""
-  fi
-  if [ -n "$REL_HOSTS_SAVED" ] && [ -f "$REL_HOSTS_SAVED" ]; then
-    sudo cp "$REL_HOSTS_SAVED" /etc/hosts && rm -f "$REL_HOSTS_SAVED"
-    REL_HOSTS_SAVED=""
-  fi
-  if [ -n "$REL_CA" ]; then
-    sudo rm -f "$REL_CA" && sudo update-ca-certificates --fresh > /dev/null 2>&1
-    REL_CA=""
-  fi
-  if [ -n "$REL_PORT_OLD" ]; then
-    sudo sysctl -q -w net.ipv4.ip_unprivileged_port_start="$REL_PORT_OLD"
-    REL_PORT_OLD=""
-  fi
-  true
 }
 release_codex_check
 

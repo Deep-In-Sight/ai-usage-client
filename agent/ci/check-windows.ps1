@@ -396,9 +396,20 @@ $script:hostsBefore = $null
 # a finally block, so an interrupted run undoes it too). The hosts file
 # gets its bytes back exactly.
 function ReleaseCleanup {
+    # first every agent and helper the check started ends; only then are
+    # the real host names given back (re-review R-3). One that cannot be
+    # ended keeps the names mapped to this runner, where nothing answers.
+    $agentsLeft = $false
+    if ($null -ne $script:hostsBefore) {
+        foreach ($p in AllProcs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+        if (-not (WaitFor 15 { (AllProcs).Count -eq 0 })) {
+            $agentsLeft = $true
+            Write-Output "::error title=release cleanup::an agent of the release check still runs: the vendor names stay mapped to this runner"
+        }
+    }
     if ($script:vendorProc) { Stop-Process -Id $script:vendorProc.Id -Force -ErrorAction SilentlyContinue; $script:vendorProc = $null }
     if ($script:server2) { Stop-Process -Id $script:server2.Id -Force -ErrorAction SilentlyContinue; $script:server2 = $null }
-    if ($null -ne $script:hostsBefore) {
+    if ($null -ne $script:hostsBefore -and -not $agentsLeft) {
         try { [IO.File]::WriteAllBytes($hostsFile, $script:hostsBefore); $script:hostsBefore = $null } catch { Write-Output "::error title=release cleanup::hosts file not restored: $($_.Exception.Message)" }
     }
     if ($script:caThumb) { Remove-Item -LiteralPath "Cert:\LocalMachine\Root\$($script:caThumb)" -ErrorAction SilentlyContinue; $script:caThumb = $null }
@@ -480,6 +491,7 @@ if ($Desktop) {
         $null = WaitFor 15 { (AllProcs).Count -eq 0 }
         if ((AllProcs).Count -ne 0) { $problems += "processes=$((AllProcs).Count)" }
         ReleaseCleanup
+        if ((AllProcs).Count -ne 0) { $problems += 'agents_left_unkillable' }
         if ($problems.Count -eq 0) { Pass 'release.no_codex_cli' "$($env:CI_REL_VERSION): Codex results $(ConvertTo-Json -Compress -InputObject $res), all direct; fakecodex (PATH, codex_path, switch) never run" }
         else { Fail 'release.no_codex_cli' ($problems -join ' ') }
     }

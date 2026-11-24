@@ -148,3 +148,55 @@ sync_ok() {
     [ "$(printf %s "$s" | jget - last_version)" = 0.0.0-ci ] &&
     [ "$(printf %s "$s" | jget - last_mode)" = "$2" ]
 }
+
+# The release check (check-linux.sh release_codex_check) records here what
+# it changed on the runner; release_cleanup undoes it, each part once, and
+# is also the exit trap, so an interrupted run undoes it too.
+REL_HOSTS_SAVED="" REL_CA="" REL_PORT_OLD="" REL_PATH_OLD="" REL_SWITCH="" REL_VPID="" REL_AGENTS_LEFT=""
+
+# release_stop_agents: no agent or tray helper of the installed executable
+# ($exe) is left running (re-review R-3): the service stopped, then
+# SIGTERM, then SIGKILL. False if one still runs.
+release_stop_agents() {
+  local left
+  agents_left() { pgrep -f "^$exe (run|tray-helper)" | wc -l | tr -d ' '; }
+  systemctl --user stop ai-usage.service > /dev/null 2>&1
+  pkill -f "^$exe (run|tray-helper)" 2>/dev/null
+  none_running() { [ "$(agents_left)" -eq 0 ]; }
+  wait_for 10 none_running || { pkill -KILL -f "^$exe (run|tray-helper)" 2>/dev/null; wait_for 5 none_running; }
+  left=$(agents_left)
+  [ "$left" -eq 0 ]
+}
+
+# release_cleanup: first every agent the check started is ended; only then
+# are the real host names given back (a release-style agent left running
+# would otherwise reach the real vendors with the fake sign-ins). If one
+# cannot be ended, the names stay mapped to this runner, where nothing
+# answers once the fake vendors are stopped.
+release_cleanup() {
+  if [ -n "$REL_HOSTS_SAVED" ] && ! release_stop_agents; then
+    REL_AGENTS_LEFT=1
+    echo "::error title=release cleanup::an agent of the release check still runs: the vendor names stay mapped to this runner"
+  fi
+  [ -n "$REL_VPID" ] && kill "$REL_VPID" 2>/dev/null
+  REL_VPID=""
+  pkill -f -- "-listen 127.0.0.1:18702" 2>/dev/null
+  if [ -n "$REL_SWITCH" ]; then
+    [ -n "$REL_PATH_OLD" ] && systemctl --user set-environment PATH="$REL_PATH_OLD"
+    systemctl --user unset-environment AI_USAGE_TEST_CODEX_FALLBACK 2>/dev/null
+    REL_SWITCH=""
+  fi
+  if [ -z "$REL_AGENTS_LEFT" ] && [ -n "$REL_HOSTS_SAVED" ] && [ -f "$REL_HOSTS_SAVED" ]; then
+    sudo cp "$REL_HOSTS_SAVED" /etc/hosts && rm -f "$REL_HOSTS_SAVED"
+    REL_HOSTS_SAVED=""
+  fi
+  if [ -n "$REL_CA" ]; then
+    sudo rm -f "$REL_CA" && sudo update-ca-certificates --fresh > /dev/null 2>&1
+    REL_CA=""
+  fi
+  if [ -n "$REL_PORT_OLD" ]; then
+    sudo sysctl -q -w net.ipv4.ip_unprivileged_port_start="$REL_PORT_OLD"
+    REL_PORT_OLD=""
+  fi
+  true
+}
