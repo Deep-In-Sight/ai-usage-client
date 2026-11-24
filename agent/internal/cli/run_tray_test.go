@@ -176,9 +176,9 @@ func TestRunTrayUnavailableFallsBackToHeadless(t *testing.T) {
 
 func TestRunShowsNoticeOnce(t *testing.T) {
 	for goos, want := range map[string]string{
-		"windows": "Claude Usage is running. Its icon is under the ^ arrow on the taskbar; drag it onto the taskbar to keep it in view.",
-		"linux":   "Claude Usage is running. Its icon is in the top bar.",
-		"darwin":  "Claude Usage is running",
+		"windows": "AI Usage is running. Its icon is under the ^ arrow on the taskbar; drag it onto the taskbar to keep it in view.",
+		"linux":   "AI Usage is running. Its icon is in the top bar.",
+		"darwin":  "AI Usage is running",
 	} {
 		fs := newFakeServer(t)
 		te := trayEnv(t, fs)
@@ -256,11 +256,11 @@ func TestControllerRefreshSendsWantFresh(t *testing.T) {
 }
 
 func TestControllerDashboardURL(t *testing.T) {
-	cfg := mustParse(t, `{"server_urls":["http://claude-usage.local","http://192.0.2.11"],"ingest_key":"k-0123456789"}`)
+	cfg := mustParse(t, `{"server_urls":["http://ai-usage.local","http://192.0.2.11"],"ingest_key":"k-0123456789"}`)
 	c := newController(cfg, status.Snapshot{ServerURL: "http://192.0.2.10:8700"}, nil, nil)
 	eq(t, c.DashboardURL(), "http://192.0.2.10:8700")
 	c = newController(cfg, status.Snapshot{}, nil, nil)
-	eq(t, c.DashboardURL(), "http://claude-usage.local")
+	eq(t, c.DashboardURL(), "http://ai-usage.local")
 	eq(t, c.Snapshot().Mode, "starting")
 	eq(t, c.HasToggle(), false)
 	if err := c.Remove(); err == nil {
@@ -294,7 +294,7 @@ func TestTrayErrorFallsBackToHeadless(t *testing.T) {
 func TestVersionOutputNamesTray(t *testing.T) {
 	te := newEnv(t)
 	eq(t, te.main("version"), 0)
-	re := regexp.MustCompile(`^claude-usage 0\.0\.0-dev [a-z0-9]+/[a-z0-9]+ (tray|no-tray)\n$`)
+	re := regexp.MustCompile(`^ai-usage 0\.0\.0-dev [a-z0-9]+/[a-z0-9]+ (tray|no-tray)\n$`)
 	if !re.MatchString(te.out.String()) {
 		t.Fatalf("%q", te.out.String())
 	}

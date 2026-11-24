@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Entry is the HKCU ...\Uninstall\ClaudeUsage key.
+// Entry is the HKCU ...\Uninstall\AIUsage key.
 type Entry struct {
 	DisplayName, DisplayVersion, Publisher, DisplayIcon, UninstallString, QuietUninstallString,
 	InstallLocation, InstallDate, URLInfoAbout string
@@ -20,7 +20,7 @@ type Entry struct {
 func EntryFor(exe, ver string, sizeBytes int64, now time.Time) Entry {
 	q := `"` + exe + `"`
 	return Entry{
-		DisplayName:          "Claude Usage",
+		DisplayName:          "AI Usage",
 		DisplayVersion:       ver,
 		Publisher:            "Deep-In-Sight",
 		DisplayIcon:          q + ",0",

@@ -11,7 +11,7 @@ import (
 )
 
 // Label is the LaunchAgent's label.
-const Label = "io.github.deep-in-sight.claude-usage"
+const Label = "io.github.deep-in-sight.ai-usage"
 
 // LaunchAgent starts the agent at login on macOS. It has no KeepAlive: like
 // the Run key and XDG autostart, a second "run" that finds the agent already

@@ -9,7 +9,7 @@ dir="$1"
 tag="$2"
 fail() { echo "publish-release: $*" >&2; exit 1; }
 printf '%s\n' "$tag" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' || fail "bad tag: $tag"
-names="claude-usage-linux-amd64 claude-usage-macos-universal claude-usage-windows-amd64.exe"
+names="ai-usage-linux-amd64 ai-usage-macos-universal ai-usage-windows-amd64.exe"
 for n in $names SHA256SUMS; do
   [ -f "$dir/$n" ] || fail "$dir/$n is missing"
 done
@@ -17,15 +17,15 @@ count=$(find "$dir" -mindepth 1 -maxdepth 1 | wc -l)
 [ "$count" -eq 4 ] || fail "$dir must hold exactly the four release files (it holds $count)"
 listed=$(awk '{ print $2 }' "$dir/SHA256SUMS" | sort | tr '\n' ' ')
 [ "$listed" = "$(printf '%s\n' $names | sort | tr '\n' ' ')" ] || fail "SHA256SUMS must name exactly the three files"
-grep -Evq '^[0-9a-f]{64}  claude-usage-[a-z0-9.-]+$' "$dir/SHA256SUMS" && fail "SHA256SUMS has a malformed line"
+grep -Evq '^[0-9a-f]{64}  ai-usage-[a-z0-9.-]+$' "$dir/SHA256SUMS" && fail "SHA256SUMS has a malformed line"
 (cd "$dir" && sha256sum --quiet --strict -c SHA256SUMS) || fail "a file does not match SHA256SUMS"
 
 notes=$(mktemp)
 trap 'rm -f "$notes"' EXIT
 {
-  echo "Claude Usage agent $tag."
+  echo "AI Usage agent $tag."
   echo
-  echo "Install it from your team's Claude Usage server, not from this page: the server's install command writes the settings the agent needs."
+  echo "Install it from your team's AI Usage server, not from this page: the server's install command writes the settings the agent needs."
   echo
   echo "SHA-256:"
   cat "$dir/SHA256SUMS"
@@ -35,9 +35,9 @@ trap 'rm -f "$notes"' EXIT
 
 pre=""
 case "$tag" in *-*) pre="--prerelease" ;; esac
-files="$dir/claude-usage-linux-amd64 $dir/claude-usage-windows-amd64.exe $dir/claude-usage-macos-universal $dir/SHA256SUMS"
+files="$dir/ai-usage-linux-amd64 $dir/ai-usage-windows-amd64.exe $dir/ai-usage-macos-universal $dir/SHA256SUMS"
 # A draft first: it is published only once all four files are attached.
-shown="gh release create $tag --verify-tag --draft --title \"Claude Usage $tag\" --notes-file $notes${pre:+ $pre} $files"
+shown="gh release create $tag --verify-tag --draft --title \"AI Usage $tag\" --notes-file $notes${pre:+ $pre} $files"
 shown2="gh release edit $tag --draft=false"
 
 if [ "${DRY_RUN:-}" = "1" ]; then
@@ -55,7 +55,7 @@ if gh release view "$tag" >/dev/null 2>&1; then
   fail "release $tag already exists (maybe a draft from a failed run); it is left as it is"
 fi
 # shellcheck disable=SC2086
-gh release create "$tag" --verify-tag --draft --title "Claude Usage $tag" --notes-file "$notes" $pre $files
+gh release create "$tag" --verify-tag --draft --title "AI Usage $tag" --notes-file "$notes" $pre $files
 want=$(for f in $files; do printf '%s %s\n' "$(basename "$f")" "$(wc -c < "$f" | tr -d ' ')"; done | sort)
 got=$(gh release view "$tag" --json assets --jq '.assets[] | "\(.name) \(.size)"' | sort)
 [ "$got" = "$want" ] || fail "the draft release $tag does not hold the four files as built; it stays a draft"

@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-var releaseNames = []string{"claude-usage-linux-amd64", "claude-usage-macos-universal", "claude-usage-windows-amd64.exe"}
+var releaseNames = []string{"ai-usage-linux-amd64", "ai-usage-macos-universal", "ai-usage-windows-amd64.exe"}
 
 // fakeDist writes the three release files (different contents) to a new
 // folder.
@@ -81,7 +81,7 @@ func TestSumsMatchesSha256sum(t *testing.T) {
 
 func TestSumsRequireAll(t *testing.T) {
 	dir := fakeDist(t)
-	if err := os.Remove(filepath.Join(dir, "claude-usage-macos-universal")); err != nil {
+	if err := os.Remove(filepath.Join(dir, "ai-usage-macos-universal")); err != nil {
 		t.Fatal(err)
 	}
 	if _, code := script(t, "sums.sh", nil, dir, "--require-all"); code == 0 {
@@ -111,9 +111,9 @@ func TestPublishDryRun(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("%d %s", code, out)
 	}
-	for _, want := range []string{"DRY RUN: gh release create v1.2.3 --verify-tag --draft", `--title "Claude Usage v1.2.3"`,
+	for _, want := range []string{"DRY RUN: gh release create v1.2.3 --verify-tag --draft", `--title "AI Usage v1.2.3"`,
 		"DRY RUN: gh release edit v1.2.3 --draft=false",
-		"Claude Usage agent v1.2.3.", "Install it from your team's Claude Usage server, not from this page"} {
+		"AI Usage agent v1.2.3.", "Install it from your team's AI Usage server, not from this page"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("%q not in\n%s", want, out)
 		}
@@ -161,19 +161,19 @@ func TestPublishRefuses(t *testing.T) {
 	check("extra file", dir, "v1.2.3")
 
 	dir = publishable(t)
-	if err := os.WriteFile(filepath.Join(dir, "claude-usage-linux-amd64"), []byte("changed"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ai-usage-linux-amd64"), []byte("changed"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	check("altered file", dir, "v1.2.3")
 
 	dir = publishable(t)
 	f, _ := os.OpenFile(filepath.Join(dir, "SHA256SUMS"), os.O_APPEND|os.O_WRONLY, 0o644)
-	f.WriteString(strings.Repeat("0", 64) + "  claude-usage-extra\n")
+	f.WriteString(strings.Repeat("0", 64) + "  ai-usage-extra\n")
 	f.Close()
 	check("fourth name", dir, "v1.2.3")
 
 	dir = publishable(t)
-	if err := os.Remove(filepath.Join(dir, "claude-usage-windows-amd64.exe")); err != nil {
+	if err := os.Remove(filepath.Join(dir, "ai-usage-windows-amd64.exe")); err != nil {
 		t.Fatal(err)
 	}
 	check("missing file", dir, "v1.2.3")

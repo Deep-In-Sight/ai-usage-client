@@ -46,7 +46,7 @@ func installCmd(env Env, args []string) int {
 func install(env Env, args []string) (int, string) {
 	goos := env.goos()
 	failWith := func(code int, msg string) (int, string) {
-		fmt.Fprintln(env.Stderr, "claude-usage install: "+msg)
+		fmt.Fprintln(env.Stderr, "ai-usage install: "+msg)
 		return code, firstLine(msg)
 	}
 	fail := func(msg string) (int, string) { return failWith(exitFailed, msg) }
@@ -147,7 +147,7 @@ func install(env Env, args []string) (int, string) {
 	}
 	for _, m := range append([]autostart.Method{method}, others...) {
 		if err := m.Stop(ctx); err != nil {
-			fmt.Fprintln(env.Stderr, "claude-usage install: stopping the old agent:", err)
+			fmt.Fprintln(env.Stderr, "ai-usage install: stopping the old agent:", err)
 		}
 	}
 	killed := 0
@@ -165,11 +165,11 @@ func install(env Env, args []string) (int, string) {
 			if err == nil {
 				return
 			}
-			fmt.Fprintln(env.Stderr, "claude-usage install: restarting the previous agent:", err)
+			fmt.Fprintln(env.Stderr, "ai-usage install: restarting the previous agent:", err)
 		}
 		if hadEntry || wasRunning || killed > 0 {
 			if err := env.StartDetached(env.Dirs.InstallExe, runArgs...); err != nil {
-				fmt.Fprintln(env.Stderr, "claude-usage install: starting the previous agent:", err)
+				fmt.Fprintln(env.Stderr, "ai-usage install: starting the previous agent:", err)
 			}
 		}
 	}
@@ -196,11 +196,11 @@ func install(env Env, args []string) (int, string) {
 			size = fi.Size()
 		}
 		if err := env.winApp().Register(winapp.EntryFor(env.Dirs.InstallExe, version.Version, size, env.Clock.Now())); err != nil {
-			fmt.Fprintln(env.Stderr, "claude-usage install: Installed apps entry:", err)
+			fmt.Fprintln(env.Stderr, "ai-usage install: Installed apps entry:", err)
 		}
 	}
 	if err := os.WriteFile(env.Dirs.File(paths.NotifyFile), []byte(version.Version), 0o600); err != nil {
-		fmt.Fprintln(env.Stderr, "claude-usage install: notice marker:", err)
+		fmt.Fprintln(env.Stderr, "ai-usage install: notice marker:", err)
 	}
 
 	// 7: autostart and start.
@@ -216,7 +216,7 @@ func install(env Env, args []string) (int, string) {
 			autostartLine = fmt.Sprintf("%s (%s)", method.Name(), method.State(ctx))
 		case errors.Is(err, autostart.ErrStartFailed):
 			// The entry is there for the next login; start the agent now.
-			fmt.Fprintln(env.Stderr, "claude-usage install:", err)
+			fmt.Fprintln(env.Stderr, "ai-usage install:", err)
 			if err := env.StartDetached(env.Dirs.InstallExe, runArgs...); err != nil {
 				return fail("starting the agent: " + err.Error())
 			}
@@ -238,7 +238,7 @@ func install(env Env, args []string) (int, string) {
 		}
 		for _, o := range others {
 			if err := o.Unregister(ctx); err != nil {
-				fmt.Fprintln(env.Stderr, "claude-usage install: removing", o.Name()+":", err)
+				fmt.Fprintln(env.Stderr, "ai-usage install: removing", o.Name()+":", err)
 			}
 		}
 	} else {

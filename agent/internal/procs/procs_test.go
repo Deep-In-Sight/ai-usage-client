@@ -14,7 +14,7 @@ import (
 
 // TestMain lets the test binary act as a long-running helper process.
 func TestMain(m *testing.M) {
-	if os.Getenv("CLAUDE_USAGE_HELPER") == "sleep" {
+	if os.Getenv("AI_USAGE_HELPER") == "sleep" {
 		time.Sleep(60 * time.Second)
 		os.Exit(0)
 	}
@@ -53,7 +53,7 @@ func TestFindByExeFindsChild(t *testing.T) {
 	copyFile(t, self, cp)
 
 	cmd := exec.Command(cp)
-	cmd.Env = append(os.Environ(), "CLAUDE_USAGE_HELPER=sleep")
+	cmd.Env = append(os.Environ(), "AI_USAGE_HELPER=sleep")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

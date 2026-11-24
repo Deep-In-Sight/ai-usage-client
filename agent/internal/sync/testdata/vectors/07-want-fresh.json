@@ -4,8 +4,8 @@
   "ingest_key": "test-ingest-key-0123456789",
   "server": {
     "server_urls": [
-      "http://claude-usage.local",
-      "http://claude-usage.local:8700",
+      "http://ai-usage.local",
+      "http://ai-usage.local:8700",
       "http://192.0.2.10:8700"
     ],
     "client_latest_version": null

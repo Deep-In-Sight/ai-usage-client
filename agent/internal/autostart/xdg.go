@@ -21,7 +21,7 @@ type XDGAutostart struct {
 func (x *XDGAutostart) Name() string { return "xdg-autostart" }
 
 func (x *XDGAutostart) path() string {
-	return filepath.Join(x.Home, ".config", "autostart", "claude-usage.desktop")
+	return filepath.Join(x.Home, ".config", "autostart", "ai-usage.desktop")
 }
 
 // execQuote quotes a path for a desktop entry's Exec key.
@@ -59,7 +59,7 @@ func execQuote(p string) string {
 func DesktopText(exe string) string {
 	return `[Desktop Entry]
 Type=Application
-Name=Claude Usage
+Name=AI Usage
 Comment=Shows Claude plan usage and reports it to your team's server
 Exec=` + execQuote(exe) + ` run
 Terminal=false

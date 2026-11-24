@@ -6,10 +6,10 @@ package discover
 import "github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
 
 // Name is the mDNS name the server announces.
-const Name = "claude-usage.local"
+const Name = "ai-usage.local"
 
 // MDNSURLs are the server's addresses by name (port 80 and 8700).
-var MDNSURLs = []string{"http://claude-usage.local", "http://claude-usage.local:8700"}
+var MDNSURLs = []string{"http://ai-usage.local", "http://ai-usage.local:8700"}
 
 // Candidates lists server URLs to try: the last good one, the mDNS names,
 // the ones the server announced, then the ones from the installer. Entries

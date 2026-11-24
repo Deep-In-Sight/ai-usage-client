@@ -23,7 +23,7 @@ func probeDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, ".claude-usage-probe-*")
+	f, err := os.CreateTemp(dir, ".ai-usage-probe-*")
 	if err != nil {
 		return err
 	}

@@ -43,7 +43,7 @@ jobs:
       - name: keychain integration
         if: runner.os == 'macOS' && hashFiles('agent/internal/creds/keychain_darwin_test.go') != ''
         env:
-          CLAUDE_USAGE_KEYCHAIN_TEST: "1"
+          AI_USAGE_KEYCHAIN_TEST: "1"
         run: go test -count=1 -run TestKeychainIntegration -v ./internal/creds/
 
   # The release build on every push: the same files a tag would publish,

@@ -19,7 +19,7 @@ func TestKillChecksTheImageAgain(t *testing.T) {
 	cp := filepath.Join(t.TempDir(), "helper-copy.exe")
 	copyFile(t, self, cp)
 	cmd := exec.Command(cp)
-	cmd.Env = append(os.Environ(), "CLAUDE_USAGE_HELPER=sleep")
+	cmd.Env = append(os.Environ(), "AI_USAGE_HELPER=sleep")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

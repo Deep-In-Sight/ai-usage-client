@@ -13,8 +13,8 @@ GO=$(go_cmd)
 # tools/go.sh sees only the repository: give it a path relative to agent/.
 case "$GO" in tools/go.sh) rel=$(cd "$(dirname "$f")" && pwd)/$(basename "$f"); rel=${rel#"$here"/}; cd "$here"; f=$rel ;; esac
 info=$($GO version -m "$f") || fail "not a Go executable"
-printf '%s\n' "$info" | grep -Eq '^[[:space:]]+path[[:space:]]+github\.com/Deep-In-Sight/ai-usage-client/agent/cmd/claude-usage$' ||
-  fail "not built from agent/cmd/claude-usage"
+printf '%s\n' "$info" | grep -Eq '^[[:space:]]+path[[:space:]]+github\.com/Deep-In-Sight/ai-usage-client/agent/cmd/ai-usage$' ||
+  fail "not built from agent/cmd/ai-usage"
 printf '%s\n' "$info" | grep -Eq '^[[:space:]]+build[[:space:]]+-trimpath=true$' || fail "not built with -trimpath"
 if printf '%s\n' "$info" | grep -E '^[[:space:]]+build[[:space:]]+-ldflags=' | grep -Eq '(^|[[:space:]"=])-[sw]([[:space:]"]|$)'; then
   fail "symbols stripped (-s or -w)"

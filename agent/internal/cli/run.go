@@ -44,18 +44,18 @@ func runCmd(env Env, args []string) int {
 	headlessFlag := false
 	for _, a := range args {
 		if a != "--headless" {
-			fmt.Fprintf(env.Stderr, "claude-usage run: unknown argument %q\n", a)
+			fmt.Fprintf(env.Stderr, "ai-usage run: unknown argument %q\n", a)
 			return 2
 		}
 		headlessFlag = true
 	}
 	unlock, err := procs.Lock(env.Dirs.File(paths.LockFile))
 	if errors.Is(err, procs.ErrLocked) {
-		fmt.Fprintln(env.Stderr, "claude-usage: already running")
+		fmt.Fprintln(env.Stderr, "ai-usage: already running")
 		return 1
 	}
 	if err != nil {
-		fmt.Fprintln(env.Stderr, "claude-usage: lock:", err)
+		fmt.Fprintln(env.Stderr, "ai-usage: lock:", err)
 		return 1
 	}
 	var release func() // unlock and close the log, once
@@ -65,7 +65,7 @@ func runCmd(env Env, args []string) int {
 
 	cfg, err := config.Load(env.Dirs.File(paths.ConfigFile))
 	if err != nil {
-		fmt.Fprintln(env.Stderr, "claude-usage:", err)
+		fmt.Fprintln(env.Stderr, "ai-usage:", err)
 		return 1
 	}
 	logOut, closeLog := logOutput(env)
@@ -82,12 +82,12 @@ func runCmd(env Env, args []string) int {
 	}
 	deviceID, err := config.DeviceID(env.Dirs.File(paths.DeviceIDFile))
 	if err != nil {
-		fmt.Fprintln(env.Stderr, "claude-usage: device id:", err)
+		fmt.Fprintln(env.Stderr, "ai-usage: device id:", err)
 		return 1
 	}
 	bl, err := backlog.Open(env.Dirs.File(paths.BacklogFile))
 	if err != nil {
-		fmt.Fprintln(env.Stderr, "claude-usage: backlog:", err)
+		fmt.Fprintln(env.Stderr, "ai-usage: backlog:", err)
 		return 1
 	}
 
@@ -155,7 +155,7 @@ func runCmd(env Env, args []string) int {
 
 	ctx, stop := signal.NotifyContext(env.ctx(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	logger.Printf("claude-usage %s started (pid %d, device %s, data %s, %s)", version.Version, os.Getpid(), deviceID, env.Dirs.Data, clientMode)
+	logger.Printf("ai-usage %s started (pid %d, device %s, data %s, %s)", version.Version, os.Getpid(), deviceID, env.Dirs.Data, clientMode)
 
 	// 3: the engine runs first, whatever happens with the tray.
 	engCtx, cancelEngine := context.WithCancel(ctx)
@@ -167,7 +167,7 @@ func runCmd(env Env, args []string) int {
 	finish := func() int {
 		cancelEngine()
 		<-engineDone
-		logger.Print("claude-usage stopped")
+		logger.Print("ai-usage stopped")
 		return 0
 	}
 	// The tray's Remove: this process stops its engine and lets go of
@@ -178,7 +178,7 @@ func runCmd(env Env, args []string) int {
 		r.unlock = release
 		err := r.run(removalSteps(env.goos(), true))
 		if err != nil {
-			fmt.Fprintln(env.Stderr, "claude-usage: remove:", err)
+			fmt.Fprintln(env.Stderr, "ai-usage: remove:", err)
 		}
 		return err
 	}

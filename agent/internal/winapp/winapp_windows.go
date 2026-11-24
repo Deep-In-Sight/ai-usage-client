@@ -10,7 +10,7 @@ import (
 )
 
 // KeyPath is the "Installed apps" entry under HKEY_CURRENT_USER.
-const KeyPath = `Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeUsage`
+const KeyPath = `Software\Microsoft\Windows\CurrentVersion\Uninstall\AIUsage`
 
 // Register writes the entry.
 func Register(e Entry) error { return registerAt(KeyPath, e) }

@@ -4,7 +4,7 @@ package text
 
 // Tray menu, title and tooltip.
 const (
-	App           = "Claude Usage"
+	App           = "AI Usage"
 	SignInNeeded  = "Claude Code sign-in needed"
 	AllModels     = "All models"
 	Connecting    = "Connecting to the server…"
@@ -21,8 +21,8 @@ const (
 	Refresh       = "Refresh now"
 	Refreshing    = "Refreshing…"
 	Autostart     = "Start at login"
-	Remove        = "Remove Claude Usage"
-	RemoveArmed   = "Click again to remove Claude Usage"
+	Remove        = "Remove AI Usage"
+	RemoveArmed   = "Click again to remove AI Usage"
 	Quit          = "Quit"
 	StaleMark     = " ⚠"
 	Sep           = "  ·  "
@@ -31,10 +31,10 @@ const (
 // Notices shown once after an install or upgrade (Linux and Windows as an
 // OS notification, macOS as the menu bar title for a while).
 const (
-	NoticeWindows = "Claude Usage is running. Its icon is under the ^ arrow on the taskbar; drag it onto the taskbar to keep it in view."
-	NoticeLinux   = "Claude Usage is running. Its icon is in the top bar."
-	NoticeDarwin  = "Claude Usage is running"
-	RemoveFailed  = "Claude Usage could not be removed completely: "
+	NoticeWindows = "AI Usage is running. Its icon is under the ^ arrow on the taskbar; drag it onto the taskbar to keep it in view."
+	NoticeLinux   = "AI Usage is running. Its icon is in the top bar."
+	NoticeDarwin  = "AI Usage is running"
+	RemoveFailed  = "AI Usage could not be removed completely: "
 )
 
 // Notice is the once-only notice for goos.
@@ -50,20 +50,20 @@ func Notice(goos string) string {
 
 // install and uninstall.
 const (
-	InstalledWindows    = "The Claude Usage icon is under the ^ arrow on the taskbar. Drag it onto the taskbar to keep it in view."
-	InstalledDarwin     = "Look for the Claude Usage ring in the menu bar."
-	InstalledLinux      = "Look for the Claude Usage ring in the top bar."
+	InstalledWindows    = "The AI Usage icon is under the ^ arrow on the taskbar. Drag it onto the taskbar to keep it in view."
+	InstalledDarwin     = "Look for the AI Usage ring in the menu bar."
+	InstalledLinux      = "Look for the AI Usage ring in the top bar."
 	GnomeExtensionNote  = "Note: the Claude Usage GNOME extension is also installed and makes its own requests. Turn it off with: gnome-extensions disable claude-usage@localhost"
 	NotLasting          = "autostart could not be registered; the agent runs until you log out or restart"
-	AutostartFailed     = "Start at login could not be set up (%v). Claude Usage is running now, but it will not start by itself after you log out or restart."
+	AutostartFailed     = "Start at login could not be set up (%v). AI Usage is running now, but it will not start by itself after you log out or restart."
 	LingerOff           = "linger is not enabled: the agent runs only while %s is logged in. To keep it running, ask an administrator to run: loginctl enable-linger %s"
 	SignInFound         = "found"
-	AutostartStaysOff   = "Start at login stays off, as set in the Claude Usage menu."
+	AutostartStaysOff   = "Start at login stays off, as set in the AI Usage menu."
 	KeptClaudeDir       = "(kept from the previous install; set CLAUDE_CONFIG_DIR to change it)"
 	SignInNotFound      = "not found yet (the agent starts collecting once you sign in)"
-	AlertInstalled      = "Claude Usage is installed and running.\n\nIts icon is under the ^ arrow on the taskbar."
-	AlertInstallFailed  = "Claude Usage could not be installed:\n"
-	AlertRemoved        = "Claude Usage has been removed."
+	AlertInstalled      = "AI Usage is installed and running.\n\nIts icon is under the ^ arrow on the taskbar."
+	AlertInstallFailed  = "AI Usage could not be installed:\n"
+	AlertRemoved        = "AI Usage has been removed."
 	CannotRemoveRunning = "Could not remove %s while it is running; delete it after this window closes. It stays listed in Installed apps until then."
 	Removed             = "removed"
 )

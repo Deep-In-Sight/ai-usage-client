@@ -8,10 +8,10 @@
     "#1": {
       "0409": {
         "identity": {
-          "name": "DeepInSight.ClaudeUsage",
+          "name": "DeepInSight.AIUsage",
           "version": "@FILE_VERSION@"
         },
-        "description": "Claude Usage agent",
+        "description": "AI Usage agent",
         "minimum-os": "win10",
         "execution-level": "as invoker",
         "ui-access": false,
@@ -39,12 +39,12 @@
         "info": {
           "0409": {
             "CompanyName": "Deep-In-Sight",
-            "FileDescription": "Claude Usage agent",
+            "FileDescription": "AI Usage agent",
             "FileVersion": "@FILE_VERSION@",
-            "InternalName": "claude-usage",
+            "InternalName": "ai-usage",
             "LegalCopyright": "Copyright (c) Deep-In-Sight",
-            "OriginalFilename": "claude-usage.exe",
-            "ProductName": "Claude Usage",
+            "OriginalFilename": "ai-usage.exe",
+            "ProductName": "AI Usage",
             "ProductVersion": "@PRODUCT_VERSION@",
             "Comments": "Reports Claude plan usage to your team's server. Source: https://github.com/Deep-In-Sight/ai-usage-client"
           }

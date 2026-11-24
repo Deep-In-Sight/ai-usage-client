@@ -1,4 +1,4 @@
-// fakeserver is a stand-in for the team's Claude Usage server in CI: it
+// fakeserver is a stand-in for the team's AI Usage server in CI: it
 // takes syncs, always answers "standby" (so the agent never asks Anthropic),
 // serves the release files and the CI install scripts, and counts what it
 // saw. /stats shows counts and fake values only, never a key or a token.

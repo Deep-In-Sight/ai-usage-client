@@ -127,7 +127,7 @@ func DefaultEnv() Env {
 	}
 	dirs, derr := paths.Current()
 	if derr != nil {
-		fmt.Fprintln(os.Stderr, "claude-usage:", derr)
+		fmt.Fprintln(os.Stderr, "ai-usage:", derr)
 	}
 	opts := func(headless bool) autostart.Options {
 		return autostartOptions(dirs, headless, autostart.ExecRunner, procs.StartDetached)
@@ -154,7 +154,7 @@ func DefaultEnv() Env {
 	}
 }
 
-const usageText = `usage: claude-usage <command>
+const usageText = `usage: ai-usage <command>
 
   install [--config <config.json>] [--headless]   install for this OS user and start
   uninstall                                       stop and remove everything
@@ -166,7 +166,7 @@ const usageText = `usage: claude-usage <command>
 // Main runs one command and returns the exit code.
 func Main(env Env) int {
 	if env.Dirs.Data == "" {
-		fmt.Fprintln(env.Stderr, "claude-usage: no data folder for this user")
+		fmt.Fprintln(env.Stderr, "ai-usage: no data folder for this user")
 		return 1
 	}
 	if len(env.Args) == 0 {
@@ -187,13 +187,13 @@ func Main(env Env) int {
 		if tray.Compiled {
 			word = "tray"
 		}
-		fmt.Fprintf(env.Stdout, "claude-usage %s %s/%s %s\n", version.Version, runtime.GOOS, runtime.GOARCH, word)
+		fmt.Fprintf(env.Stdout, "ai-usage %s %s/%s %s\n", version.Version, runtime.GOOS, runtime.GOARCH, word)
 		return 0
 	case "help", "-h", "--help":
 		fmt.Fprint(env.Stdout, usageText)
 		return 0
 	}
-	fmt.Fprintf(env.Stderr, "claude-usage: unknown command %q\n%s", cmd, usageText)
+	fmt.Fprintf(env.Stderr, "ai-usage: unknown command %q\n%s", cmd, usageText)
 	return 2
 }
 

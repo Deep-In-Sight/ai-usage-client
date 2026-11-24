@@ -9,9 +9,9 @@ import (
 )
 
 func TestEntryRoundTrip(t *testing.T) {
-	key := fmt.Sprintf(`Software\ClaudeUsageTest-%d`, os.Getpid())
+	key := fmt.Sprintf(`Software\AIUsageTest-%d`, os.Getpid())
 	t.Cleanup(func() { _ = registry.DeleteKey(registry.CURRENT_USER, key) })
-	e := EntryFor(`C:\Users\a b\AppData\Local\Programs\ClaudeUsage\claude-usage.exe`, "1.2.3", 12_000_000, day)
+	e := EntryFor(`C:\Users\a b\AppData\Local\Programs\AIUsage\ai-usage.exe`, "1.2.3", 12_000_000, day)
 	if err := registerAt(key, e); err != nil {
 		t.Fatal(err)
 	}

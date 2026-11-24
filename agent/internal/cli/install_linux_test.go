@@ -16,7 +16,7 @@ import (
 )
 
 func (te *testEnv) unitPath() string {
-	return filepath.Join(te.home, ".config", "systemd", "user", "claude-usage.service")
+	return filepath.Join(te.home, ".config", "systemd", "user", "ai-usage.service")
 }
 
 // systemdOK answers like a working systemd user manager, with linger as given.
@@ -62,7 +62,7 @@ func TestInstallFresh(t *testing.T) {
 	contains(t, out, "Claude Code sign-in: not found yet (the agent starts collecting once you sign in)")
 	contains(t, read(t, te.unitPath()), `ExecStart="`+te.Dirs.InstallExe+`" run --headless`)
 	if !slices.ContainsFunc(te.runner.calls, func(c []string) bool {
-		return slices.Equal(c, []string{"systemctl", "--user", "enable", "--now", "claude-usage.service"})
+		return slices.Equal(c, []string{"systemctl", "--user", "enable", "--now", "ai-usage.service"})
 	}) {
 		t.Fatalf("calls %v", te.runner.calls)
 	}
@@ -172,7 +172,7 @@ func TestInstallTwiceKeepsDeviceID(t *testing.T) {
 	eq(t, id2, id)
 	contains(t, read(t, te.Dirs.File(paths.BacklogFile)), "acc-1")
 	if !slices.ContainsFunc(te.runner.calls, func(c []string) bool {
-		return slices.Equal(c, []string{"systemctl", "--user", "restart", "claude-usage.service"})
+		return slices.Equal(c, []string{"systemctl", "--user", "restart", "ai-usage.service"})
 	}) {
 		t.Fatalf("no restart: %v", te.runner.calls)
 	}
@@ -182,7 +182,7 @@ func TestInstallWithoutClaudeConfigDirEnvDropsKey(t *testing.T) {
 	te := newEnv(t)
 	te.runner.reply = systemdOK("yes", nil)
 	abs := filepath.Join(t.TempDir(), "claude")
-	cfg := `{"server_urls":["http://claude-usage.local"],"ingest_key":"k","claude_config_dir":"` + abs + `"}`
+	cfg := `{"server_urls":["http://ai-usage.local"],"ingest_key":"k","claude_config_dir":"` + abs + `"}`
 	eq(t, te.main("install", "--config", writeCfg(t, cfg), "--headless"), 0)
 	c, err := config.Load(te.Dirs.File(paths.ConfigFile))
 	must(t, err)
@@ -241,7 +241,7 @@ func TestUninstallRemovesEverything(t *testing.T) {
 	saw := func(want ...string) bool {
 		return slices.ContainsFunc(te.runner.calls, func(c []string) bool { return slices.Equal(c, want) })
 	}
-	if !saw("systemctl", "--user", "stop", "claude-usage.service") || !saw("systemctl", "--user", "disable", "--now", "claude-usage.service") {
+	if !saw("systemctl", "--user", "stop", "ai-usage.service") || !saw("systemctl", "--user", "disable", "--now", "ai-usage.service") {
 		t.Fatalf("calls %v", te.runner.calls)
 	}
 	for _, c := range te.runner.calls {
@@ -309,10 +309,10 @@ func TestInstallFailureAfterStopRestartsOldAgent(t *testing.T) {
 	eq(t, te.main("install", "--config", writeCfg(t, validConfig), "--headless"), 1)
 	stopped, restarted := -1, -1
 	for i, c := range te.runner.calls {
-		if slices.Equal(c, []string{"systemctl", "--user", "stop", "claude-usage.service"}) {
+		if slices.Equal(c, []string{"systemctl", "--user", "stop", "ai-usage.service"}) {
 			stopped = i
 		}
-		if slices.Equal(c, []string{"systemctl", "--user", "restart", "claude-usage.service"}) {
+		if slices.Equal(c, []string{"systemctl", "--user", "restart", "ai-usage.service"}) {
 			restarted = i
 		}
 	}

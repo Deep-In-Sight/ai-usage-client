@@ -22,7 +22,7 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/winapp"
 )
 
-const validConfig = `{"server_urls":["http://claude-usage.local","http://192.0.2.10:8700"],"ingest_key":"test-ingest-key-0123456789"}`
+const validConfig = `{"server_urls":["http://ai-usage.local","http://192.0.2.10:8700"],"ingest_key":"test-ingest-key-0123456789"}`
 
 func eq[T any](t *testing.T, got, want T) {
 	t.Helper()
@@ -81,7 +81,7 @@ func newEnv(t *testing.T) *testEnv {
 	must(t, err)
 	te := &testEnv{home: home, out: &bytes.Buffer{}, err: &bytes.Buffer{}, runner: &runner{}, vars: vars}
 	exeDir := t.TempDir()
-	exe := filepath.Join(exeDir, "claude-usage-download")
+	exe := filepath.Join(exeDir, "ai-usage-download")
 	must(t, os.WriteFile(exe, []byte("BIN"), 0o755))
 	te.Env = Env{
 		Getenv: getenv, Stdout: te.out, Stderr: te.err, Exe: exe, Dirs: dirs, Run: te.runner.run,
@@ -113,7 +113,7 @@ func TestVersion(t *testing.T) {
 	if tray.Compiled {
 		word = "tray"
 	}
-	eq(t, te.out.String(), "claude-usage 0.0.0-dev "+runtime.GOOS+"/"+runtime.GOARCH+" "+word+"\n")
+	eq(t, te.out.String(), "ai-usage 0.0.0-dev "+runtime.GOOS+"/"+runtime.GOARCH+" "+word+"\n")
 }
 
 func TestUnknownCommandAndNoArgsUsage(t *testing.T) {
@@ -169,7 +169,7 @@ func TestStatusJSON(t *testing.T) {
 	te := newEnv(t)
 	eq(t, te.main("status"), 1) // no status file yet
 	pct := 5.0
-	snap := status.Snapshot{Version: "0.0.0-dev", PID: 1, Mode: "coordinated", Role: "poller", ServerURL: "http://claude-usage.local",
+	snap := status.Snapshot{Version: "0.0.0-dev", PID: 1, Mode: "coordinated", Role: "poller", ServerURL: "http://ai-usage.local",
 		LastSyncAt: time.Date(2026, 1, 5, 8, 59, 0, 0, time.UTC), LastSyncOK: true, AuthState: "ok",
 		TokenExpiresAt: time.Date(2026, 1, 5, 17, 0, 0, 0, time.UTC), WeeklyPercent: &pct,
 		WeeklyResetsAt: time.Date(2026, 1, 9, 6, 0, 0, 0, time.UTC), LatestFetchedAt: time.Date(2026, 1, 5, 8, 58, 0, 0, time.UTC)}
@@ -191,8 +191,8 @@ func TestStatusJSON(t *testing.T) {
 	te.out.Reset()
 	eq(t, te.main("status"), 0)
 	out := te.out.String()
-	contains(t, out, "Claude Usage agent 0.0.0-dev")
-	contains(t, out, "Mode:       coordinated, poller, server http://claude-usage.local")
+	contains(t, out, "AI Usage agent 0.0.0-dev")
+	contains(t, out, "Mode:       coordinated, poller, server http://ai-usage.local")
 	contains(t, out, "Weekly:     5%  Resets ")
 	contains(t, out, "Backlog:    0")
 }

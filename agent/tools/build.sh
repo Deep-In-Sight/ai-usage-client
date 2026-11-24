@@ -16,15 +16,15 @@ ld="-X github.com/Deep-In-Sight/ai-usage-client/agent/internal/version.Version=$
 mkdir -p dist
 
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $GO build -trimpath -ldflags "$ld" \
-  -o dist/claude-usage-linux-amd64 ./cmd/claude-usage
+  -o dist/ai-usage-linux-amd64 ./cmd/ai-usage
 
 # Windows: version information, manifest and icon as a .syso next to main.
-trap 'rm -f cmd/claude-usage/rsrc_windows_amd64.syso winres/.build.json' EXIT
+trap 'rm -f cmd/ai-usage/rsrc_windows_amd64.syso winres/.build.json' EXIT
 sed -e "s/@FILE_VERSION@/$filever/g" -e "s/@PRODUCT_VERSION@/$ver/g" winres/winres.json.in > winres/.build.json
-$GO tool go-winres make --in winres/.build.json --out cmd/claude-usage/rsrc --arch amd64
+$GO tool go-winres make --in winres/.build.json --out cmd/ai-usage/rsrc --arch amd64
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $GO build -trimpath -ldflags "-H=windowsgui $ld" \
-  -o dist/claude-usage-windows-amd64.exe ./cmd/claude-usage
+  -o dist/ai-usage-windows-amd64.exe ./cmd/ai-usage
 
-tools/check-binary.sh dist/claude-usage-linux-amd64
-tools/check-binary.sh dist/claude-usage-windows-amd64.exe
+tools/check-binary.sh dist/ai-usage-linux-amd64
+tools/check-binary.sh dist/ai-usage-windows-amd64.exe
 tools/sums.sh dist

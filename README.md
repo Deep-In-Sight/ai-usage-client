@@ -1,10 +1,10 @@
-# Claude Usage Tray Indicator
+# AI Usage Tray Indicator
 
 This repository holds two ways to keep an eye on your Claude plan usage:
 
 | | Runs on | What it does |
 | --- | --- | --- |
-| [Claude Usage agent](#claude-usage-agent) | Windows, macOS, Ubuntu | A tray icon with your weekly usage. It also reports the numbers to your team's Claude Usage server, and you install it from that server. |
+| [AI Usage agent](#ai-usage-agent) | Windows, macOS, Ubuntu | A tray icon with your weekly usage. It also reports the numbers to your team's AI Usage server, and you install it from that server. |
 | [GNOME Shell extension](#gnome-shell-extension) | Ubuntu 24.04 (GNOME 46) | The original: a ring and a percentage in the top bar, for you alone. |
 
 Use one of them on a PC, not both. Each asks Anthropic for the numbers on its
@@ -27,11 +27,11 @@ bar, so you don't have to keep opening the usage page on claude.ai.
 > Unofficial. Not affiliated with or endorsed by Anthropic. It relies on an
 > undocumented endpoint, which may change or stop working without notice.
 
-## Claude Usage agent
+## AI Usage agent
 
 A small program that runs for your OS user. It shows your weekly usage in the
 tray (the Windows notification area, the macOS menu bar, the Ubuntu top bar)
-and sends it to your team's Claude Usage server, whose dashboard shows the
+and sends it to your team's AI Usage server, whose dashboard shows the
 whole team. Only one PC per Claude account asks Anthropic at a time: the
 server picks it, and every other PC on that account gets the numbers from the
 server.
@@ -76,17 +76,17 @@ Your token, your conversations, your files.
 ### Install
 
 Open your team's server (the link your team shared, such as
-`http://claude-usage.local`) and copy the command shown there for your OS:
+`http://ai-usage.local`) and copy the command shown there for your OS:
 
 ```sh
 # Windows, in PowerShell
-irm http://claude-usage.local/install.ps1 | iex
+irm http://ai-usage.local/install.ps1 | iex
 
 # macOS, in Terminal
-curl -fsSL http://claude-usage.local/install.sh | sh
+curl -fsSL http://ai-usage.local/install.sh | sh
 
 # Ubuntu or another Linux, in a terminal
-wget -qO- http://claude-usage.local/install.sh | sh
+wget -qO- http://ai-usage.local/install.sh | sh
 ```
 
 Use the command your server's page shows; it may use another address. The
@@ -96,17 +96,17 @@ its key).
 
 You need Claude Code signed in with your claude.ai subscription, now or
 later; the agent starts reporting once you sign in. On a Mac, macOS may ask
-whether `claude-usage` may use the "Claude Code-credentials" keychain item;
+whether `ai-usage` may use the "Claude Code-credentials" keychain item;
 choose **Always Allow**. The agent is not code-signed, so macOS may ask again
 after an upgrade. It installs for the OS
 user who runs the command only, and needs no administrator rights.
 
 | OS | Installed in | Starts at login through |
 | --- | --- | --- |
-| Windows | `%LOCALAPPDATA%\Programs\ClaudeUsage\`, with an entry in Settings › Apps › Installed apps | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
-| macOS | `~/Library/Application Support/ClaudeUsage/` | `~/Library/LaunchAgents/io.github.deep-in-sight.claude-usage.plist` |
-| Linux with a desktop | `~/.local/bin/claude-usage` | `~/.config/autostart/claude-usage.desktop` |
-| Linux without a desktop | `~/.local/bin/claude-usage` | the systemd user service `claude-usage.service`, plus linger so it runs without a login. If linger is refused, the installer says so and the agent runs only while you are logged in. |
+| Windows | `%LOCALAPPDATA%\Programs\AIUsage\`, with an entry in Settings › Apps › Installed apps | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
+| macOS | `~/Library/Application Support/AIUsage/` | `~/Library/LaunchAgents/io.github.deep-in-sight.ai-usage.plist` |
+| Linux with a desktop | `~/.local/bin/ai-usage` | `~/.config/autostart/ai-usage.desktop` |
+| Linux without a desktop | `~/.local/bin/ai-usage` | the systemd user service `ai-usage.service`, plus linger so it runs without a login. If linger is refused, the installer says so and the agent runs only while you are logged in. |
 
 Run the same command again to upgrade. The PC stays the same device on the
 dashboard and nothing waiting to be sent is lost.
@@ -127,7 +127,7 @@ The menu, from top to bottom:
 | Open dashboard | Opens your server's dashboard. |
 | Refresh now | Asks the server for fresh numbers. |
 | Start at login | Turns starting at login on or off. |
-| Remove Claude Usage | Removes the agent. Click it twice within 10 seconds. |
+| Remove AI Usage | Removes the agent. Click it twice within 10 seconds. |
 | Quit | Stops the agent until the next login. |
 
 | You see | It means |
@@ -147,21 +147,21 @@ The menu, from top to bottom:
   has on by default). Desktops that show only tray icons, such as KDE, show
   the ring with the percentage inside it.
 - Without a tray, such as a server with no desktop, it runs without an icon.
-  Ask it what it is doing with `~/.local/bin/claude-usage status`.
+  Ask it what it is doing with `~/.local/bin/ai-usage status`.
 
 ### Remove
 
-- From the tray: **Remove Claude Usage**, clicked twice.
-- Windows: Settings › Apps › Installed apps › Claude Usage › Uninstall, or in
+- From the tray: **Remove AI Usage**, clicked twice.
+- Windows: Settings › Apps › Installed apps › AI Usage › Uninstall, or in
   PowerShell:
-  `Start-Process -Wait -NoNewWindow -FilePath "$env:LOCALAPPDATA\Programs\ClaudeUsage\claude-usage.exe" -ArgumentList uninstall`
-- macOS: `"$HOME/Library/Application Support/ClaudeUsage/claude-usage" uninstall`
-- Linux: `~/.local/bin/claude-usage uninstall`
+  `Start-Process -Wait -NoNewWindow -FilePath "$env:LOCALAPPDATA\Programs\AIUsage\ai-usage.exe" -ArgumentList uninstall`
+- macOS: `"$HOME/Library/Application Support/AIUsage/ai-usage" uninstall`
+- Linux: `~/.local/bin/ai-usage uninstall`
 
 Removing takes the program, its settings and its start-at-login entry away.
 Linger, if the installer turned it on, is left as it is. Windows cannot
 delete a program while it runs, so removing it from the tray or from
-Installed apps moves `claude-usage.exe` to your `TEMP` folder; the next
+Installed apps moves `ai-usage.exe` to your `TEMP` folder; the next
 install deletes it there, or you can delete it yourself.
 
 ### Security notes

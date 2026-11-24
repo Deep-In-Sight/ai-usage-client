@@ -200,7 +200,7 @@ func TestClientReplaysVectors(t *testing.T) {
 				key := strings.TrimPrefix(s.Request.Headers["Authorization"], "Bearer ")
 				var req Request
 				must(t, json.Unmarshal(s.Request.Body, &req))
-				resp, err := NewClient(key, "claude-usage/test", nil).Sync(context.Background(), srv.URL, req)
+				resp, err := NewClient(key, "ai-usage/test", nil).Sync(context.Background(), srv.URL, req)
 				switch s.Response.Status {
 				case 200:
 					must(t, err)

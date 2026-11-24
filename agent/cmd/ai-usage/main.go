@@ -1,4 +1,4 @@
-// Command claude-usage is the Claude Usage agent.
+// Command ai-usage is the AI Usage agent.
 package main
 
 import (

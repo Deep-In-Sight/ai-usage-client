@@ -8,7 +8,7 @@ func TestOpenURLRejectsNonHTTP(t *testing.T) {
 			t.Errorf("%q accepted", u)
 		}
 	}
-	for _, u := range []string{"http://claude-usage.local", "https://192.0.2.10:8700/install"} {
+	for _, u := range []string{"http://ai-usage.local", "https://192.0.2.10:8700/install"} {
 		if err := checkURL(u); err != nil {
 			t.Errorf("%q: %v", u, err)
 		}

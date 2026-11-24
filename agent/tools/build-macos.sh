@@ -14,8 +14,8 @@ rm -rf "$slices"
 mkdir -p "$slices"
 trap 'rm -rf "$slices"' EXIT
 export CGO_ENABLED=1 MACOSX_DEPLOYMENT_TARGET=12.0 GOOS=darwin
-GOARCH=arm64 go build -trimpath -ldflags "$ld" -o "$slices/arm64" ./cmd/claude-usage
-GOARCH=amd64 CC="clang -arch x86_64" go build -trimpath -ldflags "$ld" -o "$slices/x86_64" ./cmd/claude-usage
+GOARCH=arm64 go build -trimpath -ldflags "$ld" -o "$slices/arm64" ./cmd/ai-usage
+GOARCH=amd64 CC="clang -arch x86_64" go build -trimpath -ldflags "$ld" -o "$slices/x86_64" ./cmd/ai-usage
 tools/check-binary.sh "$slices/arm64"
 tools/check-binary.sh "$slices/x86_64"
 for a in arm64 x86_64; do
@@ -24,11 +24,11 @@ for a in arm64 x86_64; do
     exit 1
   fi
 done
-out=dist/claude-usage-macos-universal
+out=dist/ai-usage-macos-universal
 lipo -create -output "$out" "$slices/arm64" "$slices/x86_64"
 archs=$(lipo -archs "$out")
 [ "$archs" = "x86_64 arm64" ] || { echo "universal file has: $archs" >&2; exit 1; }
 v=$("./$out" version)
-printf '%s\n' "$v" | grep -Eqx "claude-usage $(printf '%s' "$ver" | sed 's/\./\\./g') darwin/(arm64|amd64) tray" ||
+printf '%s\n' "$v" | grep -Eqx "ai-usage $(printf '%s' "$ver" | sed 's/\./\\./g') darwin/(arm64|amd64) tray" ||
   { echo "version says: $v" >&2; exit 1; }
 echo "$out: $archs, $v"

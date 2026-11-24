@@ -12,7 +12,7 @@ const runKeyPath = `Software\Microsoft\Windows\CurrentVersion\Run`
 
 // RunKey starts the agent at logon through HKCU\...\Run.
 type RunKey struct {
-	ValueName string // "" means "ClaudeUsage"
+	ValueName string // "" means "AIUsage"
 	Exe       string // for finding a process left running
 	Start     func(exe string, args ...string) error
 }
@@ -21,7 +21,7 @@ func (r *RunKey) Name() string { return "hkcu-run" }
 
 func (r *RunKey) value() string {
 	if r.ValueName == "" {
-		return "ClaudeUsage"
+		return "AIUsage"
 	}
 	return r.ValueName
 }

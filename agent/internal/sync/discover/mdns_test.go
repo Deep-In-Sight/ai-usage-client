@@ -57,11 +57,11 @@ func ipStrings(ips []net.IP) []string {
 
 func TestQueryAKeepsOnlyQueriedName(t *testing.T) {
 	addr := responder(t, true)
-	ips, err := QueryA(context.Background(), "claude-usage.local", addr, time.Second)
+	ips, err := QueryA(context.Background(), "ai-usage.local", addr, time.Second)
 	must(t, err)
 	eq(t, ipStrings(ips), []string{"192.0.2.10"})
 	// the name match ignores case
-	ips, err = QueryA(context.Background(), "Claude-Usage.LOCAL", addr, time.Second)
+	ips, err = QueryA(context.Background(), "Ai-Usage.LOCAL", addr, time.Second)
 	must(t, err)
 	eq(t, ipStrings(ips), []string{"192.0.2.10"})
 }
@@ -69,7 +69,7 @@ func TestQueryAKeepsOnlyQueriedName(t *testing.T) {
 func TestQueryAStopsShortlyAfterAnswer(t *testing.T) {
 	addr := responder(t, true)
 	start := time.Now()
-	_, err := QueryA(context.Background(), "claude-usage.local", addr, 3*time.Second)
+	_, err := QueryA(context.Background(), "ai-usage.local", addr, 3*time.Second)
 	must(t, err)
 	if d := time.Since(start); d > 1500*time.Millisecond {
 		t.Fatalf("took %v after the first answer", d)
@@ -79,7 +79,7 @@ func TestQueryAStopsShortlyAfterAnswer(t *testing.T) {
 func TestQueryATimeoutNoAnswer(t *testing.T) {
 	addr := responder(t, false)
 	start := time.Now()
-	ips, err := QueryA(context.Background(), "claude-usage.local", addr, 500*time.Millisecond)
+	ips, err := QueryA(context.Background(), "ai-usage.local", addr, 500*time.Millisecond)
 	must(t, err)
 	eq(t, len(ips), 0)
 	if d := time.Since(start); d < 400*time.Millisecond || d > 2*time.Second {
@@ -88,10 +88,10 @@ func TestQueryATimeoutNoAnswer(t *testing.T) {
 }
 
 // TestLiveQuery resolves the real name on this LAN once. It runs only with
-// CLAUDE_USAGE_LIVE_MDNS=1 and asserts no particular address.
+// AI_USAGE_LIVE_MDNS=1 and asserts no particular address.
 func TestLiveQuery(t *testing.T) {
-	if os.Getenv("CLAUDE_USAGE_LIVE_MDNS") != "1" {
-		t.Skip("set CLAUDE_USAGE_LIVE_MDNS=1")
+	if os.Getenv("AI_USAGE_LIVE_MDNS") != "1" {
+		t.Skip("set AI_USAGE_LIVE_MDNS=1")
 	}
 	ips, err := QueryA(context.Background(), Name, MulticastAddr, 2*time.Second)
 	must(t, err)
@@ -141,7 +141,7 @@ func TestQueryAIgnoresWrongID(t *testing.T) {
 		r.Id = q.Id + 1
 		return r
 	})
-	ips, err := QueryA(context.Background(), "claude-usage.local", addr, 500*time.Millisecond)
+	ips, err := QueryA(context.Background(), "ai-usage.local", addr, 500*time.Millisecond)
 	must(t, err)
 	eq(t, len(ips), 0)
 }
@@ -150,7 +150,7 @@ func TestQueryAFiltersAddresses(t *testing.T) {
 	addr := customResponder(t, func(q *dns.Msg) *dns.Msg {
 		return answer(q, "127.0.0.1", "0.0.0.0", "224.0.0.9", "192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4", "192.0.2.5", "192.0.2.6")
 	})
-	ips, err := QueryA(context.Background(), "claude-usage.local", addr, time.Second)
+	ips, err := QueryA(context.Background(), "ai-usage.local", addr, time.Second)
 	must(t, err)
 	eq(t, ipStrings(ips), []string{"192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4"})
 }

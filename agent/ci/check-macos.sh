@@ -7,10 +7,10 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 
-label=io.github.deep-in-sight.claude-usage
+label=io.github.deep-in-sight.ai-usage
 plist="$HOME/Library/LaunchAgents/$label.plist"
-data="$HOME/Library/Application Support/ClaudeUsage"
-exe="$data/claude-usage"
+data="$HOME/Library/Application Support/AIUsage"
+exe="$data/ai-usage"
 tmo() { perl -e 'alarm shift; exec @ARGV' "$@"; } # no timeout(1) on macOS
 oneliner() { tmo 180 sh -c "curl -fsSL $BASE/files/install-ci.sh | sh"; }
 agent_count() { pgrep -f "^$exe run" | wc -l | tr -d ' '; }

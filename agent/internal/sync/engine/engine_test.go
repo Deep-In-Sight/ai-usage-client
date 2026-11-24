@@ -439,18 +439,18 @@ func TestTooLargeHalvesBatch(t *testing.T) {
 
 func TestDiscoveryOrderAndLastGood(t *testing.T) {
 	r := newRig(t, func(_ int, base string, _ protocol.Request) (protocol.Response, error) {
-		if base == "http://claude-usage.local" {
+		if base == "http://ai-usage.local" {
 			return protocol.Response{}, errDown
 		}
 		return resp("standby", false, 60), nil
 	})
 	r.step()
-	eq(t, r.syncer.calls[0].base, "http://claude-usage.local")
-	eq(t, r.syncer.calls[1].base, "http://claude-usage.local:8700")
-	eq(t, config.LoadState(filepath.Join(r.dir, "state.json")).LastGoodURL, "http://claude-usage.local:8700")
-	eq(t, r.snap().ServerURL, "http://claude-usage.local:8700")
+	eq(t, r.syncer.calls[0].base, "http://ai-usage.local")
+	eq(t, r.syncer.calls[1].base, "http://ai-usage.local:8700")
+	eq(t, config.LoadState(filepath.Join(r.dir, "state.json")).LastGoodURL, "http://ai-usage.local:8700")
+	eq(t, r.snap().ServerURL, "http://ai-usage.local:8700")
 	r.step()
-	eq(t, r.syncer.calls[2].base, "http://claude-usage.local:8700")
+	eq(t, r.syncer.calls[2].base, "http://ai-usage.local:8700")
 	eq(t, len(r.syncer.calls), 3)
 }
 
@@ -474,7 +474,7 @@ func TestAnnouncedURLsAreUsed(t *testing.T) {
 	for _, c := range r.syncer.calls[n:] {
 		bases = append(bases, c.base)
 	}
-	eq(t, bases, []string{"http://claude-usage.local", "http://claude-usage.local:8700", "http://192.0.2.20:8700", "http://192.0.2.10:8700"})
+	eq(t, bases, []string{"http://ai-usage.local", "http://ai-usage.local:8700", "http://192.0.2.20:8700", "http://192.0.2.10:8700"})
 }
 
 func TestBadIngestKeyCountsAsFailure(t *testing.T) {
@@ -489,7 +489,7 @@ func TestBadIngestKeyCountsAsFailure(t *testing.T) {
 
 func TestServerErrorIsPreferredInProblem(t *testing.T) {
 	r := newRig(t, func(_ int, base string, _ protocol.Request) (protocol.Response, error) {
-		if base == "http://claude-usage.local" {
+		if base == "http://ai-usage.local" {
 			return protocol.Response{}, protocol.ErrBadIngestKey
 		}
 		return protocol.Response{}, errDown

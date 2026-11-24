@@ -16,7 +16,7 @@ func TestWriteReadRoundTrip(t *testing.T) {
 	pct := 5.0
 	st := 200
 	s := Snapshot{Version: "0.0.0-dev", PID: 42, UpdatedAt: time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC),
-		Mode: "coordinated", Role: "poller", ServerURL: "http://claude-usage.local", LastSyncOK: true,
+		Mode: "coordinated", Role: "poller", ServerURL: "http://ai-usage.local", LastSyncOK: true,
 		LastFetchStatus: &st, WeeklyPercent: &pct, Backlog: 3}
 	if err := Write(p, s); err != nil {
 		t.Fatal(err)

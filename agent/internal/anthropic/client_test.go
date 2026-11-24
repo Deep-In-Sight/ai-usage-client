@@ -66,7 +66,7 @@ func TestFetchSendsHeaders(t *testing.T) {
 	eq(t, got.Get("Authorization"), "Bearer "+fakeToken)
 	eq(t, got.Get("anthropic-beta"), "oauth-2025-04-20")
 	eq(t, got.Get("Accept"), "application/json")
-	eq(t, got.Get("User-Agent"), "claude-usage/0.0.0-dev")
+	eq(t, got.Get("User-Agent"), "ai-usage/0.0.0-dev")
 	eq(t, res.HTTPStatus, 200)
 	eq(t, string(res.Usage), body)
 	eq(t, res.FetchedAt, t0.Truncate(time.Millisecond))

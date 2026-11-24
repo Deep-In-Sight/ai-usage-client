@@ -18,5 +18,5 @@ func Show(title, body string) error {
 	defer cancel()
 	obj := conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
 	return obj.CallWithContext(ctx, "org.freedesktop.Notifications.Notify", 0,
-		"Claude Usage", uint32(0), "", title, body, []string{}, map[string]dbus.Variant{}, int32(10000)).Err
+		"AI Usage", uint32(0), "", title, body, []string{}, map[string]dbus.Variant{}, int32(10000)).Err
 }

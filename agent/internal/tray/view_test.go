@@ -70,7 +70,7 @@ func checked(v View, id ItemID) bool {
 }
 
 func base() Inputs {
-	return Inputs{Snap: full(), Now: now, Version: "1.0.0", HasToggle: true, AutostartOn: true, DashboardURL: "http://claude-usage.local"}
+	return Inputs{Snap: full(), Now: now, Version: "1.0.0", HasToggle: true, AutostartOn: true, DashboardURL: "http://ai-usage.local"}
 }
 
 func TestViewFull(t *testing.T) {
@@ -84,7 +84,7 @@ func TestViewFull(t *testing.T) {
 	eq(t, *v.Icon.Percent, 71.0)
 	eq(t, v.Icon.Stale, false)
 	eq(t, checked(v, ItemAutostart), true)
-	eq(t, v.Tooltip, "Claude Usage\nAll models 71% · Resets Sun 01:00 · in 1d 6h\nFable 76%\nUpdated 18:58")
+	eq(t, v.Tooltip, "AI Usage\nAll models 71% · Resets Sun 01:00 · in 1d 6h\nFable 76%\nUpdated 18:58")
 	eq(t, visible(v, ItemSignIn), false)
 	eq(t, visible(v, ItemNewVersion), false)
 	// order, and which rows are information only
@@ -103,7 +103,7 @@ func TestViewFull(t *testing.T) {
 	eq(t, textOf(v, ItemDashboard), "Open dashboard")
 	eq(t, textOf(v, ItemRefresh), "Refresh now")
 	eq(t, textOf(v, ItemAutostart), "Start at login")
-	eq(t, textOf(v, ItemRemove), "Remove Claude Usage")
+	eq(t, textOf(v, ItemRemove), "Remove AI Usage")
 	eq(t, textOf(v, ItemQuit), "Quit")
 }
 
@@ -118,7 +118,7 @@ func TestViewNotSignedInShowsDash(t *testing.T) {
 	eq(t, visible(v, ItemSignIn), true)
 	eq(t, textOf(v, ItemSignIn), "Claude Code sign-in needed")
 	eq(t, visible(v, ItemScoped), false)
-	eq(t, v.Tooltip, "Claude Usage\nAll models –%\nClaude Code sign-in needed")
+	eq(t, v.Tooltip, "AI Usage\nAll models –%\nClaude Code sign-in needed")
 }
 
 func TestViewExpiredKeepsNumbers(t *testing.T) {
@@ -203,7 +203,7 @@ func TestViewRemoveArmedAndRefreshing(t *testing.T) {
 	in.RemoveArmed = true
 	in.Snap.FreshPending = true
 	v := Build(in)
-	eq(t, textOf(v, ItemRemove), "Click again to remove Claude Usage")
+	eq(t, textOf(v, ItemRemove), "Click again to remove AI Usage")
 	eq(t, textOf(v, ItemRefresh), "Refreshing…")
 	eq(t, item(t, v, ItemRefresh).Enabled, false)
 	in.HasToggle, in.DashboardURL = false, ""

@@ -38,8 +38,8 @@ jobs:
         with:
           name: build-linux-windows
           path: |
-            agent/dist/claude-usage-linux-amd64
-            agent/dist/claude-usage-windows-amd64.exe
+            agent/dist/ai-usage-linux-amd64
+            agent/dist/ai-usage-windows-amd64.exe
           if-no-files-found: error
           retention-days: 14
 
@@ -66,7 +66,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: build-macos
-          path: agent/dist/claude-usage-macos-universal
+          path: agent/dist/ai-usage-macos-universal
           if-no-files-found: error
           retention-days: 14
 
@@ -93,9 +93,9 @@ jobs:
         with:
           name: release-files
           path: |
-            dist/claude-usage-linux-amd64
-            dist/claude-usage-windows-amd64.exe
-            dist/claude-usage-macos-universal
+            dist/ai-usage-linux-amd64
+            dist/ai-usage-windows-amd64.exe
+            dist/ai-usage-macos-universal
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 14

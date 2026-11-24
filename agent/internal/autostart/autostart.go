@@ -82,7 +82,7 @@ func killLeft(exe string) {
 }
 
 // UnitName is the systemd user unit.
-const UnitName = "claude-usage.service"
+const UnitName = "ai-usage.service"
 
 // UnitText is the unit file for exe. "%" is doubled so systemd does not
 // expand it as a specifier; ValidExePath rejects what cannot be quoted.
@@ -93,7 +93,7 @@ const UnitName = "claude-usage.service"
 func UnitText(exe string) string {
 	exe = strings.ReplaceAll(exe, "%", "%%")
 	return `[Unit]
-Description=Claude Usage agent
+Description=AI Usage agent
 After=network-online.target
 
 [Service]

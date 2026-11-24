@@ -9,14 +9,14 @@ import (
 )
 
 func TestRunKeyRoundTrip(t *testing.T) {
-	name := fmt.Sprintf("ClaudeUsageTest-%d", os.Getpid())
+	name := fmt.Sprintf("AIUsageTest-%d", os.Getpid())
 	var started [][]string
 	r := &RunKey{ValueName: name, Start: func(exe string, args ...string) error {
 		started = append(started, append([]string{exe}, args...))
 		return nil
 	}}
 	t.Cleanup(func() { _ = r.Unregister(bg) })
-	exe := `C:\Users\a b\AppData\Local\Programs\ClaudeUsage\claude-usage.exe`
+	exe := `C:\Users\a b\AppData\Local\Programs\AIUsage\ai-usage.exe`
 	eq(t, r.Name(), "hkcu-run")
 	eq(t, r.State(bg), "not registered")
 	must(t, r.Register(bg, exe))

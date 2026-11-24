@@ -133,7 +133,7 @@ func TestInstallWindowsWritesEntryAndNotice(t *testing.T) {
 	eq(t, e.UninstallString, `"`+te.Dirs.InstallExe+`" uninstall`)
 	eq(t, e.EstimatedSizeKB, uint32(1)) // "BIN"
 	eq(t, read(t, te.Dirs.File(paths.NotifyFile)), version.Version)
-	contains(t, te.out.String(), "The Claude Usage icon is under the ^ arrow on the taskbar. Drag it onto the taskbar to keep it in view.")
+	contains(t, te.out.String(), "The AI Usage icon is under the ^ arrow on the taskbar. Drag it onto the taskbar to keep it in view.")
 	eq(t, rec.list(), []string{"main.stop:none", "winapp.register", "main.register:BIN"})
 	eq(t, len(te.detached), 0)
 }
@@ -144,7 +144,7 @@ func TestInstallStartFailedFallsBackToDetached(t *testing.T) {
 	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
 	eq(t, te.detached, [][]string{{te.Dirs.InstallExe, "run"}})
 	eq(t, rec.list()[len(rec.list())-1], "detached:run")
-	contains(t, te.out.String(), "Look for the Claude Usage ring in the menu bar.")
+	contains(t, te.out.String(), "Look for the AI Usage ring in the menu bar.")
 
 	te, _, main, _, _ = osEnv(t, "windows")
 	main.registerErr = errors.New("registry: access denied")
@@ -158,7 +158,7 @@ func TestInstallLinuxDesktopRemovesSystemdUnit(t *testing.T) {
 	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
 	eq(t, rec.list(), []string{"main.stop:none", "other.stop:none", "main.register:BIN", "other.unregister"})
 	eq(t, len(wa.entries), 0)
-	contains(t, te.out.String(), "Look for the Claude Usage ring in the top bar.")
+	contains(t, te.out.String(), "Look for the AI Usage ring in the top bar.")
 	for _, c := range te.runner.calls {
 		if c[0] == "loginctl" {
 			t.Fatalf("linger touched on a desktop: %v", c)
@@ -213,12 +213,12 @@ func TestInstallAlertsWithoutConsole(t *testing.T) {
 	te.Alert = func(title, text string) { alerts = append(alerts, title+"|"+text) }
 	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
 	eq(t, len(alerts), 1)
-	contains(t, alerts[0], "Claude Usage|Claude Usage is installed and running.")
+	contains(t, alerts[0], "AI Usage|AI Usage is installed and running.")
 
 	alerts = nil
 	eq(t, te.main("install", "--config", writeCfg(t, `{"server_urls":[]}`)), 1)
 	eq(t, len(alerts), 1)
-	contains(t, alerts[0], "Claude Usage|Claude Usage could not be installed:\n")
+	contains(t, alerts[0], "AI Usage|AI Usage could not be installed:\n")
 }
 
 func TestNoArgsOnInstalledExeRunsOnWindows(t *testing.T) {
@@ -306,7 +306,7 @@ func TestUninstallRemovesEntryAndDirs(t *testing.T) {
 	te.HasConsole = func() bool { return false }
 	te.Alert = func(title, text string) { alerts = append(alerts, text) }
 	eq(t, te.main("uninstall"), 0)
-	eq(t, alerts, []string{"Claude Usage has been removed."})
+	eq(t, alerts, []string{"AI Usage has been removed."})
 }
 
 func TestUninstallRemovesInstalledExeItselfOnWindows(t *testing.T) {
@@ -319,7 +319,7 @@ func TestUninstallRemovesInstalledExeItselfOnWindows(t *testing.T) {
 	if _, err := os.Stat(te.Dirs.InstallExe); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("executable left in place")
 	}
-	moved, _ := filepath.Glob(filepath.Join(tmp, "claude-usage-removed-*.exe"))
+	moved, _ := filepath.Glob(filepath.Join(tmp, "ai-usage-removed-*.exe"))
 	eq(t, len(moved), 1)
 }
 
@@ -386,7 +386,7 @@ func TestUpgradeWhenRegisterFailsKeepsAnAgentRunning(t *testing.T) {
 		eq(t, te.main("install", "--config", cfgPath), 10)
 		eq(t, te.detached, [][]string{{te.Dirs.InstallExe, "run"}}) // the new agent runs
 		eq(t, read(t, te.Dirs.InstallExe), "BIN2")
-		contains(t, te.out.String(), "Start at login could not be set up (permission denied). Claude Usage is running now, but it will not start by itself after you log out or restart.")
+		contains(t, te.out.String(), "Start at login could not be set up (permission denied). AI Usage is running now, but it will not start by itself after you log out or restart.")
 	}
 }
 
@@ -439,7 +439,7 @@ func TestInstallSweepsRemovedExes(t *testing.T) {
 	te, _, _, _, _ := osEnv(t, "windows")
 	tmp := t.TempDir()
 	te.vars["TEMP"] = tmp
-	for _, n := range []string{"claude-usage-removed-123.exe", "claude-usage-removed-9.exe", "other.exe", "claude-usage-removed-x.exe", "claude-usage-removed-1.txt"} {
+	for _, n := range []string{"ai-usage-removed-123.exe", "ai-usage-removed-9.exe", "other.exe", "ai-usage-removed-x.exe", "ai-usage-removed-1.txt"} {
 		must(t, os.WriteFile(filepath.Join(tmp, n), []byte("x"), 0o644))
 	}
 	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
@@ -448,13 +448,13 @@ func TestInstallSweepsRemovedExes(t *testing.T) {
 	for _, e := range left {
 		names = append(names, e.Name())
 	}
-	eq(t, names, []string{"claude-usage-removed-1.txt", "claude-usage-removed-x.exe", "other.exe"})
+	eq(t, names, []string{"ai-usage-removed-1.txt", "ai-usage-removed-x.exe", "other.exe"})
 }
 
 func TestUninstallKeepsEntryWhenExeCannotMove(t *testing.T) {
 	te, rec, _, _, _ := osEnv(t, "windows")
 	// the Windows layout: the executable is not inside the data folder
-	te.Dirs.InstallExe = filepath.Join(t.TempDir(), "Programs", "ClaudeUsage", "claude-usage.exe")
+	te.Dirs.InstallExe = filepath.Join(t.TempDir(), "Programs", "AIUsage", "ai-usage.exe")
 	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
 	te.Exe = te.Dirs.InstallExe
 	te.vars["TEMP"] = filepath.Join(t.TempDir(), "missing", "deeper") // the move fails
@@ -514,7 +514,7 @@ func TestUpgradeKeepsStartAtLoginOff(t *testing.T) {
 	te.out.Reset()
 	eq(t, te.main("install", "--config", cfgPath), 0)
 	eq(t, main.enabled, false)
-	contains(t, te.out.String(), "Start at login stays off, as set in the Claude Usage menu.")
+	contains(t, te.out.String(), "Start at login stays off, as set in the AI Usage menu.")
 	// ticking it again clears the marker
 	must(t, c.SetAutostart(true))
 	eq(t, te.main("install", "--config", cfgPath), 0)

@@ -8,11 +8,11 @@
   $ErrorActionPreference = 'Stop'
   $ProgressPreference = 'SilentlyContinue'
   $Base = '@BASE@'
-  $File = 'claude-usage-windows-amd64.exe'
-  $tmp = Join-Path ([IO.Path]::GetTempPath()) ('claude-usage-' + [guid]::NewGuid().ToString('N'))
+  $File = 'ai-usage-windows-amd64.exe'
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ('ai-usage-' + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $tmp | Out-Null
   try {
-    $exe = Join-Path $tmp 'claude-usage.exe'
+    $exe = Join-Path $tmp 'ai-usage.exe'
     $sums = Join-Path $tmp 'SHA256SUMS'
     $cfg = Join-Path $tmp 'config.json'
     $out = Join-Path $tmp 'install-out.txt'

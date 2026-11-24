@@ -29,7 +29,7 @@ func TestDialerResolvesLocalNames(t *testing.T) {
 	lookups := 0
 	d := NewDialer(func(_ context.Context, name string) ([]net.IP, error) {
 		lookups++
-		if name != "claude-usage.local" {
+		if name != "ai-usage.local" {
 			t.Errorf("lookup %q", name)
 		}
 		// the first address does not answer; the dialer must try the next
@@ -38,9 +38,9 @@ func TestDialerResolvesLocalNames(t *testing.T) {
 	// 192.0.2.1 is unroutable: give the dialer a short timeout for the test
 	dialTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { dialTimeout = defaultDialTimeout })
-	resp := get(t, d, "http://claude-usage.local:"+port+"/healthz")
+	resp := get(t, d, "http://ai-usage.local:"+port+"/healthz")
 	eq(t, resp.StatusCode, 200)
-	resp = get(t, d, "http://CLAUDE-USAGE.local.:"+port+"/healthz")
+	resp = get(t, d, "http://AI-USAGE.local.:"+port+"/healthz")
 	eq(t, resp.StatusCode, 200)
 	eq(t, lookups, 1) // cached for 60 s
 
@@ -52,12 +52,12 @@ func TestDialerResolvesLocalNames(t *testing.T) {
 
 func TestDialerLookupFailure(t *testing.T) {
 	d := NewDialer(func(context.Context, string) ([]net.IP, error) { return nil, nil })
-	_, err := d(context.Background(), "tcp", "claude-usage.local:80")
+	_, err := d(context.Background(), "tcp", "ai-usage.local:80")
 	if err == nil {
 		t.Fatal("no addresses should fail")
 	}
 	d = NewDialer(func(context.Context, string) ([]net.IP, error) { return nil, errors.New("boom") })
-	if _, err := d(context.Background(), "tcp", "claude-usage.local:80"); err == nil {
+	if _, err := d(context.Background(), "tcp", "ai-usage.local:80"); err == nil {
 		t.Fatal("lookup error should fail")
 	}
 }

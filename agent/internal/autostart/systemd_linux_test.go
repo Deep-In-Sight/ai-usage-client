@@ -12,11 +12,11 @@ import (
 )
 
 const wantUnit = `[Unit]
-Description=Claude Usage agent
+Description=AI Usage agent
 After=network-online.target
 
 [Service]
-ExecStart="/h/.local/bin/claude-usage" run --headless
+ExecStart="/h/.local/bin/ai-usage" run --headless
 Restart=always
 RestartSec=30
 
@@ -25,7 +25,7 @@ WantedBy=default.target
 `
 
 func TestUnitText(t *testing.T) {
-	eq(t, UnitText("/h/.local/bin/claude-usage"), wantUnit)
+	eq(t, UnitText("/h/.local/bin/ai-usage"), wantUnit)
 }
 
 func TestForPicksMethod(t *testing.T) {
@@ -60,15 +60,15 @@ func TestRegisterCallsSystemctl(t *testing.T) {
 	home := t.TempDir()
 	f := &fakeRun{}
 	m, _ := For(Options{Headless: true, Home: home, Run: f.run})
-	exe := filepath.Join(home, ".local", "bin", "claude-usage")
+	exe := filepath.Join(home, ".local", "bin", "ai-usage")
 	if err := m.Register(context.Background(), exe); err != nil {
 		t.Fatal(err)
 	}
 	eq(t, f.calls, [][]string{
 		{"systemctl", "--user", "daemon-reload"},
-		{"systemctl", "--user", "enable", "--now", "claude-usage.service"},
+		{"systemctl", "--user", "enable", "--now", "ai-usage.service"},
 	})
-	b, err := os.ReadFile(filepath.Join(home, ".config", "systemd", "user", "claude-usage.service"))
+	b, err := os.ReadFile(filepath.Join(home, ".config", "systemd", "user", "ai-usage.service"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +81,8 @@ func TestRegisterCallsSystemctl(t *testing.T) {
 	}
 	eq(t, f.calls, [][]string{
 		{"systemctl", "--user", "daemon-reload"},
-		{"systemctl", "--user", "enable", "claude-usage.service"},
-		{"systemctl", "--user", "restart", "claude-usage.service"},
+		{"systemctl", "--user", "enable", "ai-usage.service"},
+		{"systemctl", "--user", "restart", "ai-usage.service"},
 	})
 }
 
@@ -94,7 +94,7 @@ func TestRegisterFailure(t *testing.T) {
 		return "", nil
 	}}
 	m, _ := For(Options{Headless: true, Home: t.TempDir(), Run: f.run})
-	err := m.Register(context.Background(), "/x/claude-usage")
+	err := m.Register(context.Background(), "/x/ai-usage")
 	if err == nil || !strings.Contains(err.Error(), "Failed to connect to bus") {
 		t.Fatalf("%v", err)
 	}
@@ -122,7 +122,7 @@ func TestAvailableStopStateUnregister(t *testing.T) {
 	eq(t, len(f.calls), 0)
 	eq(t, m.State(ctx), "not installed")
 
-	if err := m.Register(ctx, "/x/claude-usage"); err != nil {
+	if err := m.Register(ctx, "/x/ai-usage"); err != nil {
 		t.Fatal(err)
 	}
 	eq(t, m.State(ctx), "active")
@@ -130,16 +130,16 @@ func TestAvailableStopStateUnregister(t *testing.T) {
 	if err := m.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	eq(t, f.calls, [][]string{{"systemctl", "--user", "stop", "claude-usage.service"}})
+	eq(t, f.calls, [][]string{{"systemctl", "--user", "stop", "ai-usage.service"}})
 	f.calls = nil
 	if err := m.Unregister(ctx); err != nil {
 		t.Fatal(err)
 	}
 	eq(t, f.calls, [][]string{
-		{"systemctl", "--user", "disable", "--now", "claude-usage.service"},
+		{"systemctl", "--user", "disable", "--now", "ai-usage.service"},
 		{"systemctl", "--user", "daemon-reload"},
 	})
-	if _, err := os.Stat(filepath.Join(home, ".config", "systemd", "user", "claude-usage.service")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(home, ".config", "systemd", "user", "ai-usage.service")); !os.IsNotExist(err) {
 		t.Fatal("unit file still there")
 	}
 
@@ -187,10 +187,10 @@ func TestEnsureLinger(t *testing.T) {
 }
 
 func TestUnitEscapesSpecifiers(t *testing.T) {
-	if !strings.Contains(UnitText("/h/50%/claude-usage"), `ExecStart="/h/50%%/claude-usage" run --headless`) {
-		t.Fatal(UnitText("/h/50%/claude-usage"))
+	if !strings.Contains(UnitText("/h/50%/ai-usage"), `ExecStart="/h/50%%/ai-usage" run --headless`) {
+		t.Fatal(UnitText("/h/50%/ai-usage"))
 	}
-	for _, exe := range []string{`/h/a"b/claude-usage`, `/h/a\b/claude-usage`, "/h/a\nb/claude-usage"} {
+	for _, exe := range []string{`/h/a"b/ai-usage`, `/h/a\b/ai-usage`, "/h/a\nb/ai-usage"} {
 		f := &fakeRun{}
 		home := t.TempDir()
 		m, _ := For(Options{Headless: true, Home: home, Run: f.run})

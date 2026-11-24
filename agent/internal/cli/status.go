@@ -21,7 +21,7 @@ func statusCmd(env Env, args []string) int {
 	asJSON := false
 	for _, a := range args {
 		if a != "--json" {
-			fmt.Fprintf(env.Stderr, "claude-usage status: unknown argument %q\n", a)
+			fmt.Fprintf(env.Stderr, "ai-usage status: unknown argument %q\n", a)
 			return 2
 		}
 		asJSON = true
@@ -29,9 +29,9 @@ func statusCmd(env Env, args []string) int {
 	snap, err := status.Read(env.Dirs.File(paths.StatusFile))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintln(env.Stderr, "claude-usage: no status yet (is the agent running?)")
+			fmt.Fprintln(env.Stderr, "ai-usage: no status yet (is the agent running?)")
 		} else {
-			fmt.Fprintln(env.Stderr, "claude-usage: status file:", err)
+			fmt.Fprintln(env.Stderr, "ai-usage: status file:", err)
 		}
 		return 1
 	}
@@ -74,7 +74,7 @@ func statusCmd(env Env, args []string) int {
 		return usage.FormatClock(t.In(now.Location()))
 	}
 	w := env.Stdout
-	fmt.Fprintf(w, "Claude Usage agent %s\n", version.Version)
+	fmt.Fprintf(w, "AI Usage agent %s\n", version.Version)
 	if method != "" {
 		fmt.Fprintf(w, "Service:    %s (%s)\n", service, method)
 	} else {

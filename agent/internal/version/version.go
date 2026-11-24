@@ -6,4 +6,4 @@ package version
 var Version = "0.0.0-dev"
 
 // UserAgent is the User-Agent header sent on every request.
-func UserAgent() string { return "claude-usage/" + Version }
+func UserAgent() string { return "ai-usage/" + Version }

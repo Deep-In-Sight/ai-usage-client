@@ -12,12 +12,12 @@ import (
 )
 
 // TestKeychainIntegration stores a fake item with security(1) and reads it
-// back through ReadKeychain. It runs only when CLAUDE_USAGE_KEYCHAIN_TEST=1.
+// back through ReadKeychain. It runs only when AI_USAGE_KEYCHAIN_TEST=1.
 func TestKeychainIntegration(t *testing.T) {
-	if os.Getenv("CLAUDE_USAGE_KEYCHAIN_TEST") != "1" {
-		t.Skip("set CLAUDE_USAGE_KEYCHAIN_TEST=1")
+	if os.Getenv("AI_USAGE_KEYCHAIN_TEST") != "1" {
+		t.Skip("set AI_USAGE_KEYCHAIN_TEST=1")
 	}
-	service := fmt.Sprintf("claude-usage-test-%d", os.Getpid())
+	service := fmt.Sprintf("ai-usage-test-%d", os.Getpid())
 	user := os.Getenv("USER")
 	payload := credsJSON(time.Now().Add(time.Hour))
 	out, err := exec.Command("/usr/bin/security", "add-generic-password", "-s", service, "-a", user, "-w", payload).CombinedOutput()

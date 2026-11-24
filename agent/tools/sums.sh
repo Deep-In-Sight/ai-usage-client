@@ -5,7 +5,7 @@ set -eu
 dir="$1"
 all="${2:-}"
 present=""
-for n in claude-usage-linux-amd64 claude-usage-macos-universal claude-usage-windows-amd64.exe; do
+for n in ai-usage-linux-amd64 ai-usage-macos-universal ai-usage-windows-amd64.exe; do
   if [ -f "$dir/$n" ]; then
     present="$present $n"
   elif [ "$all" = "--require-all" ]; then

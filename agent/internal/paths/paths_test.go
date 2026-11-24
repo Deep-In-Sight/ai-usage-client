@@ -19,10 +19,10 @@ func TestLinuxDataDirIgnoresXDG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Data != "/h/.config/claude-usage" || d.InstallExe != "/h/.local/bin/claude-usage" || d.Home != "/h" {
+	if d.Data != "/h/.config/ai-usage" || d.InstallExe != "/h/.local/bin/ai-usage" || d.Home != "/h" {
 		t.Fatalf("%+v", d)
 	}
-	if d.File(ConfigFile) != "/h/.config/claude-usage/config.json" {
+	if d.File(ConfigFile) != "/h/.config/ai-usage/config.json" {
 		t.Fatal(d.File(ConfigFile))
 	}
 }
@@ -40,7 +40,7 @@ func TestWindowsDirs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Data != `C:\L\ClaudeUsage` || d.InstallExe != `C:\L\Programs\ClaudeUsage\claude-usage.exe` {
+	if d.Data != `C:\L\AIUsage` || d.InstallExe != `C:\L\Programs\AIUsage\ai-usage.exe` {
 		t.Fatalf("%+v", d)
 	}
 	if _, err := For(func(string) string { return "" }, `C:\Users\u`); err == nil {
@@ -56,8 +56,8 @@ func TestMacDirs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := "/Users/u/Library/Application Support/ClaudeUsage"
-	if d.Data != data || d.InstallExe != filepath.Join(data, "claude-usage") {
+	data := "/Users/u/Library/Application Support/AIUsage"
+	if d.Data != data || d.InstallExe != filepath.Join(data, "ai-usage") {
 		t.Fatalf("%+v", d)
 	}
 }

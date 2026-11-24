@@ -14,11 +14,11 @@ $base = 'http://127.0.0.1:18700'
 $key = 'ci-ingest-key-0123456789'
 $token = 'fake-access-token-0123456789'
 $email = 'user-a@example.com'
-$exe = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeUsage\claude-usage.exe'
+$exe = Join-Path $env:LOCALAPPDATA 'Programs\AIUsage\ai-usage.exe'
 $installDir = Split-Path -Parent $exe
-$data = Join-Path $env:LOCALAPPDATA 'ClaudeUsage'
+$data = Join-Path $env:LOCALAPPDATA 'AIUsage'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-$entryKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeUsage'
+$entryKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AIUsage'
 $script:required = 0
 $script:passed = 0
 $script:failedIds = @()
@@ -116,19 +116,19 @@ Check 'install.oneline' {
 
 Check 'exe.version_info' {
     $v = (Get-Item -LiteralPath $exe).VersionInfo
-    if ($v.ProductName -eq 'Claude Usage' -and $v.CompanyName -eq 'Deep-In-Sight' -and $v.ProductVersion -eq '0.0.0-ci' -and $v.FileVersion -eq '0.0.0.0') {
+    if ($v.ProductName -eq 'AI Usage' -and $v.CompanyName -eq 'Deep-In-Sight' -and $v.ProductVersion -eq '0.0.0-ci' -and $v.FileVersion -eq '0.0.0.0') {
         Pass 'exe.version_info' "$($v.ProductName) $($v.ProductVersion)"
     } else { Fail 'exe.version_info' "product=$($v.ProductName) company=$($v.CompanyName) product_version=$($v.ProductVersion) file_version=$($v.FileVersion)" }
 }
 
 Check 'autostart.run_value' {
-    $rv = (Get-ItemProperty -Path $runKey -Name 'ClaudeUsage' -ErrorAction SilentlyContinue).ClaudeUsage
+    $rv = (Get-ItemProperty -Path $runKey -Name 'AIUsage' -ErrorAction SilentlyContinue).AIUsage
     if ($rv -eq "`"$exe`" run") { Pass 'autostart.run_value' $rv } else { Fail 'autostart.run_value' "value=$rv" }
 }
 
 Check 'uninstall.entry' {
     $e = Get-ItemProperty -Path $entryKey -ErrorAction SilentlyContinue
-    if ($e -and $e.DisplayName -eq 'Claude Usage' -and $e.DisplayVersion -eq '0.0.0-ci' -and $e.Publisher -eq 'Deep-In-Sight' -and $e.UninstallString -eq "`"$exe`" uninstall") {
+    if ($e -and $e.DisplayName -eq 'AI Usage' -and $e.DisplayVersion -eq '0.0.0-ci' -and $e.Publisher -eq 'Deep-In-Sight' -and $e.UninstallString -eq "`"$exe`" uninstall") {
         Pass 'uninstall.entry' $e.UninstallString
     } else { Fail 'uninstall.entry' "name=$($e.DisplayName) version=$($e.DisplayVersion) publisher=$($e.Publisher) uninstall=$($e.UninstallString)" }
 }
@@ -210,7 +210,7 @@ Check 'uninstall.via_entry' {
     $r = RunExe $Matches[1] $Matches[2] 120
     [IO.File]::WriteAllText((Join-Path $out 'uninstall.log'), "$($r.out)`n--- stderr`n$($r.err)")
     Start-Sleep -Seconds 3
-    $rv = (Get-ItemProperty -Path $runKey -Name 'ClaudeUsage' -ErrorAction SilentlyContinue).ClaudeUsage
+    $rv = (Get-ItemProperty -Path $runKey -Name 'AIUsage' -ErrorAction SilentlyContinue).AIUsage
     $problems = @()
     if ($r.code -ne 0) { $problems += "code=$($r.code) timeout=$($r.timeout)" }
     if ($rv) { $problems += 'run_value_left' }

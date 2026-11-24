@@ -9,13 +9,13 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 
-exe="$HOME/.local/bin/claude-usage"
-data="$HOME/.config/claude-usage"
-unit="$HOME/.config/systemd/user/claude-usage.service"
-desktop="$HOME/.config/autostart/claude-usage.desktop"
+exe="$HOME/.local/bin/ai-usage"
+data="$HOME/.config/ai-usage"
+unit="$HOME/.config/systemd/user/ai-usage.service"
+desktop="$HOME/.config/autostart/ai-usage.desktop"
 oneliner() { timeout 180 sh -c "wget -qO- $BASE/files/install-ci.sh | sh"; }
 agent_count() { pgrep -f "^$exe run" | wc -l; }
-main_pid() { systemctl --user show -p MainPID --value claude-usage.service 2>/dev/null; }
+main_pid() { systemctl --user show -p MainPID --value ai-usage.service 2>/dev/null; }
 
 fake_login file
 start_fakeserver || { fail fakeserver "did not start"; finish; exit 1; }
@@ -30,9 +30,9 @@ f=$(file -b "$exe" 2>&1)
 case "$f" in *"statically linked"*) pass binary.static "$f" ;; *) fail binary.static "$f" ;; esac
 
 # systemd.active
-a=$(systemctl --user is-active claude-usage.service 2>&1)
+a=$(systemctl --user is-active ai-usage.service 2>&1)
 if [ "$a" = active ]; then pass systemd.active "$a"; else fail systemd.active "$a"; fi
-systemctl --user status claude-usage.service --no-pager > "$out/systemd-status.txt" 2>&1
+systemctl --user status ai-usage.service --no-pager > "$out/systemd-status.txt" 2>&1
 
 # sync.arrives
 # run creates device-id when it starts, which may be just after install returns

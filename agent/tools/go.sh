@@ -3,16 +3,16 @@
 # Usage: agent/tools/go.sh <go args...>
 # The repository is mounted at /repo (agent/ is /repo/agent) so tests can
 # read files next to agent/, such as the GNOME extension's clawd.svg.
-# GOOS, GOARCH, CGO_ENABLED, GOFLAGS and CLAUDE_USAGE_* (test switches) are
+# GOOS, GOARCH, CGO_ENABLED, GOFLAGS and AI_USAGE_* (test switches) are
 # passed through when set.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 root=$(cd "$here/.." && pwd)
-cache="${XDG_CACHE_HOME:-$HOME/.cache}/claude-usage-agent-go"
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/ai-usage-agent-go"
 mkdir -p "$cache/mod" "$cache/build" "$cache/home"
 case "$(pwd)" in "$here"*) wd="/repo/agent${PWD#"$here"}" ;; *) wd=/repo/agent ;; esac
 envs=""
-for v in GOOS GOARCH CGO_ENABLED GOFLAGS $(env | sed -n 's/^\(CLAUDE_USAGE_[A-Z0-9_]*\)=.*/\1/p'); do
+for v in GOOS GOARCH CGO_ENABLED GOFLAGS $(env | sed -n 's/^\(AI_USAGE_[A-Z0-9_]*\)=.*/\1/p'); do
   eval "val=\${$v:-}"
   [ -n "$val" ] && envs="$envs -e $v=$val"
 done

@@ -13,8 +13,8 @@ func forOS(getenv func(string) string, home string) (Dirs, error) {
 		return Dirs{}, errors.New("paths: LOCALAPPDATA is not set")
 	}
 	return Dirs{
-		Data:       filepath.Join(local, "ClaudeUsage"),
-		InstallExe: filepath.Join(local, "Programs", "ClaudeUsage", "claude-usage.exe"),
+		Data:       filepath.Join(local, "AIUsage"),
+		InstallExe: filepath.Join(local, "Programs", "AIUsage", "ai-usage.exe"),
 		Home:       home,
 	}, nil
 }

@@ -19,7 +19,7 @@ const (
 func newTest(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 	files, scripts := t.TempDir(), t.TempDir()
-	if err := os.WriteFile(filepath.Join(files, "SHA256SUMS"), []byte("x  claude-usage-linux-amd64\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(files, "SHA256SUMS"), []byte("x  ai-usage-linux-amd64\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(scripts, "install-ci.sh"), []byte("BASE='@BASE@'\nKEY='@KEY@'\n"), 0o644); err != nil {
@@ -157,7 +157,7 @@ func TestScriptSubstitution(t *testing.T) {
 	if code != 200 || !strings.Contains(body, "BASE='"+srv.URL+"'") || !strings.Contains(body, key) || strings.Contains(body, "@BASE@") {
 		t.Fatalf("%d %s", code, body)
 	}
-	if code, body := get(t, srv, "/files/SHA256SUMS"); code != 200 || !strings.Contains(body, "claude-usage-linux-amd64") {
+	if code, body := get(t, srv, "/files/SHA256SUMS"); code != 200 || !strings.Contains(body, "ai-usage-linux-amd64") {
 		t.Fatalf("%d %s", code, body)
 	}
 	for _, p := range []string{"/files/../main_test.go", "/files/nothing", "/files/"} {

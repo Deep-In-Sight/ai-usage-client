@@ -13,8 +13,8 @@ func forOS(_ func(string) string, home string) (Dirs, error) {
 		return Dirs{}, errors.New("paths: no home folder")
 	}
 	return Dirs{
-		Data:       filepath.Join(home, ".config", "claude-usage"),
-		InstallExe: filepath.Join(home, ".local", "bin", "claude-usage"),
+		Data:       filepath.Join(home, ".config", "ai-usage"),
+		InstallExe: filepath.Join(home, ".local", "bin", "ai-usage"),
 		Home:       home,
 	}, nil
 }

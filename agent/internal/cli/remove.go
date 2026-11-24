@@ -70,7 +70,7 @@ func (r *remover) step(name string) error {
 	case "stop":
 		for _, m := range r.methods {
 			if err := m.Stop(ctx); err != nil {
-				fmt.Fprintln(env.Stderr, "claude-usage uninstall:", err)
+				fmt.Fprintln(env.Stderr, "ai-usage uninstall:", err)
 			}
 		}
 	case "kill":
@@ -89,7 +89,7 @@ func (r *remover) step(name string) error {
 		exe := env.Dirs.InstallExe
 		if env.goos() == "windows" && samePath(env.Exe, exe) {
 			// A running exe cannot be deleted, but it can be moved aside.
-			dst := filepath.Join(env.tempDir(), fmt.Sprintf("claude-usage-removed-%d.exe", os.Getpid()))
+			dst := filepath.Join(env.tempDir(), fmt.Sprintf("ai-usage-removed-%d.exe", os.Getpid()))
 			if err := os.Rename(exe, dst); err != nil {
 				fmt.Fprintf(env.Stdout, text.CannotRemoveRunning+"\n", exe)
 				// Keep it findable: put the "Installed apps" entry back.
@@ -109,7 +109,7 @@ func (r *remover) step(name string) error {
 	case "remove-data":
 		// Only ever remove our own folder.
 		switch filepath.Base(env.Dirs.Data) {
-		case "claude-usage", "ClaudeUsage":
+		case "ai-usage", "AIUsage":
 			return os.RemoveAll(env.Dirs.Data)
 		}
 		return fmt.Errorf("unexpected data folder, left in place: %s", env.Dirs.Data)
@@ -144,7 +144,7 @@ func (winAppFuncs) Register(e winapp.Entry) error { return winapp.Register(e) }
 func (winAppFuncs) Unregister() error             { return winapp.Unregister() }
 
 // removedExe is the name a self-removing Windows executable is moved to.
-var removedExe = regexp.MustCompile(`^claude-usage-removed-[0-9]+\.exe$`)
+var removedExe = regexp.MustCompile(`^ai-usage-removed-[0-9]+\.exe$`)
 
 // sweepRemoved deletes executables an earlier uninstall moved to %TEMP%
 // (only names of exactly that form).

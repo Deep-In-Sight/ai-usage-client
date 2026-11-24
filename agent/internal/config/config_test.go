@@ -25,9 +25,9 @@ func eq[T any](t *testing.T, got, want T) {
 }
 
 func TestParseInstallerConfig(t *testing.T) {
-	c, err := Parse([]byte("\ufeff" + `{"server_urls":["http://claude-usage.local/","http://192.0.2.10:8700"],"ingest_key":"k-123","extra":1}`))
+	c, err := Parse([]byte("\ufeff" + `{"server_urls":["http://ai-usage.local/","http://192.0.2.10:8700"],"ingest_key":"k-123","extra":1}`))
 	must(t, err)
-	eq(t, c.ServerURLs, []string{"http://claude-usage.local", "http://192.0.2.10:8700"})
+	eq(t, c.ServerURLs, []string{"http://ai-usage.local", "http://192.0.2.10:8700"})
 	eq(t, c.IngestKey, "k-123")
 	eq(t, c.ClaudeConfigDir, "")
 }
@@ -61,9 +61,9 @@ func TestValidateRejects(t *testing.T) { // each must fail, and no error text co
 
 func TestNormalizeURL(t *testing.T) {
 	for in, want := range map[string]string{
-		"http://claude-usage.local/": "http://claude-usage.local",
-		"HTTP://192.0.2.10:8700":     "http://192.0.2.10:8700",
-		" https://x.example ":        "https://x.example",
+		"http://ai-usage.local/": "http://ai-usage.local",
+		"HTTP://192.0.2.10:8700": "http://192.0.2.10:8700",
+		" https://x.example ":    "https://x.example",
 	} {
 		got, err := NormalizeURL(in)
 		must(t, err)
@@ -75,7 +75,7 @@ func TestSaveIsPrivateAndRoundTrips(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "data")
 	p := filepath.Join(dir, "config.json")
 	abs := t.TempDir()
-	c := Config{ServerURLs: []string{"http://claude-usage.local", "http://192.0.2.10:8700"}, IngestKey: "k-123", ClaudeConfigDir: abs}
+	c := Config{ServerURLs: []string{"http://ai-usage.local", "http://192.0.2.10:8700"}, IngestKey: "k-123", ClaudeConfigDir: abs}
 	must(t, Save(p, c))
 	got, err := Load(p)
 	must(t, err)
@@ -125,7 +125,7 @@ func TestStateMissingOrCorruptIsZero(t *testing.T) {
 	must(t, os.WriteFile(bad, []byte("{not json"), 0o600))
 	eq(t, LoadState(bad), State{})
 	p := filepath.Join(dir, "state.json")
-	s := State{LastGoodURL: "http://192.0.2.10:8700", ServerURLs: []string{"http://claude-usage.local"}, BatchLimit: 500}
+	s := State{LastGoodURL: "http://192.0.2.10:8700", ServerURLs: []string{"http://ai-usage.local"}, BatchLimit: 500}
 	must(t, SaveState(p, s))
 	eq(t, LoadState(p), s)
 }

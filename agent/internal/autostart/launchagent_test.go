@@ -13,22 +13,22 @@ const wantPlist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>io.github.deep-in-sight.claude-usage</string>
-  <key>ProgramArguments</key><array><string>/Users/a b/Library/Application Support/ClaudeUsage/claude-usage</string><string>run</string></array>
+  <key>Label</key><string>io.github.deep-in-sight.ai-usage</string>
+  <key>ProgramArguments</key><array><string>/Users/a b/Library/Application Support/AIUsage/ai-usage</string><string>run</string></array>
   <key>RunAtLoad</key><true/>
   <key>LimitLoadToSessionType</key><string>Aqua</string>
   <key>ProcessType</key><string>Interactive</string>
-  <key>StandardOutPath</key><string>/Users/a b/Library/Application Support/ClaudeUsage/agent.log</string>
-  <key>StandardErrorPath</key><string>/Users/a b/Library/Application Support/ClaudeUsage/agent.log</string>
+  <key>StandardOutPath</key><string>/Users/a b/Library/Application Support/AIUsage/agent.log</string>
+  <key>StandardErrorPath</key><string>/Users/a b/Library/Application Support/AIUsage/agent.log</string>
 </dict>
 </plist>
 `
 
 func TestPlistText(t *testing.T) {
-	dir := "/Users/a b/Library/Application Support/ClaudeUsage"
-	eq(t, PlistText(dir+"/claude-usage", dir+"/agent.log"), wantPlist)
-	got := PlistText("/Users/R&D <x>/claude-usage", "/l")
-	if !strings.Contains(got, "<string>/Users/R&amp;D &lt;x&gt;/claude-usage</string>") {
+	dir := "/Users/a b/Library/Application Support/AIUsage"
+	eq(t, PlistText(dir+"/ai-usage", dir+"/agent.log"), wantPlist)
+	got := PlistText("/Users/R&D <x>/ai-usage", "/l")
+	if !strings.Contains(got, "<string>/Users/R&amp;D &lt;x&gt;/ai-usage</string>") {
 		t.Fatal(got)
 	}
 }
@@ -41,12 +41,12 @@ func newLaunchAgent(t *testing.T, f *fakeRun) *LaunchAgent {
 func TestLaunchAgentRegisterCalls(t *testing.T) {
 	f := &fakeRun{}
 	la := newLaunchAgent(t, f)
-	exe := "/Users/a b/Library/Application Support/ClaudeUsage/claude-usage"
+	exe := "/Users/a b/Library/Application Support/AIUsage/ai-usage"
 	must(t, la.Register(bg, exe))
 	eq(t, la.Name(), "launchagent")
-	eq(t, la.PlistPath(), filepath.Join(la.Home, "Library", "LaunchAgents", "io.github.deep-in-sight.claude-usage.plist"))
+	eq(t, la.PlistPath(), filepath.Join(la.Home, "Library", "LaunchAgents", "io.github.deep-in-sight.ai-usage.plist"))
 	eq(t, f.calls, [][]string{
-		{"launchctl", "bootout", "gui/501/io.github.deep-in-sight.claude-usage"},
+		{"launchctl", "bootout", "gui/501/io.github.deep-in-sight.ai-usage"},
 		{"launchctl", "bootstrap", "gui/501", la.PlistPath()},
 	})
 	b, err := os.ReadFile(la.PlistPath())
@@ -78,9 +78,9 @@ func TestLaunchAgentState(t *testing.T) {
 	f := &fakeRun{}
 	la := newLaunchAgent(t, f)
 	eq(t, la.State(bg), "not registered")
-	must(t, la.SetEnabled(bg, "/x/claude-usage", true))
+	must(t, la.SetEnabled(bg, "/x/ai-usage", true))
 	f.reply = func([]string) (string, error) {
-		return "gui/501/io.github.deep-in-sight.claude-usage = {\n\tactive count = 1\n\tstate = running\n}", nil
+		return "gui/501/io.github.deep-in-sight.ai-usage = {\n\tactive count = 1\n\tstate = running\n}", nil
 	}
 	eq(t, la.State(bg), "running")
 	f.reply = func([]string) (string, error) { return "Could not find service", errors.New("exit status 113") }
@@ -91,20 +91,20 @@ func TestLaunchAgentToggleStopUnregister(t *testing.T) {
 	f := &fakeRun{}
 	la := newLaunchAgent(t, f)
 	eq(t, la.Enabled(bg), false)
-	must(t, la.SetEnabled(bg, "/x/claude-usage", true))
+	must(t, la.SetEnabled(bg, "/x/ai-usage", true))
 	eq(t, la.Enabled(bg), true)
 	eq(t, len(f.calls), 0) // the switch never starts or stops anything
-	must(t, la.SetEnabled(bg, "/x/claude-usage", false))
+	must(t, la.SetEnabled(bg, "/x/ai-usage", false))
 	eq(t, la.Enabled(bg), false)
 	eq(t, len(f.calls), 0)
 
-	must(t, la.Register(bg, "/x/claude-usage"))
+	must(t, la.Register(bg, "/x/ai-usage"))
 	f.calls = nil
 	must(t, la.Stop(bg))
-	eq(t, f.calls, [][]string{{"launchctl", "bootout", "gui/501/io.github.deep-in-sight.claude-usage"}})
+	eq(t, f.calls, [][]string{{"launchctl", "bootout", "gui/501/io.github.deep-in-sight.ai-usage"}})
 	f.calls = nil
 	must(t, la.Unregister(bg))
-	eq(t, f.calls, [][]string{{"launchctl", "bootout", "gui/501/io.github.deep-in-sight.claude-usage"}})
+	eq(t, f.calls, [][]string{{"launchctl", "bootout", "gui/501/io.github.deep-in-sight.ai-usage"}})
 	if _, err := os.Stat(la.PlistPath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("plist left")
 	}

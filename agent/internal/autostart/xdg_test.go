@@ -11,33 +11,33 @@ import (
 
 const wantDesktop = `[Desktop Entry]
 Type=Application
-Name=Claude Usage
+Name=AI Usage
 Comment=Shows Claude plan usage and reports it to your team's server
-Exec=/h/a/.local/bin/claude-usage run
+Exec=/h/a/.local/bin/ai-usage run
 Terminal=false
 X-GNOME-Autostart-enabled=true
 `
 
 func TestDesktopText(t *testing.T) {
-	eq(t, DesktopText("/h/a/.local/bin/claude-usage"), wantDesktop)
+	eq(t, DesktopText("/h/a/.local/bin/ai-usage"), wantDesktop)
 }
 
 func TestDesktopTextQuoting(t *testing.T) {
-	got := DesktopText("/h/a b/$x%/.local/bin/claude-usage")
-	want := `Exec="/h/a b/\\$x%%/.local/bin/claude-usage" run`
+	got := DesktopText("/h/a b/$x%/.local/bin/ai-usage")
+	want := `Exec="/h/a b/\\$x%%/.local/bin/ai-usage" run`
 	if !containsLine(got, want) {
 		t.Fatalf("%s", got)
 	}
 	// a space alone is enough to need quotes
-	got = DesktopText("/h/a b/.local/bin/claude-usage")
-	if !containsLine(got, `Exec="/h/a b/.local/bin/claude-usage" run`) {
+	got = DesktopText("/h/a b/.local/bin/ai-usage")
+	if !containsLine(got, `Exec="/h/a b/.local/bin/ai-usage" run`) {
 		t.Fatalf("%s", got)
 	}
-	if strings.Contains(DesktopText("/h/a/claude-usage"), "NoDisplay") {
+	if strings.Contains(DesktopText("/h/a/ai-usage"), "NoDisplay") {
 		t.Fatal("the entry must be visible in Startup Applications")
 	}
-	got = DesktopText("/h/q\"`\\/claude-usage")
-	want = `Exec="/h/q\\"\\` + "`" + `\\\\/claude-usage" run`
+	got = DesktopText("/h/q\"`\\/ai-usage")
+	want = `Exec="/h/q\\"\\` + "`" + `\\\\/ai-usage" run`
 	if !containsLine(got, want) {
 		t.Fatalf("%s\nwant %s", got, want)
 	}
@@ -71,12 +71,12 @@ func TestXDGRegisterToggleUnregister(t *testing.T) {
 		started = append(started, append([]string{exe}, args...))
 		return nil
 	}}
-	path := filepath.Join(home, ".config", "autostart", "claude-usage.desktop")
+	path := filepath.Join(home, ".config", "autostart", "ai-usage.desktop")
 	eq(t, x.Name(), "xdg-autostart")
 	eq(t, x.Available(bg), true)
 	eq(t, x.State(bg), "not registered")
-	must(t, x.Register(bg, "/h/a/.local/bin/claude-usage"))
-	eq(t, started, [][]string{{"/h/a/.local/bin/claude-usage", "run"}})
+	must(t, x.Register(bg, "/h/a/.local/bin/ai-usage"))
+	eq(t, started, [][]string{{"/h/a/.local/bin/ai-usage", "run"}})
 	b, err := os.ReadFile(path)
 	must(t, err)
 	eq(t, string(b), wantDesktop)
@@ -87,9 +87,9 @@ func TestXDGRegisterToggleUnregister(t *testing.T) {
 	eq(t, x.State(bg), "registered")
 	eq(t, x.Enabled(bg), true)
 
-	must(t, x.SetEnabled(bg, "/h/a/.local/bin/claude-usage", false))
+	must(t, x.SetEnabled(bg, "/h/a/.local/bin/ai-usage", false))
 	eq(t, x.Enabled(bg), false)
-	must(t, x.SetEnabled(bg, "/h/a/.local/bin/claude-usage", true))
+	must(t, x.SetEnabled(bg, "/h/a/.local/bin/ai-usage", true))
 	eq(t, x.Enabled(bg), true)
 	eq(t, len(started), 1) // the switch starts nothing
 
@@ -100,7 +100,7 @@ func TestXDGRegisterToggleUnregister(t *testing.T) {
 	must(t, x.Unregister(bg))
 
 	x.Start = func(string, ...string) error { return errors.New("no exec") }
-	if err := x.Register(bg, "/h/a/.local/bin/claude-usage"); !errors.Is(err, ErrStartFailed) {
+	if err := x.Register(bg, "/h/a/.local/bin/ai-usage"); !errors.Is(err, ErrStartFailed) {
 		t.Fatalf("%v", err)
 	}
 }
