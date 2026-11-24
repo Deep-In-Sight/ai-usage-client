@@ -343,3 +343,35 @@ func TestRunYieldsToANewerAgent(t *testing.T) {
 	contains(t, te.err.String(), "ai-usage: already running (pid 4343, started after this one)")
 	eq(t, len(fs.requests()), 0)
 }
+
+// A newcomer that could not run (a broken config.json, an unreadable
+// backlog or device id) leaves the running agent alone: it finds out
+// before it asks the holder of run.lock to stop (review m2).
+func TestNewcomerThatCannotRunLeavesTheRunningAgent(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("process identities (and so takeover) are Linux and macOS only")
+	}
+	for name, spoil := range map[string]func(te *testEnv){
+		"config":    func(te *testEnv) { must(t, os.WriteFile(te.Dirs.File(paths.ConfigFile), []byte("{not json"), 0o600)) },
+		"backlog":   func(te *testEnv) { must(t, os.MkdirAll(te.Dirs.File(paths.BacklogFile), 0o700)) },
+		"device id": func(te *testEnv) { must(t, os.MkdirAll(te.Dirs.File(paths.DeviceIDFile), 0o700)) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			fs := newFakeServer(t)
+			te := trayEnv(t, fs)
+			te.GOOS = "linux"
+			te.vars["XDG_SESSION_TYPE"] = "x11"
+			spoil(te)
+			called := 0
+			te.TakeOver = func(ctx context.Context, path string, self procs.Identity) (func(), procs.Identity, error) {
+				called++
+				unlock, err := procs.LockAs(path, self)
+				return unlock, procs.Identity{PID: 4242, Start: 1}, err
+			}
+			te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error { return nil }
+			eq(t, te.main("run"), 1)
+			eq(t, called, 0)
+			eq(t, len(fs.requests()), 0)
+		})
+	}
+}

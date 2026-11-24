@@ -226,6 +226,7 @@ func TestNoArgsOnInstalledExeRunsOnWindows(t *testing.T) {
 	te.Exe = te.Dirs.InstallExe
 	must(t, os.MkdirAll(filepath.Dir(te.Exe), 0o755))
 	must(t, os.WriteFile(te.Exe, []byte("BIN"), 0o755))
+	must(t, config.Save(te.Dirs.File(paths.ConfigFile), mustParse(t, validConfig))) // run checks it before the lock
 	unlock, err := procs.Lock(te.Dirs.File(paths.LockFile))
 	must(t, err)
 	eq(t, te.main(), 1)

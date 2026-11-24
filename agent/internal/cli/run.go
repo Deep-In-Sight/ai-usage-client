@@ -59,6 +59,21 @@ func runCmd(env Env, args []string) int {
 		clientMode = "headless"
 	}
 
+	// A newcomer finds out whether it can run before it asks a running agent
+	// to stop (review m2): config.json, and that the device id and the
+	// backlog can be read.
+	cfg, err := config.Load(env.Dirs.File(paths.ConfigFile))
+	if err != nil {
+		fmt.Fprintln(env.Stderr, "ai-usage:", err)
+		return 1
+	}
+	for _, f := range []struct{ name, what string }{{paths.DeviceIDFile, "device id"}, {paths.BacklogFile, "backlog"}} {
+		if err := readable(env.Dirs.File(f.name)); err != nil {
+			fmt.Fprintf(env.Stderr, "ai-usage: %s: %v\n", f.what, err)
+			return 1
+		}
+	}
+
 	ctx, stop := signal.NotifyContext(env.ctx(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	unlock, replaced, err := lockRun(ctx, env, headless)
@@ -81,11 +96,6 @@ func runCmd(env Env, args []string) int {
 	release = func() { releaseOnce.Do(unlock) }
 	defer func() { release() }()
 
-	cfg, err := config.Load(env.Dirs.File(paths.ConfigFile))
-	if err != nil {
-		fmt.Fprintln(env.Stderr, "ai-usage:", err)
-		return 1
-	}
 	info := osinfo.Current()
 	scrub := logfile.NewScrubber(logfile.Personal{Home: env.Dirs.Home, User: info.OSUser, Host: info.Hostname}, cfg.IngestKey)
 	logOut, closeLog := logOutput(env, scrub)
@@ -286,6 +296,15 @@ func runCmd(env Env, args []string) int {
 	}
 	// 6: Quit, Remove or a signal.
 	return finish()
+}
+
+// readable: the file at p can be read, or there is none yet.
+func readable(p string) error {
+	_, err := os.ReadFile(p)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // lockRun takes run.lock, writing this process's identity into it. A
