@@ -119,3 +119,15 @@ func TestTextNamesEveryModuleAndItsVersion(t *testing.T) {
 		t.Fatal("miekg/dns missing")
 	}
 }
+
+// Git must not convert the licence files' line endings (core.autocrlf on
+// Windows would make them differ from the modules' files).
+func TestLicenceFilesKeepTheirBytesInGit(t *testing.T) {
+	b, err := os.ReadFile("../../../.gitattributes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "agent/internal/notices/licenses/** -text\n") {
+		t.Fatal(".gitattributes does not mark the licence files -text")
+	}
+}

@@ -1,0 +1,3 @@
+# The embedded licence notices must stay byte-identical to the modules' files
+# (no CRLF conversion on Windows checkouts).
+agent/internal/notices/licenses/** -text
