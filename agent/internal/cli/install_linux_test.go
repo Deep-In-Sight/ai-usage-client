@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -379,6 +380,34 @@ func TestInstallRecordsCodexPaths(t *testing.T) {
 	if strings.Contains(te2.out.String(), "\nCodex ") {
 		t.Fatalf("Codex lines without Codex:\n%s", te2.out.String())
 	}
+}
+
+// Review m-4: an install from a shell with a relative PATH entry
+// (./node_modules/.bin) inside some repository records nothing from it,
+// and a recorded codex_path that is not absolute is not kept.
+func TestInstallRecordsNoRelativeCodexPath(t *testing.T) {
+	te := newEnv(t)
+	te.runner.reply = systemdOK("yes", nil)
+	repo := t.TempDir()
+	t.Chdir(repo)
+	writeFile(t, filepath.Join(repo, "node_modules", ".bin", "codex"), "\x7fELF fake")
+	must(t, os.Chmod(filepath.Join(repo, "node_modules", ".bin", "codex"), 0o755))
+	te.vars["PATH"] = "./node_modules/.bin" + string(os.PathListSeparator) + filepath.Join(t.TempDir(), "empty")
+	cfgPath := writeCfg(t, validConfig)
+	eq(t, te.main("install", "--config", cfgPath, "--headless"), 0)
+	c, err := config.Load(te.Dirs.File(paths.ConfigFile))
+	must(t, err)
+	eq(t, c.CodexPath, "")
+	// an older install recorded a relative path: dropped
+	c.CodexPath = filepath.Join("node_modules", ".bin", "codex")
+	b, err := json.Marshal(c)
+	must(t, err)
+	must(t, os.WriteFile(te.Dirs.File(paths.ConfigFile), b, 0o600))
+	te.vars["PATH"] = filepath.Join(t.TempDir(), "empty")
+	eq(t, te.main("install", "--config", cfgPath, "--headless"), 0)
+	c, err = config.Load(te.Dirs.File(paths.ConfigFile))
+	must(t, err)
+	eq(t, c.CodexPath, "")
 }
 
 // An npm-installed codex is recorded as the binary it runs, never the

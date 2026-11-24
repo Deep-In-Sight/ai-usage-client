@@ -49,7 +49,9 @@ func findCLI(goos string, cfg config.Config, userHome string, getenv func(string
 			out = append(out, p)
 		}
 	}
-	add(cfg.CodexPath)
+	if filepath.IsAbs(cfg.CodexPath) {
+		add(cfg.CodexPath) // a relative one would depend on the agent's working directory (review m-4)
+	}
 	add(filepath.Join(Home(cfg, userHome), "packages", "standalone", "current", "bin", name))
 	if p := LookPath(goos, getenv); p != "" {
 		add(p)
@@ -105,8 +107,8 @@ func extensionCLIs(userHome, name string) []string {
 	return out
 }
 
-// LookPath finds codex on PATH as getenv gives it, as the shell would: an
-// npm shim is resolved to the native binary it runs, any other link to
+// LookPath finds codex on PATH as getenv gives it, as the shell would
+// (absolute PATH entries only): an npm shim is resolved to the native binary it runs, any other link to
 // its target. "" when there is none (or only a shim whose binary is
 // missing).
 func LookPath(goos string, getenv func(string) string) string {
@@ -130,7 +132,10 @@ func LookPath(goos string, getenv func(string) string) string {
 		names = []string{"codex"}
 	}
 	for _, dir := range filepath.SplitList(path) {
-		if dir == "" {
+		if dir == "" || !filepath.IsAbs(dir) {
+			// a relative entry (./node_modules/.bin) names a folder of
+			// whatever directory the shell is in, never searched (as
+			// exec.LookPath refuses it since Go 1.19; review m-4)
 			continue
 		}
 		for _, n := range names {

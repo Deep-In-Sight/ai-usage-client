@@ -113,7 +113,7 @@ func install(env Env, args []string) (int, string) {
 		if abs, err := filepath.Abs(p); err == nil {
 			cfg.CodexPath = abs
 		}
-	} else if oldErr == nil && old.CodexPath != "" {
+	} else if oldErr == nil && filepath.IsAbs(old.CodexPath) { // never a relative one (review m-4)
 		if st, err := os.Stat(old.CodexPath); err == nil && st.Mode().IsRegular() {
 			cfg.CodexPath = old.CodexPath // found before, from another shell, and still there
 		}

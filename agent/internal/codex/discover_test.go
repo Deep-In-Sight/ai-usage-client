@@ -168,3 +168,40 @@ func TestPickCLIHighest(t *testing.T) {
 		t.Fatal("picked one without a version")
 	}
 }
+
+// Review m-4: a relative PATH entry (./node_modules/.bin) names a folder
+// of whatever directory a shell happened to be in; it is never searched,
+// and a recorded codex_path that is not absolute is never a candidate.
+func TestRelativePathsAreNeverCandidates(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	exe(t, filepath.Join(dir, "rel", exeName()))
+	abs := t.TempDir()
+	absCLI := exe(t, filepath.Join(abs, exeName()))
+	for _, c := range []struct{ path, want string }{
+		{"rel", ""},
+		{"." + string(filepath.Separator) + "rel", ""},
+		{"rel" + string(os.PathListSeparator) + abs, absCLI},
+	} {
+		getenv := func(k string) string {
+			switch k {
+			case "PATH", "Path":
+				return c.path
+			case "PATHEXT":
+				return ".EXE"
+			}
+			return ""
+		}
+		got := LookPath(runtime.GOOS, getenv)
+		if got != "" {
+			got, _ = filepath.EvalSymlinks(got)
+		}
+		want := c.want
+		if want != "" {
+			want, _ = filepath.EvalSymlinks(want)
+		}
+		eq(t, got, want)
+	}
+	cfg := config.Config{CodexPath: filepath.Join("rel", exeName()), CodexHome: filepath.Join(t.TempDir(), "none")}
+	eq(t, len(FindCLI(cfg, t.TempDir(), func(string) string { return "" })), 0)
+}
