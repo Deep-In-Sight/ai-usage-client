@@ -26,11 +26,8 @@ func TestRewantedHelperWhoseStartFailsBacksOff(t *testing.T) {
 	sim.sup.Want(nil)                            // claude asked to quit (it does not end yet); 2: the neutral one
 	sim.sup.Want([]provider.ID{provider.Claude}) // claude wanted again before it ended
 	old := sim.procs(provider.Claude)[0]
-	old.exit(0) // now it ends: 3 (fails)
-	sim.quiesce()
-	if n := sim.spawnsOf(provider.Claude); n != 2 {
-		t.Fatalf("claude started %d times at once (want 2: the first, then the failed restart)", n)
-	}
+	old.exit(0)                        // now it ends: 3 (fails)
+	sim.waitSpawns(provider.Claude, 2) // the first, then the failed restart; not more
 	if !sim.loggedf("cannot start") {
 		t.Fatal("the failed start was not logged")
 	}
