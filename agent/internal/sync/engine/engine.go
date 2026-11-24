@@ -218,18 +218,35 @@ func New(d Deps) *Engine {
 	return e
 }
 
-// migrateLatest renames a v0.7/v0.8 latest.json to Claude's file, unless
-// that exists already.
+// migrateLatest renames a v0.7/v0.8 latest.json to Claude's file. When
+// both are there (a downgrade wrote latest.json again), the one with the
+// later fetched_at is kept and the other removed (review m-L).
 func migrateLatest(legacy, claude string, lg *log.Logger) {
-	if _, err := os.Stat(claude); err == nil {
+	if _, err := os.Stat(legacy); err != nil {
 		return
 	}
-	if _, err := os.Stat(legacy); err != nil {
+	if _, err := os.Stat(claude); err == nil && !newer(latestAt(legacy), latestAt(claude)) {
+		if err := os.Remove(legacy); err != nil {
+			lg.Printf("latest: %v", err)
+		}
 		return
 	}
 	if err := os.Rename(legacy, claude); err != nil {
 		lg.Printf("latest: %v", err)
 	}
+}
+
+// latestAt is a latest file's fetched_at ("" when unreadable).
+func latestAt(p string) string {
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	var x protocol.Latest
+	if json.Unmarshal(b, &x) != nil {
+		return ""
+	}
+	return x.FetchedAt
 }
 
 func (e *Engine) savedLimit(id provider.ID) config.FetchLimit {

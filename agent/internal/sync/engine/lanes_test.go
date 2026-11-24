@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,5 +168,36 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// After a downgrade (v0.8 wrote latest.json again) and an upgrade, the
+// newer of the two files is kept and the other removed (review m-L).
+func TestLatestFilesAfterADowngradeKeepTheNewer(t *testing.T) {
+	file := func(at string) string {
+		return `{"fetched_at":"` + at + `","usage":{"seven_day":{"utilization":9}}}`
+	}
+	for _, c := range []struct{ legacy, claude, want string }{
+		{"2026-11-24T09:30:00.000Z", "2026-11-24T08:00:00.000Z", "2026-11-24T09:30:00.000Z"},
+		{"2026-11-24T07:00:00.000Z", "2026-11-24T08:00:00.000Z", "2026-11-24T08:00:00.000Z"},
+	} {
+		dir := t.TempDir()
+		must(t, os.WriteFile(filepath.Join(dir, "latest.json"), []byte(file(c.legacy)), 0o600))
+		must(t, os.WriteFile(filepath.Join(dir, "latest-claude.json"), []byte(file(c.claude)), 0o600))
+		r := &rig{clk: clock.NewFake(t0), logins: &fakeLogins{login: okLogin()}, dir: dir,
+			syncer: &fakeSyncer{fn: always(protocol.Response{}, errDown)}}
+		r.fetcher = &fakeFetcher{clk: r.clk}
+		bl, err := backlog.Open(filepath.Join(dir, "backlog.json"))
+		must(t, err)
+		r.backlog = bl
+		r.e = r.build()
+		if _, err := os.Stat(filepath.Join(dir, "latest.json")); !os.IsNotExist(err) {
+			t.Fatalf("%v: latest.json left behind", c)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, "latest-claude.json"))
+		must(t, err)
+		if !strings.Contains(string(b), c.want) {
+			t.Fatalf("%v: kept %s", c, b)
+		}
 	}
 }
