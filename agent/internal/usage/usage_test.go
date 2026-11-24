@@ -240,3 +240,38 @@ func TestThisHostShape(t *testing.T) {
 	eq(t, l.FiveHour.Percent == nil, true)
 	eq(t, l.Problem, "")
 }
+
+// The server's rules (app/readings.py, review m-P): a percent is a finite
+// number from 0 to 1000, else no value (and the older shape's value is
+// used); a reset time may have a space instead of the "T".
+func TestPercentOutOfRangeIsNoValue(t *testing.T) {
+	for _, bad := range []string{"-5", "5000", "1000.5"} {
+		l := ParseLimits([]byte(`{"limits":[{"kind":"weekly_all","percent":`+bad+`}],"seven_day":{"utilization":20}}`), ScopedModel)
+		if l.Weekly.Percent == nil || *l.Weekly.Percent != 20 {
+			t.Fatalf("percent %s: weekly %v", bad, l.Weekly.Percent)
+		}
+	}
+	l := ParseLimits([]byte(`{"seven_day":{"utilization":1001}}`), ScopedModel)
+	if l.Weekly.Percent != nil || l.Problem != ProblemNoWeekly {
+		t.Fatalf("1001 alone: %v %q", l.Weekly.Percent, l.Problem)
+	}
+	l = ParseLimits([]byte(`{"seven_day":{"utilization":1000}}`), ScopedModel)
+	if l.Weekly.Percent == nil || *l.Weekly.Percent != 1000 {
+		t.Fatal("1000 is a value")
+	}
+}
+
+func TestResetTimeWithASpace(t *testing.T) {
+	want := time.Date(2026, 11, 28, 16, 0, 0, 0, time.UTC)
+	for _, s := range []string{"2026-11-28 16:00:00+00:00", "2026-11-28T16:00:00Z", "2026-11-28 16:00:00.000z", "2026-11-29 01:00:00+09:00"} {
+		got := ParseTime(s)
+		if got == nil || !got.Equal(want) {
+			t.Fatalf("%q: %v", s, got)
+		}
+	}
+	for _, s := range []string{"2026-11-28 16:00:00", "2026-11-28  16:00:00Z", "28.11.2026"} {
+		if got := ParseTime(s); got != nil {
+			t.Fatalf("%q: %v", s, got)
+		}
+	}
+}

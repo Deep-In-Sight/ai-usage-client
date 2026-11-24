@@ -41,12 +41,20 @@ type Limits struct {
 // server as the provider's parse_problem.
 const ProblemNoWeekly = "no_weekly"
 
-// ParseTime reads an RFC 3339 timestamp (microseconds allowed). It returns
-// nil for anything else. Like the JS version it keeps milliseconds at most.
+// ParseTime reads an RFC 3339 timestamp (microseconds allowed), also with
+// a space instead of the "T" and a lower-case "z", as the server reads them
+// (review m-P). A time without an offset is no time. It returns nil for
+// anything else. Like the JS version it keeps milliseconds at most.
 func ParseTime(v any) *time.Time {
 	s, ok := v.(string)
 	if !ok {
 		return nil
+	}
+	if len(s) > 10 && s[10] == ' ' {
+		s = s[:10] + "T" + s[11:]
+	}
+	if strings.HasSuffix(s, "z") {
+		s = s[:len(s)-1] + "Z"
 	}
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
@@ -58,8 +66,15 @@ func ParseTime(v any) *time.Time {
 
 func emptyLimit(label string) Limit { return Limit{Label: label, Severity: "normal"} }
 
+// Percents outside this range are no value (the server's rule).
+const (
+	percentMin = 0
+	percentMax = 1000
+)
+
+// number is a percent: a finite number from 0 to 1000, else nil.
 func number(v any) *float64 {
-	if x, ok := v.(float64); ok {
+	if x, ok := v.(float64); ok && !math.IsInf(x, 0) && !math.IsNaN(x) && x >= percentMin && x <= percentMax {
 		return &x
 	}
 	return nil
