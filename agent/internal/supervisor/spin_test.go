@@ -39,15 +39,28 @@ func TestRewantedHelperWhoseStartFailsBacksOff(t *testing.T) {
 	sim.quiesce()
 	eqInt(t, sim.spawnsOf(provider.Claude), 2)
 	sim.clk.Advance(time.Millisecond)
-	sim.quiesce()
-	eqInt(t, sim.spawnsOf(provider.Claude), 3)
+	sim.waitSpawns(provider.Claude, 3)
 	sim.clk.Advance(1999 * time.Millisecond)
 	sim.quiesce()
 	eqInt(t, sim.spawnsOf(provider.Claude), 3)
 	sim.clk.Advance(time.Millisecond)
-	sim.quiesce()
-	eqInt(t, sim.spawnsOf(provider.Claude), 4)
+	sim.waitSpawns(provider.Claude, 4)
 	sim.stop()
+}
+
+// waitSpawns waits until id was started n times, and checks that it is
+// not started more often.
+func (s *sim) waitSpawns(id provider.ID, n int) {
+	s.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for s.spawnsOf(id) < n {
+		if time.Now().After(deadline) {
+			s.t.Fatalf("%q started %d times, want %d", id, s.spawnsOf(id), n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	s.quiesce()
+	eqInt(s.t, s.spawnsOf(id), n)
 }
 
 func eqInt(t *testing.T, got, want int) {
