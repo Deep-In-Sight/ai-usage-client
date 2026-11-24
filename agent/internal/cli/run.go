@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 
@@ -155,7 +156,7 @@ func runCmd(env Env, args []string) int {
 		Providers: []provider.Provider{
 			claude.New(reader, anthropic.New(anthropic.UsageURL, ua, env.Clock), env.Clock),
 			codexprov.New(codex.NewReader(codexHome, env.Clock),
-				codex.NewClientWith(codexUsageURL, ua, env.Clock, codexTransport), codexFallback(env, cfg, codexHome)),
+				codex.NewClientWith(codexUsageURL, ua, env.Clock, codexTransport), codexFallback(env, codexHome)),
 		},
 		Syncer:           env.syncer(cfg, ua),
 		Backlog:          bl,
@@ -345,17 +346,29 @@ func sameFile(w io.Writer, p string) bool {
 	return err == nil && os.SameFile(a, b)
 }
 
-// codexFallback is the Codex lane's fallback: Codex's own CLI (codex
-// app-server), found as design D15 says (codex_path from install first)
-// and run only under its own rules (internal/codex AppServer).
-func codexFallback(env Env, cfg config.Config, codexHome string) *codex.AppServer {
-	home := env.Dirs.Home
-	list := func() []string { return codex.FindCLI(cfg, home, env.Getenv) }
-	if codexOffline(env) {
-		list = func() []string { return nil }
+// testCodexCLIEnv names a fake Codex CLI (an absolute path) that a CI
+// build (version 0.0.0-ci) runs as the Codex lane's fallback (codex
+// app-server), the only executable it may run: nothing is looked for, so
+// no real codex on a runner can be reached. Any other build ignores it.
+const testCodexCLIEnv = "AI_USAGE_TEST_CODEX_FALLBACK"
+
+// codexFallback is the Codex lane's fallback, nil in every build but a CI
+// build with testCodexCLIEnv: a released agent never starts the Codex CLI
+// in any form (not app-server, not --version), because a started codex
+// may renew and rewrite the user's sign-in by itself (review I-1, ruling
+// F1). Codex usage then comes only from the direct request, and when that
+// fails, its failure is what is reported. The process-wide switch in
+// internal/codex (AllowCLIRuns) is set to match, so nothing else in the
+// process can start codex either.
+func codexFallback(env Env, codexHome string) *codex.AppServer {
+	cli := env.Getenv(testCodexCLIEnv)
+	on := buildVersion() == "0.0.0-ci" && filepath.IsAbs(cli)
+	codex.AllowCLIRuns(on)
+	if !on {
+		return nil
 	}
 	return &codex.AppServer{
-		CLIs:    &codex.CLIFinder{List: list, Version: env.CodexVersion},
+		CLIs:    &codex.CLIFinder{List: func() []string { return []string{cli} }, Version: env.CodexVersion},
 		Home:    codexHome,
 		Version: version.Version,
 	}

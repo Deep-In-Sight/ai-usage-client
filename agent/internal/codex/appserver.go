@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -67,6 +68,23 @@ const (
 	problemInitialised = "Codex CLI did not start its session"
 )
 
+// cliRuns says whether this process may start a codex executable at all
+// (Fetch, RunVersion). It is off unless AllowCLIRuns(true) was called,
+// which only a CI build with its test switch does: a released agent never
+// starts the Codex CLI in any form, because a started codex may renew and
+// rewrite the user's sign-in on its own (review I-1, ruling F1).
+var cliRuns atomic.Bool
+
+// AllowCLIRuns switches starting codex executables on or off for this
+// process.
+func AllowCLIRuns(on bool) { cliRuns.Store(on) }
+
+// CLIRunsAllowed reports AllowCLIRuns's setting.
+func CLIRunsAllowed() bool { return cliRuns.Load() }
+
+// ErrCLIRunsOff: starting codex is switched off (AllowCLIRuns).
+var ErrCLIRunsOff = errors.New("codex: this build never starts the Codex CLI")
+
 // CanSpawn: the access token's expiry is known and more than SpawnMargin
 // away (design D2). An unknown expiry never allows a start.
 func CanSpawn(a Auth, now time.Time) bool {
@@ -111,7 +129,7 @@ func orDefault(d, def time.Duration) time.Duration {
 // token has more than SpawnMargin left, a codex executable is known and
 // the last start is StartGap ago. It runs nothing.
 func (s *AppServer) Ready(a Auth) bool {
-	if s == nil || s.CLIs == nil {
+	if s == nil || s.CLIs == nil || !cliRuns.Load() {
 		return false
 	}
 	now := s.now()
@@ -184,7 +202,7 @@ func (m rpcMsg) isReply(id int) bool {
 // tree. Ours adds the 30-minute token check, one start per 10 minutes,
 // the deadline-bound budget and the job object on Windows.
 func (s *AppServer) Fetch(ctx context.Context, a Auth) (provider.Result, bool) {
-	if s == nil || s.CLIs == nil {
+	if s == nil || s.CLIs == nil || !cliRuns.Load() {
 		return provider.Result{}, false
 	}
 	now := s.now()
@@ -247,6 +265,10 @@ func (r *appRun) environ() []string {
 }
 
 func (r *appRun) run(ctx context.Context, res *provider.Result) {
+	if !cliRuns.Load() {
+		res.Problem = problemStart
+		return
+	}
 	cmd := exec.Command(r.cli.Path, "app-server", "--listen", "stdio://")
 	cmd.Env = r.environ()
 	cmd.Dir = r.s.Home
@@ -466,8 +488,12 @@ func clipDetail(s string) string {
 var errVersion = errors.New("codex: no version")
 
 // RunVersion runs `<path> --version` (5 s, no console window, its process
-// group ended after) and returns what it printed.
+// group ended after) and returns what it printed; ErrCLIRunsOff, running
+// nothing, unless AllowCLIRuns(true).
 func RunVersion(path string) (string, error) {
+	if !cliRuns.Load() {
+		return "", ErrCLIRunsOff
+	}
 	cmd := exec.Command(path, "--version")
 	var out limitedBuffer
 	out.max = versionOutput

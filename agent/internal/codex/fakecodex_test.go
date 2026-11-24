@@ -27,6 +27,7 @@ func TestMain(m *testing.M) {
 		os.RemoveAll(dir)
 		os.Exit(2)
 	}
+	AllowCLIRuns(true) // these tests run fakecodex; TestNoCodexRunsUnlessAllowed switches it off
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)

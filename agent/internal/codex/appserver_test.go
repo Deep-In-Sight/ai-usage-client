@@ -13,6 +13,7 @@ import (
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 )
 
 // counter wraps procs.StartGroup and counts the starts.
@@ -350,6 +351,47 @@ func TestRunVersion(t *testing.T) {
 	eq(t, v, "9.9.9")
 	if _, err := RunVersion(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("ran a missing file")
+	}
+}
+
+// Ruling F1: unless AllowCLIRuns(true), nothing in this package starts a
+// codex executable: not --version (directly or through CLIFinder), not
+// app-server (Ready says no, Fetch does not try, even with a CLI known
+// from before), and Start is never called. The fakecodex leaves a record
+// whenever it runs.
+func TestNoCodexRunsUnlessAllowed(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran")
+	cli := fakeCodex(t, "-record", marker)
+	clk := clock.NewFake(time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC))
+	s, c := appServer(t, clk, cli) // CLIFinder looked once while allowed (TestMain)
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("control: the fakecodex left no record while allowed: %v", err)
+	}
+	must(t, os.Remove(marker))
+
+	AllowCLIRuns(false)
+	t.Cleanup(func() { AllowCLIRuns(true) })
+	if _, err := RunVersion(cli); err != ErrCLIRunsOff {
+		t.Fatalf("RunVersion: %v", err)
+	}
+	f := &CLIFinder{List: func() []string { return []string{cli} }, Clock: clk}
+	if got, ok := f.CLI(); ok {
+		t.Fatalf("CLIFinder found %+v without running anything?", got)
+	}
+	a := authUntil(clk.Now().Add(9 * 24 * time.Hour))
+	eq(t, s.Ready(a), false)
+	ctx, cancel := budget(5 * time.Second)
+	defer cancel()
+	if res, attempted := s.Fetch(ctx, a); attempted {
+		t.Fatalf("Fetch attempted: %+v", res)
+	}
+	r := &appRun{s: s, cli: CLI{Path: cli, Version: "9.9.9"}, deadline: time.Now().Add(5 * time.Second)}
+	var res provider.Result
+	r.run(ctx, &res)
+	eq(t, res.Problem, problemStart)
+	eq(t, c.count(), 0)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("a codex was run: %v", err)
 	}
 }
 

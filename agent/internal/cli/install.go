@@ -99,7 +99,9 @@ func install(env Env, args []string) (int, string) {
 	}
 	// Codex's folder and executable, as the installing shell has them (the
 	// autostart environment has neither; design 6.12, D15). The agent only
-	// reads the folder; the executable is for the fallback (never run here).
+	// reads the folder. The executable is only recorded: finding it runs
+	// nothing (LookPath looks at files), and no build that is released
+	// ever runs it (ruling F1).
 	if d := env.Getenv("CODEX_HOME"); d != "" {
 		abs, err := filepath.Abs(d)
 		if err != nil {

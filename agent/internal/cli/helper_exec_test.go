@@ -19,7 +19,11 @@ func TestMain(m *testing.M) {
 	if os.Getenv(actAsHelperEnv) == "1" && len(os.Args) > 1 && os.Args[1] == "tray-helper" {
 		os.Exit(actAsHelper())
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	if builtFakeCodex.dir != "" {
+		os.RemoveAll(builtFakeCodex.dir)
+	}
+	os.Exit(code)
 }
 
 // actAsHelper speaks the helper protocol: it logs a line with a secret and

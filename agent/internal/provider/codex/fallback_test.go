@@ -43,6 +43,7 @@ func TestMain(m *testing.M) {
 		os.RemoveAll(dir)
 		os.Exit(2)
 	}
+	cx.AllowCLIRuns(true) // only a CI build's test switch does this in the agent (ruling F1)
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)

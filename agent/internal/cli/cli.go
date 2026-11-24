@@ -82,7 +82,8 @@ type Env struct {
 	// everything by default).
 	CodexTransport http.RoundTripper
 	// CodexVersion asks a codex executable its version for the Codex
-	// fallback (nil means running `<path> --version`; tests run nothing).
+	// fallback, which only a CI build's test switch wires (nil means
+	// running `<path> --version`; tests run nothing).
 	CodexVersion func(path string) (string, error)
 }
 
