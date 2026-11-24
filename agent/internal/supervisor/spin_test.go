@@ -171,6 +171,16 @@ type spawnRec struct {
 	watcher bool // a helper in standby (Options.Standby)
 }
 
+// procState is what the simulation knows of one fake process, so that it
+// moves the clock only once everything due at this moment has happened.
+type procState struct {
+	exitDue   time.Time // it ends by itself then (zero: not by itself)
+	quitAt    time.Time // it got quit then (zero: not yet)
+	quitAfter time.Duration
+	ignores   bool // it does not end on quit (the supervisor kills it after stopTimeout)
+	exited    bool
+}
+
 // sim is a supervisor on a fake clock whose helpers behave as told.
 type sim struct {
 	t      *testing.T
@@ -183,6 +193,10 @@ type sim struct {
 	recs     []spawnRec
 	runaway  []string
 	started  map[provider.ID][]*fakeProc
+	states   map[*fakeProc]*procState
+	ended    int // processes that ended
+	failed   int // helper starts that failed (each is an exit event; a watcher's is not)
+	exits    int // exit events delivered
 	activity atomic.Int64
 	stopped  chan struct{}
 }
@@ -190,7 +204,8 @@ type sim struct {
 const runawayAt = 50 // starts of one helper at one moment that end the loop
 
 func newSim(t *testing.T, fail func(n int) bool, b behaviour) *sim {
-	s := &sim{t: t, t0: time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC), logBuf: &syncBuffer{}, started: map[provider.ID][]*fakeProc{}, stopped: make(chan struct{})}
+	s := &sim{t: t, t0: time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC), logBuf: &syncBuffer{}, started: map[provider.ID][]*fakeProc{},
+		states: map[*fakeProc]*procState{}, stopped: make(chan struct{})}
 	s.clk = clock.NewFake(s.t0)
 	n := 0
 	s.sup = New(Options{
@@ -201,7 +216,8 @@ func newSim(t *testing.T, fail func(n int) bool, b behaviour) *sim {
 			now := s.clk.Now()
 			// Spawn runs under the supervisor's lock: its slot can be read
 			sl := s.sup.slots[p]
-			s.recs = append(s.recs, spawnRec{p, now, sl != nil && sl.standby})
+			watcher := sl != nil && sl.standby
+			s.recs = append(s.recs, spawnRec{p, now, watcher})
 			same := 0
 			for _, r := range s.recs {
 				if r.id == p && r.at.Equal(now) {
@@ -213,37 +229,58 @@ func newSim(t *testing.T, fail func(n int) bool, b behaviour) *sim {
 				s.runaway = append(s.runaway, fmt.Sprintf("%q started %d times at %s", p, same, now.Sub(s.t0)))
 			}
 			failNow := fail(n) && !runaway // a runaway loop is ended by a start that works
+			if failNow && !watcher {
+				s.failed++
+			}
 			s.mu.Unlock()
 			if failNow {
 				return nil, errors.New("test: cannot start")
 			}
-			fp := newFakeProc(p, uid, token, b.ignoreQuit || b.quitAfter > 0)
-			if b.quitAfter > 0 {
-				go func() {
-					for {
+			st := &procState{quitAfter: b.quitAfter, ignores: b.ignoreQuit || b.quitAfter > 0}
+			var fp *fakeProc
+			fp = newHookedProc(p, uid, token, st.ignores, func(m trayproto.Msg) {
+				if m.Type != trayproto.TypeQuit {
+					return
+				}
+				s.mu.Lock()
+				st.quitAt = s.clk.Now()
+				s.mu.Unlock()
+				if b.quitAfter > 0 {
+					ch := s.clk.After(b.quitAfter)
+					go func() {
 						select {
-						case m := <-fp.got:
-							if m.Type == trayproto.TypeQuit {
-								<-s.clk.After(b.quitAfter)
-								fp.exit(0)
-								return
-							}
+						case <-ch:
+							fp.exit(0)
 						case <-s.stopped:
-							return
 						}
-					}
-				}()
-			}
+					}()
+				}
+			}, func() {
+				s.mu.Lock()
+				st.exited = true
+				s.ended++
+				s.mu.Unlock()
+			})
 			s.mu.Lock()
 			s.started[p] = append(s.started[p], fp)
+			s.states[fp] = st
+			if b.exitAfter > 0 && !runaway {
+				st.exitDue = now.Add(b.exitAfter)
+			}
 			s.mu.Unlock()
 			switch {
 			case runaway:
 			case b.exitAfter < 0:
-				go fp.exit(b.exitCode)
+				fp.exit(b.exitCode) // at once: Wait returns as soon as the supervisor waits
 			case b.exitAfter > 0:
 				ch := s.clk.After(b.exitAfter)
-				go func() { <-ch; fp.exit(b.exitCode) }()
+				go func() {
+					select {
+					case <-ch:
+						fp.exit(b.exitCode)
+					case <-s.stopped:
+					}
+				}()
 			}
 			return fp, nil
 		},
@@ -254,7 +291,12 @@ func newSim(t *testing.T, fail func(n int) bool, b behaviour) *sim {
 	go func() {
 		for {
 			select {
-			case <-s.sup.Events():
+			case ev := <-s.sup.Events():
+				if ev.Exit != nil {
+					s.mu.Lock()
+					s.exits++
+					s.mu.Unlock()
+				}
 				s.activity.Add(1)
 			case <-s.stopped:
 				return
@@ -265,16 +307,66 @@ func newSim(t *testing.T, fail func(n int) bool, b behaviour) *sim {
 	return s
 }
 
-// quiesce waits until nothing has happened for a few milliseconds.
-func (s *sim) quiesce() {
-	last := s.activity.Load()
-	for quiet := 0; quiet < 3; {
-		time.Sleep(time.Millisecond)
-		if n := s.activity.Load(); n != last {
-			last, quiet = n, 0
+// settled: everything due at this moment of the fake clock has happened.
+// Every process that ended had its end handled (review n-1: an exit seen
+// a timer step late shifted the policy's moments), none that is to end
+// by now still runs, and no quit is on its way.
+func (s *sim) settled() bool {
+	s.sup.mu.Lock()
+	defer s.sup.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.exits != s.ended+s.failed {
+		return false
+	}
+	now := s.clk.Now()
+	for _, st := range s.states {
+		if st.exited {
 			continue
 		}
-		quiet++
+		due := func(t time.Time) bool { return !t.IsZero() && !now.Before(t) }
+		switch {
+		case due(st.exitDue):
+			return false
+		case st.quitAt.IsZero():
+		case !st.ignores, st.quitAfter > 0 && due(st.quitAt.Add(st.quitAfter)), due(st.quitAt.Add(stopTimeout)):
+			// ends on quit, or ends or is killed by now
+			return false
+		}
+	}
+	for _, sl := range s.sup.slots {
+		if fp, ok := sl.proc.(*fakeProc); ok && sl.quitSent {
+			if st := s.states[fp]; st != nil && !st.exited && st.quitAt.IsZero() {
+				return false // the quit is on its way
+			}
+		}
+	}
+	return true
+}
+
+// quiesce waits until everything due now has happened and nothing else
+// has for a few milliseconds.
+func (s *sim) quiesce() {
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		for !s.settled() {
+			if time.Now().After(deadline) {
+				s.t.Fatal("the simulation does not settle")
+			}
+			time.Sleep(100 * time.Microsecond)
+		}
+		last := s.activity.Load()
+		for quiet := 0; quiet < 3; {
+			time.Sleep(time.Millisecond)
+			if n := s.activity.Load(); n != last {
+				last, quiet = n, 0
+				continue
+			}
+			quiet++
+		}
+		if s.settled() {
+			return
+		}
 	}
 }
 

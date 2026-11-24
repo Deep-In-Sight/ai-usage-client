@@ -33,11 +33,19 @@ type fakeProc struct {
 	once       sync.Once
 	ignoreQuit bool
 	killed     chan struct{}
+	// hooks (the spin simulation): onMsg gets every line instead of got,
+	// onExit runs when the process ends, before Wait returns
+	onMsg  func(trayproto.Msg)
+	onExit func()
 }
 
 func newFakeProc(id provider.ID, uid uint32, token string, ignoreQuit bool) *fakeProc {
+	return newHookedProc(id, uid, token, ignoreQuit, nil, nil)
+}
+
+func newHookedProc(id provider.ID, uid uint32, token string, ignoreQuit bool, onMsg func(trayproto.Msg), onExit func()) *fakeProc {
 	p := &fakeProc{id: id, uid: uid, token: token, got: make(chan trayproto.Msg, 64), exitCh: make(chan int, 1),
-		ignoreQuit: ignoreQuit, killed: make(chan struct{})}
+		ignoreQuit: ignoreQuit, killed: make(chan struct{}), onMsg: onMsg, onExit: onExit}
 	p.inR, p.inW = io.Pipe()
 	p.outR, p.outW = io.Pipe()
 	go func() {
@@ -47,7 +55,11 @@ func newFakeProc(id provider.ID, uid uint32, token string, ignoreQuit bool) *fak
 			if err != nil {
 				return
 			}
-			p.got <- m
+			if p.onMsg != nil {
+				p.onMsg(m)
+			} else {
+				p.got <- m
+			}
 			if m.Type == trayproto.TypeQuit && !p.ignoreQuit {
 				p.exit(0)
 			}
@@ -70,6 +82,9 @@ func (p *fakeProc) Kill() {
 
 func (p *fakeProc) exit(code int) {
 	p.once.Do(func() {
+		if p.onExit != nil {
+			p.onExit()
+		}
 		p.outW.Close()
 		p.inR.Close()
 		p.exitCh <- code
