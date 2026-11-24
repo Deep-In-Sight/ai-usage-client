@@ -303,8 +303,8 @@ parts are not covered by it:
   derivatives depict the Claude Code mascot, © Anthropic PBC. They are not
   covered by this project's licence, no licence from Anthropic is claimed,
   and they will be removed on request. The derivatives are the pixel grid in
-  `agent/internal/icon/mascot.go`, the tray icons that show Clawd and the
-  program icon `agent/winres/icon.png`; `docs/screenshot.png` also shows
+  `agent/internal/icon/mascot.go` and the tray icons that show Clawd;
+  `docs/screenshot.png` also shows
   Clawd, and parts of the Ubuntu desktop, which remain under their owners'
   terms. See [Credits](#credits).
 - **The systray copy.** `agent/third_party/systray` is a modified copy of
@@ -333,5 +333,7 @@ Code extension for VS Code and used here only to identify the product this
 indicator reports on. All rights to it remain with Anthropic. "Claude" and
 "Claude Code" are Anthropic's names; this project is independent of Anthropic.
 
-The agent uses Clawd as its application icon and, while Claude Code is
-signed in, in its tray icon.
+The agent shows Clawd in its tray icon while Claude Code is signed in.
+Its program icon (`agent/winres/icon.ico`, drawn by `agent/tools/mkicon`)
+is our own drawing, a usage gauge split into a warm and a cool half, and
+contains no vendor's logo or mascot.

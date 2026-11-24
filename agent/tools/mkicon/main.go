@@ -1,5 +1,5 @@
-// mkicon writes the application icon (winres/icon.png, 256 px) from the
-// GNOME extension's Clawd drawing. Run it in agent/: go run ./tools/mkicon
+// mkicon writes the program icon (winres/icon.ico: icon.Program drawn at
+// every icon.ProgramIconSizes). Run it in agent/: go run ./tools/mkicon
 package main
 
 import (
@@ -10,23 +10,14 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/icon"
 )
 
-func run(svgPath, outPath string) error {
-	svg, err := os.ReadFile(svgPath)
-	if err != nil {
-		return err
-	}
-	img, err := icon.Clawd(svg, 256)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(outPath, icon.PNG(img), 0o644)
+func run(outPath string) error {
+	return os.WriteFile(outPath, icon.ProgramICO(), 0o644)
 }
 
 func main() {
-	svg := flag.String("svg", "../claude-usage@localhost/clawd.svg", "Clawd SVG (read only)")
-	out := flag.String("out", "winres/icon.png", "PNG to write")
+	out := flag.String("out", "winres/icon.ico", "ICO to write")
 	flag.Parse()
-	if err := run(*svg, *out); err != nil {
+	if err := run(*out); err != nil {
 		log.Fatal(err)
 	}
 }
