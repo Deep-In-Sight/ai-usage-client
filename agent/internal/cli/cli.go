@@ -15,6 +15,7 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/creds"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/machine"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/notices"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/osinfo"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
@@ -65,6 +66,9 @@ type Env struct {
 	WinApp WinApp
 	// Others are the autostart methods For did not pick (nil means none).
 	Others func(headless bool) []autostart.Method
+	// Machine is this PC's machine key and its source (nil means
+	// machine.Key).
+	Machine func() (key, source string)
 }
 
 // autostartOptions are the autostart inputs for this user.
@@ -91,6 +95,13 @@ func (env Env) winApp() WinApp {
 		return winAppFuncs{}
 	}
 	return env.WinApp
+}
+
+func (env Env) machine() (key, source string) {
+	if env.Machine == nil {
+		return machine.Key()
+	}
+	return env.Machine()
 }
 
 func (env Env) others(headless bool) []autostart.Method {

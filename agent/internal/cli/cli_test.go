@@ -23,6 +23,9 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/winapp"
 )
 
+// fakeMachineKey stands for this PC's machine key in tests.
+const fakeMachineKey = "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+
 const validConfig = `{"server_urls":["http://ai-usage.local","http://192.0.2.10:8700"],"ingest_key":"test-ingest-key-0123456789"}`
 
 func eq[T any](t *testing.T, got, want T) {
@@ -99,6 +102,7 @@ func newEnv(t *testing.T) *testEnv {
 		return autostart.Others(autostartOptions(dirs, headless, te.runner.run, te.Env.StartDetached))
 	}
 	te.Env.WinApp = noWinApp{}
+	te.Env.Machine = func() (string, string) { return fakeMachineKey, "os" }
 	return te
 }
 
@@ -245,6 +249,7 @@ func TestStatusGolden(t *testing.T) {
 	out := te.out.String()
 	_, after, _ := strings.Cut(out, "Mode:") // Service and Process depend on the host
 	want := `       coordinated, server http://ai-usage.local (tray)
+Machine:    identified (OS machine id)
 Last sync:  08:59 ok
 Claude:     signed in, expires 17:30 · standby (TEST-PC-03)
             5-hour 100%  Resets Mon 14:20 · in 5h 20m
@@ -273,6 +278,28 @@ Backlog:    2
 }
 
 func pf(v float64) *float64 { return &v }
+
+// status says whether the PC is identified and how, never the key.
+func TestStatusNamesTheMachineKeySource(t *testing.T) {
+	te := newEnv(t)
+	must(t, status.Write(te.Dirs.File(paths.StatusFile), status.Snapshot{Mode: "coordinated"}))
+	for src, want := range map[string]string{"os": "identified (OS machine id)", "mac": "identified (network card address)", "": "not identified"} {
+		te.Machine = func() (string, string) {
+			if src == "" {
+				return "", ""
+			}
+			return fakeMachineKey, src
+		}
+		te.out.Reset()
+		eq(t, te.main("status"), 0)
+		contains(t, te.out.String(), "Machine:    "+want+"\n")
+		te.out.Reset()
+		eq(t, te.main("status", "--json"), 0)
+		if strings.Contains(te.out.String(), fakeMachineKey) {
+			t.Fatal("the machine key is printed")
+		}
+	}
+}
 
 func TestStatusShowsSignInProblem(t *testing.T) {
 	te := newEnv(t)

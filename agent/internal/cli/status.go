@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/autostart"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/machine"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
@@ -97,6 +98,10 @@ func statusCmd(env Env, args []string) int {
 		clientMode = " (" + snap.ClientMode + ")"
 	}
 	fmt.Fprintf(w, "Mode:       %s%s\n", strings.Join(mode, ", "), clientMode)
+	// whether the PC is identified, and how; never the key (design D8)
+	_, source := env.machine()
+	fmt.Fprintf(w, "Machine:    %s\n", map[string]string{machine.SourceOS: "identified (OS machine id)",
+		machine.SourceMAC: "identified (network card address)", "": "not identified"}[source])
 	syncState := "ok"
 	if !snap.LastSyncOK {
 		syncState = "failing"
