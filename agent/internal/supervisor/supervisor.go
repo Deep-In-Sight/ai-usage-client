@@ -44,6 +44,11 @@ type Options struct {
 	// IconDir is the folder for p's Windows icon files, sent in its first
 	// line (nil: none).
 	IconDir func(p provider.ID) string
+	// Standby: while a helper is stopped after repeated failures, a helper
+	// in standby (no icon) watches the desktop and says when it came back
+	// (Linux: a tray host appeared or the session bus is back; Windows:
+	// TaskbarCreated). Off where the helper cannot watch (macOS).
+	Standby bool
 	Clock   clock.Clock
 	Log     *log.Logger
 }
@@ -71,7 +76,8 @@ const (
 	endedDelay    = 30 * time.Second // after "the session is ending" (76): it did not end after all
 	failWindow    = 10 * time.Minute // failures counted over this long
 	failLimit     = 5                // this many in failWindow stop the helper …
-	stoppedFor    = 30 * time.Minute // … for this long (or until Want changes)
+	stoppedFor    = 5 * time.Minute  // … for this long (or until Want changes, the view changes or the desktop came back)
+	probeGap      = time.Minute      // a stopped helper is tried at most this often besides its stop timer
 	healthyAfter  = 10 * time.Minute // a helper that lived this long starts the backoff again
 	quickLoss     = 10 * time.Second // a session loss sooner than this after start counts as a failure
 	stopTimeout   = 3 * time.Second  // Stop waits this long for helpers to quit, then kills them
@@ -122,6 +128,10 @@ type slot struct {
 	consecutive int         // failure exits in a row
 	failures    []time.Time // failure exits within failWindow
 	stopped     bool        // after failLimit failures, until a retry
+	standby     bool        // the process is a watcher (stopped), not an icon
+	lastStart   time.Time   // the last start of an icon helper (or its attempt)
+	plan        int         // counts planned starts; a start voids older ones
+	probeAt     time.Time   // a retry of the stopped helper is planned then
 }
 
 // New makes a supervisor; it starts nothing until Want.
@@ -175,20 +185,30 @@ func (s *Supervisor) Want(ids []provider.ID) {
 			sl.wanted = true
 		case sl.stopped:
 			sl.stopped, sl.failures, sl.consecutive = false, nil, 0
-			s.start(sl) // a new start voids the pending retry
+			if sl.proc != nil {
+				s.quitOrKill(sl) // its watcher: the helper starts once it ended
+			} else {
+				s.start(sl) // a new start voids the pending retry
+			}
 		}
 	}
 }
 
 // Show sets the view: the same menu for every helper, and each helper's
-// own icon, title and tooltip. Only what changed is sent.
+// own icon, title and tooltip. Only what changed is sent. A change tries a
+// stopped helper again (at most once a minute): the user has no icon to
+// click.
 func (s *Supervisor) Show(items []trayproto.Item, icons map[provider.ID]IconView) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	changed := !reflect.DeepEqual(items, s.items) || !reflect.DeepEqual(icons, s.icons)
 	s.items = slices.Clone(items)
 	s.icons = icons
 	for _, sl := range s.slots {
 		s.sendView(sl)
+		if changed {
+			s.probe(sl, "what it shows changed")
+		}
 	}
 }
 
@@ -259,30 +279,60 @@ func (s *Supervisor) start(sl *slot) {
 	if s.stop || !sl.wanted {
 		return
 	}
-	sl.gen++
-	gen := sl.gen
-	// a new process: what was asked of the last one is over
-	sl.proc, sl.ready, sl.quitSent, sl.sentView = nil, false, false, false
 	now := s.o.Clock.Now()
+	sl.plan++ // pending retries are void
+	sl.stopped, sl.probeAt, sl.lastStart = false, time.Time{}, now
+	p, token, ok := s.spawn(sl, false, now)
+	if !ok {
+		code := -1
+		s.retry(sl, Event{Provider: sl.id, Exit: &code, RestartIn: -1}, code, 0, now)
+		return
+	}
+	s.launch(sl, p, token)
+	s.sendNotice() // before the view: shown as soon as the icon is up
+	s.sendView(sl)
+}
+
+// startWatcher starts sl's helper in standby, to watch the desktop while
+// the helper is stopped (s.mu held). A failed start is logged only: the
+// stop timer stays.
+func (s *Supervisor) startWatcher(sl *slot) {
+	if s.stop || !sl.wanted || !s.o.Standby || sl.proc != nil {
+		return
+	}
+	if p, token, ok := s.spawn(sl, true, s.o.Clock.Now()); ok {
+		s.launch(sl, p, token)
+	}
+}
+
+// spawn starts a process for sl (s.mu held).
+func (s *Supervisor) spawn(sl *slot, standby bool, now time.Time) (Proc, string, bool) {
+	sl.gen++
+	// a new process: what was asked of the last one is over
+	sl.proc, sl.ready, sl.quitSent, sl.sentView, sl.standby = nil, false, false, false, standby
 	sl.started = now
 	token := newToken()
 	p, err := s.o.Spawn(sl.id, UIDFor(sl.id), token)
 	if err != nil {
 		s.o.Log.Printf("tray helper %s: %v", name(sl.id), err)
-		code := -1
-		s.retry(sl, Event{Provider: sl.id, Exit: &code, RestartIn: -1}, code, 0, now)
-		return
+		sl.standby = false
+		return nil, "", false
 	}
+	return p, token, true
+}
+
+// launch says hello to sl's new process and follows it (s.mu held).
+func (s *Supervisor) launch(sl *slot, p Proc, token string) {
+	gen := sl.gen
 	sl.proc = p
 	sl.exited = make(chan struct{})
 	sl.out = newSender(p.Stdin())
-	hello := trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeHello, Token: token, Provider: string(sl.id), UID: UIDFor(sl.id)}
+	hello := trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeHello, Token: token, Provider: string(sl.id),
+		UID: UIDFor(sl.id), Standby: sl.standby}
 	if s.o.IconDir != nil {
 		hello.IconDir = s.o.IconDir(sl.id)
 	}
 	sl.out.send(hello)
-	s.sendNotice() // before the view: shown as soon as the icon is up
-	s.sendView(sl)
 	exited := sl.exited
 	go s.read(sl.id, gen, p)
 	go func() {
@@ -316,14 +366,60 @@ func (s *Supervisor) ended(sl *slot, code int, now time.Time) {
 		s.queue.put(ev)
 		return
 	case sl.quitSent:
-		// asked to quit, then wanted again before it ended: start anew
-		// (start resets quitSent before it spawns; a failed start goes to
-		// retry, which only sets a timer)
+		// asked to quit, then wanted again before it ended, or a watcher
+		// ended for a retry: start anew (start resets quitSent before it
+		// spawns; a failed start goes to retry, which only sets a timer)
 		s.queue.put(ev)
 		s.start(sl)
 		return
+	case sl.standby:
+		sl.standby = false
+		s.queue.put(ev)
+		if code == trayproto.ExitDesktopBack {
+			s.probe(sl, "the desktop came back")
+		} else {
+			s.o.Log.Printf("tray helper %s: the watch for the desktop ended (exit %d); trying again at the planned time", name(sl.id), code)
+		}
+		return
 	}
 	s.retry(sl, ev, code, lived, now)
+}
+
+// probe tries a stopped helper again, now or, when its last start was less
+// than probeGap ago, then (s.mu held). It never starts more than one
+// helper a minute.
+func (s *Supervisor) probe(sl *slot, why string) {
+	if s.stop || !sl.wanted || !sl.stopped || sl.proc != nil && !sl.standby {
+		return
+	}
+	now := s.o.Clock.Now()
+	if at := sl.lastStart.Add(probeGap); now.Before(at) {
+		if sl.probeAt.IsZero() {
+			sl.probeAt = at
+			timer := s.o.Clock.After(at.Sub(now))
+			go func() {
+				select {
+				case <-timer:
+				case <-s.done:
+					return
+				}
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				if s.slots[sl.id] == sl && sl.probeAt.Equal(at) {
+					sl.probeAt = time.Time{}
+					s.probe(sl, why)
+				}
+			}()
+		}
+		return
+	}
+	sl.probeAt = time.Time{}
+	s.o.Log.Printf("tray helper %s: trying again (%s)", name(sl.id), why)
+	if sl.proc != nil {
+		s.quitOrKill(sl) // its watcher: the helper starts once it ended
+		return
+	}
+	s.start(sl)
 }
 
 // retry plans the next start after an exit (or a failed start) of a
@@ -368,7 +464,8 @@ func (s *Supervisor) retry(sl *slot, ev Event, code int, lived time.Duration, no
 		s.o.Log.Printf("tray helper %s: the session is ending", name(sl.id))
 	}
 	ev.RestartIn = wait
-	gen := sl.gen
+	sl.plan++
+	plan := sl.plan
 	timer := s.o.Clock.After(wait)
 	go func() {
 		select {
@@ -378,14 +475,22 @@ func (s *Supervisor) retry(sl *slot, ev Event, code int, lived time.Duration, no
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.slots[sl.id] == sl && sl.gen == gen && sl.proc == nil {
-			if sl.stopped {
-				sl.stopped, sl.failures, sl.consecutive = false, nil, 0
-			}
-			s.start(sl)
+		if s.slots[sl.id] != sl || sl.plan != plan {
+			return // a start came first
 		}
+		if sl.stopped {
+			sl.failures, sl.consecutive = nil, 0
+		}
+		if sl.proc != nil {
+			s.quitOrKill(sl) // its watcher: the helper starts once it ended
+			return
+		}
+		s.start(sl)
 	}()
 	s.queue.put(ev)
+	if sl.stopped {
+		s.startWatcher(sl)
+	}
 }
 
 // read turns the helper's lines into events. Once it stops reading (the
@@ -407,12 +512,19 @@ func (s *Supervisor) read(id provider.ID, gen int, p Proc) {
 		}
 		s.mu.Lock()
 		sl := s.slots[id]
-		current := sl != nil && sl.gen == gen && sl.proc == p
+		current := sl != nil && sl.gen == gen && sl.proc == p && !sl.standby
 		if current {
 			switch m.Type {
 			case trayproto.TypeReady:
 				sl.ready = true
 				s.queue.put(Event{Provider: id, Ready: true})
+				// a tray icon came up: the desktop may be back for a
+				// stopped helper too
+				for _, other := range s.slots {
+					if other != sl {
+						s.probe(other, "another tray icon came up")
+					}
+				}
 			case trayproto.TypeWaiting:
 				sl.ready = false
 				s.queue.put(Event{Provider: id, Waiting: m.Why})
@@ -453,7 +565,7 @@ func (s *Supervisor) quit(sl *slot) {
 }
 
 func (s *Supervisor) sendView(sl *slot) {
-	if sl.proc == nil || sl.quitSent || s.items == nil {
+	if sl.proc == nil || sl.quitSent || sl.standby || s.items == nil {
 		return
 	}
 	icon := s.icons[sl.id]
@@ -472,7 +584,7 @@ func (s *Supervisor) sendNotice() {
 		return
 	}
 	sl := s.slots[s.order[0]]
-	if sl == nil || sl.proc == nil || sl.quitSent {
+	if sl == nil || sl.proc == nil || sl.quitSent || sl.standby {
 		return
 	}
 	sl.out.send(trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeNotice, Text: s.notice})

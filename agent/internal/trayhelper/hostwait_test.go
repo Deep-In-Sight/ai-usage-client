@@ -196,3 +196,85 @@ func TestHostWaitFromEnv(t *testing.T) {
 	eq(t, WatcherWaitFrom(env("1ns")), minWatcherWait)
 	eq(t, WatcherWaitFrom(env("-5s")), WatcherWait)
 }
+
+// waitForChange (a stopped helper's watch): a watcher taking its name, or
+// the session bus coming back after it was lost or missing, is a change; a
+// watcher already there is not.
+func TestWaitForChange(t *testing.T) {
+	run := func(ctx context.Context, connect func() (hostConn, error)) (*clock.Fake, <-chan bool) {
+		clk := clock.NewFake(time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC))
+		done := make(chan bool, 1)
+		go func() { done <- waitForChange(ctx, connect, clk) }()
+		return clk, done
+	}
+	get := func(done <-chan bool) bool {
+		t.Helper()
+		select {
+		case ok := <-done:
+			return ok
+		case <-time.After(5 * time.Second):
+			t.Fatal("waitForChange did not return")
+			return false
+		}
+	}
+	none := func(done <-chan bool) {
+		t.Helper()
+		select {
+		case ok := <-done:
+			t.Fatalf("returned %v", ok)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	// a watcher already there is no change; one appearing is
+	h := newFakeHost()
+	h.has.Store(true)
+	_, done := run(context.Background(), func() (hostConn, error) { return h, nil })
+	none(done)
+	h.appeared <- struct{}{}
+	if !get(done) {
+		t.Fatal("false")
+	}
+
+	// the bus went away and came back
+	var n atomic.Int32
+	first := newFakeHost()
+	clk, done := run(context.Background(), func() (hostConn, error) {
+		switch n.Add(1) {
+		case 1:
+			return first, nil
+		case 2:
+			return nil, errors.New("no bus")
+		}
+		return newFakeHost(), nil
+	})
+	none(done)
+	first.Close()
+	waitFor(t, "a second connect", func() bool { clk.Advance(hostRetry); return n.Load() >= 2 })
+	waitFor(t, "a third connect", func() bool { clk.Advance(hostRetry); return n.Load() >= 3 })
+	if !get(done) {
+		t.Fatal("false")
+	}
+
+	// no bus at first, then one
+	n.Store(0)
+	clk, done = run(context.Background(), func() (hostConn, error) {
+		if n.Add(1) == 1 {
+			return nil, errors.New("no bus")
+		}
+		return newFakeHost(), nil
+	})
+	waitFor(t, "a second connect", func() bool { clk.Advance(hostRetry); return n.Load() >= 2 })
+	if !get(done) {
+		t.Fatal("false")
+	}
+
+	// the end of ctx ends it
+	ctx, cancel := context.WithCancel(context.Background())
+	_, done = run(ctx, func() (hostConn, error) { return newFakeHost(), nil })
+	none(done)
+	cancel()
+	if get(done) {
+		t.Fatal("true after cancel")
+	}
+}

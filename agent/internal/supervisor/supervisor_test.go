@@ -133,7 +133,11 @@ func (s *syncBuffer) String() string {
 	return s.b.String()
 }
 
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T) *harness { return newHarnessWith(t, false) }
+
+// newHarnessWith: standby, a stopped helper is watched for the desktop
+// coming back (Options.Standby).
+func newHarnessWith(t *testing.T, standby bool) *harness {
 	h := &harness{t: t, clk: clock.NewFake(time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)), spawns: make(chan *fakeProc, 16), logBuf: &syncBuffer{}}
 	h.sup = New(Options{
 		Spawn: func(p provider.ID, uid uint32, token string) (Proc, error) {
@@ -148,6 +152,7 @@ func newHarness(t *testing.T) *harness {
 			return fp, nil
 		},
 		IconDir: func(p provider.ID) string { return "/icons/" + name(p) },
+		Standby: standby,
 		Clock:   h.clk,
 		Log:     log.New(h.logBuf, "", 0),
 	})
@@ -306,12 +311,12 @@ func TestHelperRestartPolicy(t *testing.T) {
 	}
 	p.exit(3)
 	h.event(isExit)
-	h.clk.Advance(29 * time.Minute)
+	h.clk.Advance(4 * time.Minute)
 	h.noSpawn()
 	if !strings.Contains(h.logBuf.String(), "tray helper claude stopped after repeated failures") {
 		t.Fatalf("log: %s", h.logBuf.String())
 	}
-	h.clk.Advance(time.Minute) // 30 minutes later it is tried again
+	h.clk.Advance(time.Minute) // 5 minutes later it is tried again (stage-2 review m-3: was 30)
 	p = h.spawned()
 
 	// the count starts again: the next failure waits 1 s
@@ -638,5 +643,164 @@ func TestKillTimerEndsWithTheHelper(t *testing.T) {
 	case <-p.killed:
 		t.Fatal("killed after it ended")
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// failUntilStopped ends p and its restarts with failures until the helper
+// is stopped (five in 10 minutes); the clock moves 1+2+4+8 s.
+func (h *harness) failUntilStopped(p *fakeProc) {
+	h.t.Helper()
+	for _, wait := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second} {
+		p.exit(3)
+		h.event(isExit)
+		h.clk.Advance(wait)
+		p = h.spawned()
+	}
+	p.exit(3)
+	h.event(func(e Event) bool { return isExit(e) && e.RestartIn == stoppedFor })
+}
+
+func view(title string) ([]trayproto.Item, map[provider.ID]IconView) {
+	return []trayproto.Item{{ID: "quit", Text: "Quit", Enabled: true, Visible: true}},
+		map[provider.ID]IconView{provider.Claude: {Icon: trayproto.Icon{Provider: "claude", Level: "normal"}, Title: title}}
+}
+
+// A stopped helper is tried again when what it would show changes, at
+// most once a minute (stage-2 review m-3: there is no icon to click).
+func TestStoppedHelperRetriesWhenTheViewChanges(t *testing.T) {
+	h := newHarness(t)
+	h.sup.Show(view("40%"))
+	h.sup.Want([]provider.ID{provider.Claude})
+	h.failUntilStopped(h.spawned()) // the last start was at the stop
+	h.sup.Show(view("40%"))         // the same view: nothing
+	h.noSpawn()
+	h.sup.Show(view("41%")) // changed, but within a minute of the last start: then
+	h.noSpawn()
+	h.sup.Show(view("42%")) // one retry only
+	h.clk.Advance(time.Minute - time.Millisecond)
+	h.noSpawn()
+	h.clk.Advance(time.Millisecond)
+	p := h.spawned()
+	h.noSpawn()
+	// it fails again: stopped again at once (the failures are still
+	// recent), and the next change a minute after this start
+	p.exit(3)
+	h.event(func(e Event) bool { return isExit(e) && e.RestartIn == stoppedFor })
+	h.sup.Show(view("43%"))
+	h.noSpawn()
+	h.clk.Advance(time.Minute)
+	_ = h.spawned()
+}
+
+// Another helper's icon coming up (a tray host appeared) tries a stopped
+// helper again too.
+func TestStoppedHelperRetriesWhenAnotherIconComesUp(t *testing.T) {
+	h := newHarness(t)
+	h.sup.Want([]provider.ID{provider.Claude, provider.Codex})
+	a, b := h.spawned(), h.spawned()
+	if a.id != provider.Claude {
+		a, b = b, a
+	}
+	h.failUntilStopped(b)
+	h.clk.Advance(time.Minute)
+	h.noSpawn()
+	a.say(t, trayproto.Msg{Type: trayproto.TypeWaiting, Why: "no StatusNotifierWatcher"})
+	h.noSpawn()
+	a.say(t, trayproto.Msg{Type: trayproto.TypeReady})
+	if c := h.spawned(); c.id != provider.Codex {
+		t.Fatalf("%q", c.id)
+	}
+}
+
+// With Standby, a stopped helper is replaced by one that only watches the
+// desktop (no icon): when it says the desktop is back (exit 77) the helper
+// is tried again, at most once a minute.
+func TestStoppedHelperIsWatchedForTheDesktop(t *testing.T) {
+	h := newHarnessWith(t, true)
+	h.sup.Show(view("40%"))
+	h.sup.Want([]provider.ID{provider.Claude})
+	h.failUntilStopped(h.spawned())
+	w := <-h.spawns
+	if m := w.next(t); m.Type != trayproto.TypeHello || !m.Standby || m.Provider != "claude" {
+		t.Fatalf("watcher hello %+v", m)
+	}
+	w.none(t) // no view, no notice: it shows nothing
+	h.sup.Show(view("41%"))
+	w.none(t)
+	if h.sup.AnyReady() {
+		t.Fatal("a watcher counts as an icon")
+	}
+	// the desktop came back right after the last start: a minute after it
+	w.exit(trayproto.ExitDesktopBack)
+	h.event(isExit)
+	h.clk.Advance(time.Minute - time.Millisecond)
+	h.noSpawn()
+	h.clk.Advance(time.Millisecond)
+	p := h.spawned()
+	if m := p.next(t); m.Type != trayproto.TypeView {
+		t.Fatalf("%+v", m)
+	}
+	// it works now
+	p.say(t, trayproto.Msg{Type: trayproto.TypeReady})
+	h.event(func(e Event) bool { return e.Ready })
+}
+
+// The five-minute retry while a watcher runs: the watcher is asked to quit
+// and the helper started.
+func TestStopTimerEndsTheWatcher(t *testing.T) {
+	h := newHarnessWith(t, true)
+	h.sup.Want([]provider.ID{provider.Claude})
+	h.failUntilStopped(h.spawned())
+	w := <-h.spawns
+	_ = w.next(t)
+	h.clk.Advance(stoppedFor)
+	if m := w.next(t); m.Type != trayproto.TypeQuit {
+		t.Fatalf("%+v", m)
+	}
+	p := h.spawned()
+	p.exit(3) // the failures were forgotten: 1 s
+	h.event(func(e Event) bool { return isExit(e) && e.RestartIn == time.Second })
+	h.clk.Advance(time.Second)
+	_ = h.spawned()
+}
+
+// A watcher that ends on its own (not 77) is not started again: the
+// five-minute retry comes as planned.
+func TestWatcherThatEndsIsNotRestarted(t *testing.T) {
+	h := newHarnessWith(t, true)
+	h.sup.Want([]provider.ID{provider.Claude})
+	h.failUntilStopped(h.spawned())
+	w := <-h.spawns
+	_ = w.next(t)
+	w.exit(1)
+	h.event(isExit)
+	h.clk.Advance(stoppedFor - time.Second)
+	h.noSpawn()
+	h.clk.Advance(time.Second)
+	_ = h.spawned()
+}
+
+// Wanted again (a change of the wanted helpers) while a watcher runs: the
+// helper starts at once, as before.
+func TestWantChangeEndsTheWatcher(t *testing.T) {
+	h := newHarnessWith(t, true)
+	h.sup.Want([]provider.ID{provider.Claude})
+	h.failUntilStopped(h.spawned())
+	w := <-h.spawns
+	_ = w.next(t)
+	h.sup.Want([]provider.ID{provider.Claude, provider.Codex})
+	ids := map[provider.ID]bool{}
+	for range 2 {
+		p := <-h.spawns
+		if m := p.next(t); m.Type != trayproto.TypeHello || m.Standby {
+			t.Fatalf("%+v", m)
+		}
+		ids[p.id] = true
+	}
+	if m := w.next(t); m.Type != trayproto.TypeQuit {
+		t.Fatalf("watcher got %+v", m)
+	}
+	if !ids[provider.Claude] || !ids[provider.Codex] {
+		t.Fatalf("%v", ids)
 	}
 }

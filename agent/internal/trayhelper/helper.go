@@ -47,6 +47,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, token string) int {
 		goos:         runtime.GOOS,
 		getenv:       os.Getenv,
 		newUI:        newUI,
+		watch:        watchSession,
 		available:    func(ctx context.Context) (bool, string) { return Available(ctx, os.Getenv) },
 		waitHost:     func(ctx context.Context) bool { return WaitForHost(ctx, 0) },
 		notify:       notify.Show,
@@ -62,8 +63,11 @@ type deps struct {
 	getenv func(string) string
 	// newUI makes the tray for what the first line said (nil: no tray in
 	// this build).
-	newUI     func(Options) ui
-	ui        ui
+	newUI func(Options) ui
+	ui    ui
+	// watch waits for the desktop's tray to come (back), for a helper in
+	// standby (nil: nothing to watch on this OS).
+	watch     func(ctx context.Context) bool
 	available func(ctx context.Context) (bool, string)
 	waitHost  func(ctx context.Context) bool
 	notify    func(title, text string) error
@@ -109,6 +113,9 @@ func runWith(ctx context.Context, in io.Reader, out io.Writer, token string, d d
 	if err != nil || first.Type != trayproto.TypeHello || first.V != trayproto.Version || token == "" || first.Token != token {
 		log.Print("tray-helper: this command is started by the agent itself")
 		return trayproto.ExitRefused
+	}
+	if first.Standby {
+		return standby(ctx, br, d)
 	}
 	o := Options{Provider: first.Provider, UID: first.UID, IconDir: first.IconDir}
 	if d.goos == "windows" {
@@ -173,6 +180,33 @@ func runWith(ctx context.Context, in io.Reader, out io.Writer, token string, d d
 			return trayproto.ExitSessionEnded
 		default:
 		}
+	}
+	return trayproto.ExitOK
+}
+
+// standby watches the desktop while the agent has stopped this provider's
+// icon after repeated failures (design 6.4): it shows nothing, and ends
+// with ExitDesktopBack when the desktop's tray came (back), or with ExitOK
+// on quit or at the end of its input.
+func standby(ctx context.Context, br *bufio.Reader, d deps) int {
+	if d.watch == nil {
+		log.Print("tray-helper: nothing to watch on this OS")
+		return trayproto.ExitOK
+	}
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		defer cancel()
+		for {
+			m, err := trayproto.Decode(br)
+			if err != nil || m.Type == trayproto.TypeQuit {
+				return
+			}
+		}
+	}()
+	if d.watch(wctx) {
+		log.Print("the desktop's tray came back")
+		return trayproto.ExitDesktopBack
 	}
 	return trayproto.ExitOK
 }

@@ -81,6 +81,7 @@ func TestNoSpawnLoop(t *testing.T) {
 		{name: "exits-1", exitCode: 1, exitAfter: -1},
 		{name: "exits-75", exitCode: trayproto.ExitSessionLost, exitAfter: -1},
 		{name: "exits-76", exitCode: trayproto.ExitSessionEnded, exitAfter: -1},
+		{name: "exits-77", exitCode: trayproto.ExitDesktopBack, exitAfter: -1}, // a watcher that always says the desktop is back
 		{name: "killed", exitCode: -1, exitAfter: -1},
 		{name: "75-after-10s", exitCode: trayproto.ExitSessionLost, exitAfter: quickLoss},
 		{name: "1-after-10min", exitCode: 1, exitAfter: healthyAfter},
@@ -93,11 +94,12 @@ func TestNoSpawnLoop(t *testing.T) {
 	}
 	A, B := provider.Claude, provider.Codex
 	scripts := map[string][]want{
-		"steady":       {{0, []provider.ID{A}}},
-		"requit":       {{0, []provider.ID{A}}, {0, nil}, {0, []provider.ID{A}}},
-		"requit-later": {{0, []provider.ID{A}}, {time.Second, nil}, {time.Second, []provider.ID{A}}, {3 * time.Second, nil}, {4 * time.Second, []provider.ID{A}}},
-		"two":          {{0, []provider.ID{A, B}}, {30 * time.Second, []provider.ID{A}}, {30 * time.Second, []provider.ID{A, B}}, {2 * time.Minute, nil}, {2 * time.Minute, []provider.ID{B, A}}},
+		"steady":       {{0, []provider.ID{A}, ""}},
+		"requit":       {{0, []provider.ID{A}, ""}, {0, nil, ""}, {0, []provider.ID{A}, ""}},
+		"requit-later": {{0, []provider.ID{A}, ""}, {time.Second, nil, ""}, {time.Second, []provider.ID{A}, ""}, {3 * time.Second, nil, ""}, {4 * time.Second, []provider.ID{A}, ""}},
+		"two":          {{0, []provider.ID{A, B}, ""}, {30 * time.Second, []provider.ID{A}, ""}, {30 * time.Second, []provider.ID{A, B}, ""}, {2 * time.Minute, nil, ""}, {2 * time.Minute, []provider.ID{B, A}, ""}},
 		"toggle":       toggles(7*time.Second, 10*time.Minute, []provider.ID{A}, nil),
+		"views":        views(10*time.Second, 20*time.Minute, []provider.ID{A}),
 	}
 	const simFor = 40 * time.Minute
 	for _, b := range behaviours {
@@ -123,14 +125,26 @@ func toggles(gap, d time.Duration, a, b []provider.ID) []want {
 		if i%2 == 1 {
 			ids = b
 		}
-		out = append(out, want{at, ids})
+		out = append(out, want{at, ids, ""})
 	}
 	return out
 }
 
+// views wants ids, then shows a new view every gap for d (a stopped
+// helper is tried again when the view changes).
+func views(gap, d time.Duration, ids []provider.ID) []want {
+	out := []want{{0, ids, ""}}
+	for at, i := gap, 0; at <= d; at, i = at+gap, i+1 {
+		out = append(out, want{at, nil, fmt.Sprintf("%d%%", i)})
+	}
+	return out
+}
+
+// want is a change of the wanted helpers, or (view set) a new view.
 type want struct {
-	at  time.Duration
-	ids []provider.ID
+	at   time.Duration
+	ids  []provider.ID
+	view string
 }
 
 // behaviour is what a started helper does.
@@ -145,14 +159,16 @@ type behaviour struct {
 	quitAfter time.Duration
 }
 
-// alwaysFails: every start ends as a failure.
+// alwaysFails: every start ends as a failure (a watcher's 77 too, for a
+// helper).
 func (b behaviour) alwaysFails() bool {
 	return b.exitAfter < 0 && b.exitCode != trayproto.ExitSessionEnded
 }
 
 type spawnRec struct {
-	id provider.ID
-	at time.Time
+	id      provider.ID
+	at      time.Time
+	watcher bool // a helper in standby (Options.Standby)
 }
 
 // sim is a supervisor on a fake clock whose helpers behave as told.
@@ -183,7 +199,9 @@ func newSim(t *testing.T, fail func(n int) bool, b behaviour) *sim {
 			s.mu.Lock()
 			n++
 			now := s.clk.Now()
-			s.recs = append(s.recs, spawnRec{p, now})
+			// Spawn runs under the supervisor's lock: its slot can be read
+			sl := s.sup.slots[p]
+			s.recs = append(s.recs, spawnRec{p, now, sl != nil && sl.standby})
 			same := 0
 			for _, r := range s.recs {
 				if r.id == p && r.at.Equal(now) {
@@ -229,8 +247,9 @@ func newSim(t *testing.T, fail func(n int) bool, b behaviour) *sim {
 			}
 			return fp, nil
 		},
-		Clock: s.clk,
-		Log:   log.New(s.logBuf, "", 0),
+		Standby: true,
+		Clock:   s.clk,
+		Log:     log.New(s.logBuf, "", 0),
 	})
 	go func() {
 		for {
@@ -291,7 +310,11 @@ func (s *sim) play(script []want, simFor time.Duration) {
 		s.quiesce()
 		now := s.clk.Now()
 		for len(todo) > 0 && !s.t0.Add(todo[0].at).After(now) {
-			s.sup.Want(todo[0].ids)
+			if v := todo[0].view; v != "" {
+				s.sup.Show(view(v))
+			} else {
+				s.sup.Want(todo[0].ids)
+			}
 			todo = todo[1:]
 			s.quiesce()
 		}
@@ -345,39 +368,51 @@ func (s *sim) check(script []want, simFor time.Duration, alwaysFails bool) {
 	wantsIn := func(from, to time.Duration) int {
 		n := 0
 		for _, w := range script {
-			if w.at >= from && w.at <= to {
+			if w.at >= from && w.at <= to && w.view == "" { // a new view may not start more
 				n++
 			}
 		}
 		return n
 	}
 	ids := map[provider.ID][]time.Duration{}
+	type moment struct {
+		id      provider.ID
+		at      time.Duration
+		watcher bool
+	}
+	perMoment := map[moment]int{}
 	for _, r := range s.recs {
 		ids[r.id] = append(ids[r.id], r.at.Sub(s.t0))
+		perMoment[moment{r.id, r.at.Sub(s.t0), r.watcher}]++
+	}
+	for m, n := range perMoment {
+		limit := 1 + wantsIn(m.at, m.at) // a helper
+		if m.watcher {
+			limit = 1 // a watcher, when the helper stops
+		}
+		if n > limit {
+			s.t.Fatalf("%q started %d times at %s (watcher %v, limit %d)", m.id, n, m.at, m.watcher, limit)
+		}
 	}
 	for id, at := range ids {
 		for i := range at {
-			same := 0
-			for j := i; j < len(at) && at[j] == at[i]; j++ {
-				same++
-			}
-			if limit := 1 + wantsIn(at[i], at[i]); same > limit {
-				s.t.Fatalf("%q started %d times at %s (limit %d)", id, same, at[i], limit)
-			}
 			inMinute := 0
 			for j := i; j < len(at) && at[j] < at[i]+time.Minute; j++ {
 				inMinute++
 			}
 			// each change of the wanted helpers may start a series of
 			// failures anew; helpers that ran 10 s before their session
-			// went away come back after 1 s
-			limit := (wantsIn(at[i], at[i]+time.Minute)+1)*(failLimit+1) + int(time.Minute/(quickLoss+lostDelay))
+			// went away come back after 1 s; a stopped one is tried once
+			// a minute (view changes, the desktop back) beside its watcher
+			limit := (wantsIn(at[i], at[i]+time.Minute)+1)*(failLimit+1) + int(time.Minute/(quickLoss+lostDelay)) + 2
 			if inMinute > limit {
 				s.t.Fatalf("%q started %d times in the minute from %s (limit %d)", id, inMinute, at[i], limit)
 			}
 		}
 		if alwaysFails {
-			limit := (int(simFor/stoppedFor)+1)*failLimit + 2*len(script)
+			// a series per stop, and once stopped a retry and a watcher a
+			// minute at most
+			limit := (int(simFor/stoppedFor)+1)*(failLimit+1) + 2*(int(simFor/probeGap)+1) + 2*wantsIn(0, simFor)
 			if len(at) > limit {
 				s.t.Fatalf("%q started %d times in %s although every start fails (limit %d)", id, len(at), simFor, limit)
 			}

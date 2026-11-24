@@ -97,3 +97,37 @@ func watchHost(ctx context.Context, c hostConn, clk clock.Clock, deadline <-chan
 		}
 	}
 }
+
+// waitForChange waits for a sign that the desktop's tray may be back, for
+// a helper in standby: a StatusNotifierWatcher takes its name (a new
+// owner), or the session bus is there again after it was lost or missing.
+// A watcher already there is no change. False when ctx ends.
+func waitForChange(ctx context.Context, connect func() (hostConn, error), clk clock.Clock) bool {
+	lost := false
+	for {
+		if c, err := connect(); err == nil {
+			if lost {
+				c.Close()
+				return true
+			}
+			select {
+			case <-c.Appeared():
+				c.Close()
+				return true
+			case <-c.Closed():
+				lost = true
+			case <-ctx.Done():
+				c.Close()
+				return false
+			}
+			c.Close()
+		} else {
+			lost = true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-clk.After(hostRetry):
+		}
+	}
+}

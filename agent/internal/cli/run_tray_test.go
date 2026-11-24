@@ -598,3 +598,11 @@ func TestRowClickOpensTheAccountPage(t *testing.T) {
 	}
 	eq(t, opened, []string{"http://192.0.2.10:8700/accounts/acc-0001"})
 }
+
+func TestDesktopIsWatchedWhereItCanBe(t *testing.T) {
+	for goos, want := range map[string]bool{"linux": true, "windows": true, "darwin": false} {
+		if got := watchesDesktop(goos); got != want {
+			t.Errorf("%s: %v", goos, got)
+		}
+	}
+}

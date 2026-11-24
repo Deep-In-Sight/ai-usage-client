@@ -283,3 +283,9 @@ func (env Env) iconDir(p provider.ID) string {
 	}
 	return filepath.Join(env.Dirs.File(paths.TrayIconsDir), n)
 }
+
+// watchesDesktop: a helper stopped after repeated failures is replaced by
+// one that watches the desktop (supervisor.Options.Standby): Linux sees a
+// tray host appear on the session bus, Windows the taskbar's
+// TaskbarCreated; macOS has nothing to watch.
+func watchesDesktop(goos string) bool { return goos == "linux" || goos == "windows" }

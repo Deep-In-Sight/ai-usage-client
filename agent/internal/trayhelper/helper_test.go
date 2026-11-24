@@ -175,6 +175,7 @@ type runOpts struct {
 	token     string
 	available func(context.Context) (bool, string)
 	waitHost  func(context.Context) bool
+	watch     func(context.Context) bool
 	ui        *fakeUI
 }
 
@@ -197,7 +198,7 @@ func startRun(t *testing.T, ro runOpts) *run {
 	r := &run{t: t, ui: ro.ui, iconDir: t.TempDir(), opts: make(chan Options, 1), inW: inW, out: bufio.NewReader(outR), code: make(chan int, 1), notices: make(chan string, 4)}
 	d := deps{
 		goos: ro.goos, getenv: func(k string) string { return map[string]string{"XDG_CURRENT_DESKTOP": "ubuntu:GNOME"}[k] },
-		newUI: func(o Options) ui { r.opts <- o; return ro.ui }, available: ro.available, waitHost: ro.waitHost,
+		newUI: func(o Options) ui { r.opts <- o; return ro.ui }, available: ro.available, waitHost: ro.waitHost, watch: ro.watch,
 		notify:       func(title, text string) error { r.notices <- title + ": " + text; return nil },
 		tick:         20 * time.Millisecond,
 		readyTimeout: 2 * time.Second,
@@ -328,6 +329,56 @@ func TestHelperTakesItsJobFromTheFirstLine(t *testing.T) {
 	r.send(view("42%", false))
 	eq(t, r.next().Type, trayproto.TypeReady)
 	r.send(trayproto.Msg{Type: trayproto.TypeQuit})
+	eq(t, r.exitCode(), trayproto.ExitOK)
+}
+
+// In standby (the agent stopped this helper after repeated failures) it
+// shows nothing and only watches the desktop: when the tray came (back) it
+// ends with 77, and the agent tries the icon again (stage-2 review m-3).
+func TestHelperStandbyWatchesTheDesktop(t *testing.T) {
+	back := make(chan struct{})
+	r := startRun(t, runOpts{watch: func(ctx context.Context) bool {
+		select {
+		case <-back:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}})
+	r.send(trayproto.Msg{Type: trayproto.TypeHello, Token: "tok-0123456789", Provider: "claude", UID: 100, Standby: true})
+	r.send(view("42%", false)) // not shown
+	select {
+	case <-r.code:
+		t.Fatal("ended before the desktop came back")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(back)
+	eq(t, r.exitCode(), trayproto.ExitDesktopBack)
+	select {
+	case <-r.ui.ran:
+		t.Fatal("the tray was started")
+	case o := <-r.opts:
+		t.Fatalf("a tray was made for %+v", o)
+	default:
+	}
+}
+
+// A standby helper ends on quit and at the end of its input, like any.
+func TestHelperStandbyEndsOnQuitAndEOF(t *testing.T) {
+	wait := func(ctx context.Context) bool { <-ctx.Done(); return false }
+	for _, end := range []string{"quit", "eof"} {
+		r := startRun(t, runOpts{watch: wait})
+		r.send(trayproto.Msg{Type: trayproto.TypeHello, Token: "tok-0123456789", Standby: true})
+		if end == "quit" {
+			r.send(trayproto.Msg{Type: trayproto.TypeQuit})
+		} else {
+			r.inW.Close()
+		}
+		eq(t, r.exitCode(), trayproto.ExitOK)
+	}
+	// where nothing can be watched (macOS) it ends at once
+	r := startRun(t, runOpts{})
+	r.send(trayproto.Msg{Type: trayproto.TypeHello, Token: "tok-0123456789", Standby: true})
 	eq(t, r.exitCode(), trayproto.ExitOK)
 }
 

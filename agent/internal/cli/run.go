@@ -208,7 +208,8 @@ func runCmd(env Env, args []string) int {
 		_ = os.Remove(marker)
 		notice = text.Notice(env.goos())
 	}
-	sup := supervisor.New(supervisor.Options{Spawn: env.helperSpawner(logger), IconDir: env.iconDir, Clock: env.Clock, Log: logger})
+	sup := supervisor.New(supervisor.Options{Spawn: env.helperSpawner(logger), IconDir: env.iconDir,
+		Standby: watchesDesktop(env.goos()), Clock: env.Clock, Log: logger})
 	loop := &trayLoop{env: env, ctrl: ctrl, sup: sup, updates: updates, log: logger, setMode: e.SetClientMode,
 		known: []provider.ID{provider.Claude}, extra: testHelpers(env)}
 	// The tray's Remove: the helpers end, this process stops its engine
