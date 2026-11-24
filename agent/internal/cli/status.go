@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -134,5 +135,18 @@ func statusCmd(env Env, args []string) int {
 		fmt.Fprintf(w, "Numbers:    %s\n", usage.FormatUpdated(snap.LatestFetchedAt, now))
 	}
 	fmt.Fprintf(w, "Backlog:    %d\n", snap.Backlog)
+	fmt.Fprintf(w, "Log:        %s\n", displayPath(env, env.Dirs.File(paths.LogFile)))
 	return 0
+}
+
+// displayPath shows a path under the home folder as ~/... (not on Windows,
+// where ~ means nothing to the shell).
+func displayPath(env Env, p string) string {
+	if env.goos() == "windows" || env.Dirs.Home == "" {
+		return p
+	}
+	if rel, err := filepath.Rel(env.Dirs.Home, p); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "~/" + filepath.ToSlash(rel)
+	}
+	return p
 }

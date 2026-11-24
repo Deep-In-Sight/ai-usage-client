@@ -16,6 +16,7 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/autostart"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/creds"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/logfile"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/osinfo"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
@@ -68,17 +69,22 @@ func runCmd(env Env, args []string) int {
 		fmt.Fprintln(env.Stderr, "ai-usage:", err)
 		return 1
 	}
-	logOut, closeLog := logOutput(env)
+	info := osinfo.Current()
+	scrub := logfile.NewScrubber(logfile.Personal{Home: env.Dirs.Home, User: info.OSUser, Host: info.Hostname}, cfg.IngestKey)
+	logOut, closeLog := logOutput(env, scrub)
 	logger := log.New(logOut, "", 0)
+	// The tray and the systray copy log through the standard logger.
+	stdOut, stdFlags := log.Writer(), log.Flags()
+	log.SetOutput(logOut)
+	log.SetFlags(0)
 	release = func() {
 		releaseOnce.Do(func() {
 			unlock()
-			logger.SetOutput(env.Stderr)
+			logger.SetOutput(scrub.Writer(env.Stderr))
+			log.SetOutput(stdOut)
+			log.SetFlags(stdFlags)
 			closeLog()
 		})
-	}
-	if env.goos() == "windows" {
-		logger.SetFlags(log.LstdFlags)
 	}
 	deviceID, err := config.DeviceID(env.Dirs.File(paths.DeviceIDFile))
 	if err != nil {
@@ -102,7 +108,6 @@ func runCmd(env Env, args []string) int {
 	ro.Clock = env.Clock
 	reader := creds.NewReader(ro)
 	ua := version.UserAgent()
-	info := osinfo.Current()
 	statusPath := env.Dirs.File(paths.StatusFile)
 	statusFailed := false
 
@@ -243,29 +248,41 @@ func runCmd(env Env, args []string) int {
 // trayRecheck is how often a run without a tray looks for one again.
 var trayRecheck = 5 * time.Minute
 
-// logOutput is where run logs: standard error, and on Windows (where the
-// agent has no console) also the data folder's agent.log, restarted when it
-// grows past 1 MiB. On macOS launchd writes agent.log; it is cut the same way.
-func logOutput(env Env) (io.Writer, func()) {
-	if env.goos() == "darwin" {
-		// launchd appends standard output and error to agent.log for ever.
-		p := env.Dirs.File(paths.LogFile)
-		if st, err := os.Stat(p); err == nil && st.Size() > 1<<20 {
+// logOutput is where run logs, every line scrubbed: the data folder's
+// agent.log (each line stamped, moved to agent.log.1 past 1 MiB, Go crash
+// reports included) and standard error. The agent that install starts has
+// no standard error anyone reads (Linux, macOS: /dev/null; Windows: a GUI
+// process has none), so the file is the log users can read. When standard
+// error already is agent.log (launchd on macOS), only standard error is
+// written, and the file is cut at start past 1 MiB.
+func logOutput(env Env, scrub *logfile.Scrubber) (io.Writer, func()) {
+	p := env.Dirs.File(paths.LogFile)
+	if sameFile(env.Stderr, p) {
+		if st, err := os.Stat(p); err == nil && st.Size() > logfile.Max {
 			_ = os.Truncate(p, 0)
 		}
+		return scrub.Writer(env.Stderr), func() {}
 	}
-	if env.goos() != "windows" {
-		return env.Stderr, func() {}
-	}
-	p := env.Dirs.File(paths.LogFile)
-	if st, err := os.Stat(p); err == nil && st.Size() > 1<<20 {
-		_ = os.Remove(p)
-	}
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := logfile.Open(p, logfile.Max)
 	if err != nil {
-		return env.Stderr, func() {}
+		return scrub.Writer(env.Stderr), func() {}
 	}
+	f.SendCrashes()
 	// The file first: io.MultiWriter stops at the first failing writer, and
 	// a GUI process's standard error is not valid.
-	return io.MultiWriter(f, env.Stderr), func() { f.Close() }
+	return scrub.Writer(io.MultiWriter(f, env.Stderr)), func() { f.Close() }
+}
+
+// sameFile: w is an open file that is the file at p.
+func sameFile(w io.Writer, p string) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	a, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	b, err := os.Stat(p)
+	return err == nil && os.SameFile(a, b)
 }
