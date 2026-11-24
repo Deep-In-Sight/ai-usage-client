@@ -1,7 +1,9 @@
 //go:build (linux || freebsd || openbsd || netbsd) && !android
 
 //Modified from fyne.io/systray v1.12.2: SetLabel and the XAyatanaLabel and
-//XAyatanaLabelGuide properties were added (see PATCHED.md).
+//XAyatanaLabelGuide properties were added, the item's properties are
+//exported under the lock, and introspection lists the additions (see
+//PATCHED.md).
 
 //Note that you need to have github.com/knightpp/dbus-codegen-go installed from "custom" branch
 //go:generate dbus-codegen-go -prefix org.kde -package notifier -output internal/generated/notifier/status_notifier_item.go internal/StatusNotifierItem.xml
@@ -241,7 +243,15 @@ func nativeStart() {
 		log.Printf("systray error: failed to request name: %s\n", err)
 		// it's not critical error: continue
 	}
+	// Patched (see PATCHED.md): the properties are built, exported and
+	// published under the lock, so a SetIcon/SetLabel/... that races with
+	// start-up is either in the spec or applied to the exported properties.
+	instance.lock.Lock()
 	props, err := prop.Export(conn, path, instance.createPropSpec())
+	if err == nil {
+		instance.props = props
+	}
+	instance.lock.Unlock()
 	if err != nil {
 		log.Printf("systray error: failed to export notifier item properties to bus: %s\n", err)
 		return
@@ -257,7 +267,7 @@ func nativeStart() {
 		Interfaces: []introspect.Interface{
 			introspect.IntrospectData,
 			prop.IntrospectData,
-			notifier.IntrospectDataStatusNotifierItem,
+			itemIntrospection(), // patched, see PATCHED.md
 		},
 	}
 	err = conn.Export(introspect.NewIntrospectable(&node), path,
@@ -360,9 +370,8 @@ type tray struct {
 	menuVersion      uint32
 }
 
+// createPropSpec is called with t.lock held (patched, see PATCHED.md).
 func (t *tray) createPropSpec() map[string]map[string]*prop.Prop {
-	t.lock.Lock()
-	defer t.lock.Unlock()
 	id := t.title
 	if id == "" {
 		id = fmt.Sprintf("systray_%d", os.Getpid())
@@ -443,6 +452,21 @@ func (t *tray) createPropSpec() map[string]map[string]*prop.Prop {
 				Callback: nil,
 			},
 		}}
+}
+
+// itemIntrospection is upstream's introspection data for the item plus
+// the Ayatana label members SetLabel provides (added, see PATCHED.md).
+func itemIntrospection() introspect.Interface {
+	i := notifier.IntrospectDataStatusNotifierItem
+	i.Properties = append(append([]introspect.Property(nil), i.Properties...),
+		introspect.Property{Name: "XAyatanaLabel", Type: "s", Access: "read"},
+		introspect.Property{Name: "XAyatanaLabelGuide", Type: "s", Access: "read"})
+	i.Signals = append(append([]introspect.Signal(nil), i.Signals...),
+		introspect.Signal{Name: "XAyatanaNewLabel", Args: []introspect.Arg{
+			{Name: "label", Type: "s", Direction: "out"},
+			{Name: "guide", Type: "s", Direction: "out"},
+		}})
+	return i
 }
 
 // PX is picture pix map structure with width and high
