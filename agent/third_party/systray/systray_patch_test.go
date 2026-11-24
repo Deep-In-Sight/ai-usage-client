@@ -5,6 +5,11 @@
 package systray
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/printer"
+	"go/token"
+	"strings"
 	"testing"
 	"time"
 )
@@ -80,4 +85,52 @@ func TestIntrospectionHasTheLabel(t *testing.T) {
 			t.Fatal("upstream data modified")
 		}
 	}
+}
+
+// The M1 fix itself: nativeStart must lock, export the spec, store
+// instance.props and unlock, in this order and with nothing in between, so
+// no Set* call can fall between the spec and props. (The race needs a
+// session bus and lasts microseconds; this structural check is
+// deterministic and fails if the store moves back outside the lock.)
+func TestNativeStartPublishesPropsUnderTheLock(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "systray_unix.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body []ast.Stmt
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "nativeStart" {
+			body = fd.Body.List
+		}
+	}
+	src := func(n ast.Node) string {
+		var b strings.Builder
+		if err := printer.Fprint(&b, fset, n); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(strings.Fields(b.String()), " ")
+	}
+	want := []string{
+		"instance.lock.Lock()",
+		"props, err := prop.Export(conn, path, instance.createPropSpec())",
+		"if err == nil { instance.props = props }",
+		"instance.lock.Unlock()",
+	}
+	for i := range body {
+		if i+len(want) > len(body) {
+			break
+		}
+		match := true
+		for j, w := range want {
+			if src(body[i+j]) != w {
+				match = false
+				break
+			}
+		}
+		if match {
+			return
+		}
+	}
+	t.Fatal("nativeStart does not export and store the properties under one hold of instance.lock")
 }
