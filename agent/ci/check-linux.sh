@@ -481,16 +481,17 @@ release_codex_check() {
   # 1. the vendors' names are this runner's, before anything could ask them
   REL_HOSTS_SAVED="$RUNNER_TEMP/hosts.before-release-check"
   cp /etc/hosts "$REL_HOSTS_SAVED"
-  printf '127.0.0.1 %s # ai-usage CI fake vendors\n' "$names" | sudo tee -a /etc/hosts > /dev/null
+  # both families: a name mapped for IPv4 only is looked up in DNS for IPv6
+  printf '127.0.0.1 %s # ai-usage CI fake vendors\n::1 %s # ai-usage CI fake vendors\n' "$names" "$names" | sudo tee -a /etc/hosts > /dev/null
   for h in $names; do
-    got=$(getent hosts "$h" | awk '{ print $1 }' | sort -u | tr '\n' ' ')
-    [ "$got" = "127.0.0.1 " ] || problems="$problems $h=[$got]"
+    got=$(getent ahosts "$h" | awk '{ print $1 }' | sort -u | tr '\n' ' ')
+    case "$got" in "::1 127.0.0.1 "|"127.0.0.1 "|"::1 ") ;; *) problems="$problems $h=[$got]" ;; esac
   done
   if [ -n "$problems" ]; then fail release.no_codex_cli "vendor names not mapped to this runner:$problems"; release_cleanup; return; fi
   # 2. the fake vendors on 127.0.0.1:443, their CA trusted by the system
   REL_PORT_OLD=$(sysctl -n net.ipv4.ip_unprivileged_port_start)
   sudo sysctl -q -w net.ipv4.ip_unprivileged_port_start=443
-  "$CI_BIN/fakevendor" -listen 127.0.0.1:443 -admin 127.0.0.1:18799 -ca "$ca" -mode 403 > "$out/fakevendor.log" 2>&1 &
+  "$CI_BIN/fakevendor" -listen '127.0.0.1:443,[::1]:443' -admin 127.0.0.1:18799 -ca "$ca" -mode 403 > "$out/fakevendor.log" 2>&1 &
   REL_VPID=$!
   if ! wait_for 20 curl -fsS --max-time 5 "$admin/healthz" -o /dev/null; then
     fail release.no_codex_cli "fakevendor did not start: $(head -c 200 "$out/fakevendor.log")"; release_cleanup; return

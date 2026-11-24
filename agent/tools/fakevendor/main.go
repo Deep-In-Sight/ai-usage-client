@@ -144,7 +144,7 @@ func certificates() (tls.Certificate, []byte, error) {
 }
 
 func main() {
-	listen := flag.String("listen", "127.0.0.1:443", "TLS address for the vendors' host names")
+	listen := flag.String("listen", "127.0.0.1:443,[::1]:443", "TLS addresses for the vendors' host names, comma-separated (the check maps the names to both loopback addresses)")
 	adminAddr := flag.String("admin", "127.0.0.1:18799", "plain-HTTP control address")
 	caFile := flag.String("ca", "fakevendor-ca.pem", "where to write the certificate authority (PEM)")
 	mode := flag.String("mode", "403", "the usage answer: 403 or nulls")
@@ -158,8 +158,20 @@ func main() {
 	}
 	v := newVendor(*mode)
 	go func() { log.Fatal(http.ListenAndServe(*adminAddr, v.admin())) }()
-	srv := &http.Server{Addr: *listen, Handler: http.HandlerFunc(v.serve),
+	srv := &http.Server{Handler: http.HandlerFunc(v.serve),
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}}
+	var lns []net.Listener
+	for _, a := range strings.Split(*listen, ",") {
+		ln, err := net.Listen("tcp", strings.TrimSpace(a))
+		if err != nil {
+			log.Fatal(err) // every address or none: a name must never reach a closed port by one family
+		}
+		lns = append(lns, ln)
+	}
 	log.Printf("fakevendor on %s (admin %s), CA in %s", *listen, *adminAddr, *caFile)
-	log.Fatal(srv.ListenAndServeTLS("", ""))
+	errs := make(chan error, len(lns))
+	for _, ln := range lns {
+		go func(ln net.Listener) { errs <- srv.ServeTLS(ln, "", "") }(ln)
+	}
+	log.Fatal(<-errs)
 }

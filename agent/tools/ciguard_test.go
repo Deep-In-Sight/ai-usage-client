@@ -43,9 +43,11 @@ func TestCIScriptsRefuseOutsideARunner(t *testing.T) {
 	hostsBefore, _ := os.ReadFile(hostsFile)
 	for _, r := range runs {
 		for _, partial := range [][]string{nil, {"GITHUB_ACTIONS=true"}, {"RUNNER_TEMP=" + t.TempDir()}} {
-			home, wd := t.TempDir(), t.TempDir()
+			home, wd, local := t.TempDir(), t.TempDir(), t.TempDir()
+			// LOCALAPPDATA apart from home: pwsh keeps its own caches there;
+			// only the agent's folder in it is checked
 			env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "USERPROFILE=" + home,
-				"LOCALAPPDATA=" + filepath.Join(home, "AppData", "Local"), "CI_SCRIPTS=" + ciDir}
+				"LOCALAPPDATA=" + local, "APPDATA=" + local, "CI_SCRIPTS=" + ciDir}
 			for _, k := range []string{"SystemRoot", "windir", "TEMP", "TMP", "ProgramFiles", "PSModulePath"} {
 				if v, ok := os.LookupEnv(k); ok && runtime.GOOS == "windows" {
 					env = append(env, k+"="+v)
@@ -67,6 +69,11 @@ func TestCIScriptsRefuseOutsideARunner(t *testing.T) {
 			for _, d := range []string{home, wd} {
 				if ents, _ := os.ReadDir(d); len(ents) != 0 {
 					t.Fatalf("%s %v wrote into %s: %v", r.name, partial, d, ents)
+				}
+			}
+			for _, d := range []string{"AIUsage", filepath.Join("Programs", "AIUsage")} {
+				if _, err := os.Stat(filepath.Join(local, d)); err == nil {
+					t.Fatalf("%s %v made %s", r.name, partial, d)
 				}
 			}
 		}

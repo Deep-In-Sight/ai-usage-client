@@ -423,18 +423,19 @@ if ($Desktop) {
         if (-not $rel -or -not (Test-Path -LiteralPath (Join-Path $rel 'ai-usage-windows-amd64.exe'))) { Fail 'release.no_codex_cli' 'no release-style build in CI_REL'; return }
         # 1. the vendors' names are this runner's, before anything could ask them
         $script:hostsBefore = [IO.File]::ReadAllBytes($hostsFile)
-        Add-Content -LiteralPath $hostsFile -Value ("`r`n127.0.0.1 " + ($vendorNames -join ' ') + " $vendorTag") -Encoding ascii
+        # both families: a name mapped for IPv4 only may be looked up in DNS for IPv6
+        Add-Content -LiteralPath $hostsFile -Value ("`r`n127.0.0.1 " + ($vendorNames -join ' ') + " $vendorTag`r`n::1 " + ($vendorNames -join ' ') + " $vendorTag") -Encoding ascii
         $null = & ipconfig.exe /flushdns
         foreach ($h in $vendorNames) {
             $a = @(); try { $a = @([System.Net.Dns]::GetHostAddresses($h) | ForEach-Object { $_.IPAddressToString } | Sort-Object -Unique) } catch { }
-            if (($a -join ',') -ne '127.0.0.1') { $problems += "$h=[$($a -join ',')]" }
+            if ($a.Count -eq 0 -or @($a | Where-Object { $_ -ne '127.0.0.1' -and $_ -ne '::1' }).Count -gt 0) { $problems += "$h=[$($a -join ',')]" }
         }
         if ($problems.Count -gt 0) { Fail 'release.no_codex_cli' "vendor names not mapped to this runner: $($problems -join ' ')"; ReleaseCleanup; return }
         # 2. the fake vendors on 127.0.0.1:443, their CA trusted by the machine
         $ca = Join-Path $out 'fakevendor-ca.pem'
         $admin = 'http://127.0.0.1:18799'
         $script:vendorProc = Start-Process -FilePath (Join-Path $env:CI_BIN 'fakevendor.exe') `
-            -ArgumentList @('-listen', '127.0.0.1:443', '-admin', '127.0.0.1:18799', '-ca', $ca, '-mode', '403') `
+            -ArgumentList @('-listen', '127.0.0.1:443,[::1]:443', '-admin', '127.0.0.1:18799', '-ca', $ca, '-mode', '403') `
             -RedirectStandardOutput (Join-Path $out 'fakevendor-out.log') -RedirectStandardError (Join-Path $out 'fakevendor.log') -WindowStyle Hidden -PassThru
         if (-not (WaitFor 20 { try { $null = Invoke-RestMethod -TimeoutSec 5 "$admin/healthz"; $true } catch { $false } })) {
             Fail 'release.no_codex_cli' "fakevendor did not start: $(Get-Content -Raw (Join-Path $out 'fakevendor.log') -ErrorAction SilentlyContinue)"; ReleaseCleanup; return
