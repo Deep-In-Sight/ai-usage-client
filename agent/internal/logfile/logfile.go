@@ -18,6 +18,12 @@ import (
 // Max is the size at which agent.log is moved to agent.log.1.
 const Max = 1 << 20
 
+// Seams for tests: where Go crash reports go, and moving a file.
+var (
+	setCrashOutput = func(f *os.File) { _ = debug.SetCrashOutput(f, debug.CrashOptions{}) }
+	rename         = os.Rename
+)
+
 // File is an append-only log file that rotates at a size limit. It is safe
 // for concurrent use.
 type File struct {
@@ -58,7 +64,7 @@ func (l *File) open() error {
 	}
 	l.f, l.size, l.midLine = f, st.Size(), false
 	if l.crashes {
-		_ = debug.SetCrashOutput(f, debug.CrashOptions{})
+		setCrashOutput(f)
 	}
 	return nil
 }
@@ -66,7 +72,7 @@ func (l *File) open() error {
 func (l *File) moveAside() error {
 	old := l.path + ".1"
 	_ = os.Remove(old) // Windows cannot rename over an existing file
-	if err := os.Rename(l.path, old); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := rename(l.path, old); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
@@ -80,7 +86,7 @@ func (l *File) SendCrashes() {
 	defer l.mu.Unlock()
 	l.crashes = true
 	if l.f != nil {
-		_ = debug.SetCrashOutput(l.f, debug.CrashOptions{})
+		setCrashOutput(l.f)
 	}
 }
 
@@ -94,6 +100,12 @@ func (l *File) Write(p []byte) (int, error) {
 	}
 	out := l.stamp(p)
 	if l.size > 0 && l.size+int64(len(out)) > l.max {
+		// The crash output is a second handle to the file (on Windows one
+		// that forbids moving it), so it lets go first; open points it at
+		// the new file.
+		if l.crashes {
+			setCrashOutput(nil)
+		}
 		l.f.Close()
 		l.f = nil
 		if err := l.moveAside(); err != nil {
@@ -139,7 +151,7 @@ func (l *File) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.crashes {
-		_ = debug.SetCrashOutput(nil, debug.CrashOptions{})
+		setCrashOutput(nil)
 		l.crashes = false
 	}
 	if l.f == nil {

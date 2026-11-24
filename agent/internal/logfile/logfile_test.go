@@ -113,6 +113,67 @@ func TestOversizeFileIsMovedAsideAtOpen(t *testing.T) {
 	}
 }
 
+// With crash reports going to the file, rotation still works and every
+// later line is written. On Windows the crash output is a second handle to
+// agent.log, which made the rename fail and every later Write fail with it
+// (review m1); this test runs on the Windows CI runner too.
+func TestRotatesWhileCrashesGoToTheFile(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "agent.log")
+	f, err := Open(p, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.now = fixed
+	f.SendCrashes()
+	defer f.Close()
+	line := strings.Repeat("y", 30) + "\n"
+	for i := 0; i < 8; i++ {
+		if _, err := f.Write([]byte(fmt.Sprintf("%d%s", i, line))); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+	}
+	if _, err := os.Stat(p + ".1"); err != nil {
+		t.Fatal("no agent.log.1")
+	}
+	if got := read(t, p); !strings.HasSuffix(got, "7"+line) || len(got) > 100 {
+		t.Fatalf("agent.log %q", got)
+	}
+}
+
+// The crash output is pointed away from the file before it is moved and
+// back to the new file after: on every OS, so the order is tested here.
+func TestCrashOutputIsReleasedAroundTheRename(t *testing.T) {
+	var events []string
+	oldSet, oldRename := setCrashOutput, rename
+	defer func() { setCrashOutput, rename = oldSet, oldRename }()
+	setCrashOutput = func(f *os.File) {
+		if f == nil {
+			events = append(events, "crash->nil")
+		} else {
+			events = append(events, "crash->"+filepath.Base(f.Name()))
+		}
+	}
+	rename = func(a, b string) error {
+		events = append(events, "rename")
+		return os.Rename(a, b)
+	}
+	p := filepath.Join(t.TempDir(), "agent.log")
+	f, err := Open(p, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.now = fixed
+	f.SendCrashes()
+	f.Write([]byte(strings.Repeat("z", 30) + "\n"))
+	f.Write([]byte(strings.Repeat("z", 30) + "\n")) // rotates
+	f.Close()
+	want := []string{"crash->agent.log", "crash->nil", "rename", "crash->agent.log", "crash->nil"}
+	if fmt.Sprint(events) != fmt.Sprint(want) {
+		t.Fatalf("events %v, want %v", events, want)
+	}
+}
+
 // lan192 is an address in 192.168/16, written so that the repository's
 // text check (which keeps such addresses out of the sources) passes.
 var lan192 = fmt.Sprintf("%d.%d.7.20", 192, 168)
