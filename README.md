@@ -138,7 +138,8 @@ The menu, from top to bottom:
 | Yellow | 75% or more, or Anthropic flags the limit as being used up fast. |
 | Red | 90% or more. |
 | `⚠` after the percentage, a faded bar, or a faded Clawd (Windows) | The numbers are more than 15 minutes old. |
-| `–%`, or `-` under Clawd | No numbers yet, or Claude Code sign-in needed. |
+| `–%` next to Clawd, `-` under Clawd, or an empty bar | Signed in, no numbers yet. |
+| `–%` next to the grey ring, or `-` inside it | Claude Code sign-in needed, or the agent is just starting. |
 
 - **Windows:** Clawd with the percentage under it, in the colour above. New
   icons go under the `^` arrow on the taskbar; drag it onto the taskbar to
