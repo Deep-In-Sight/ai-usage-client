@@ -135,7 +135,7 @@ func TestTextStartsWithTheProgramsLicence(t *testing.T) {
 		"Copyright (c) 2026 Deep-In-Sight", "Permission is hereby granted", // LICENSE
 		"AI Usage is an independent internal tool. It is not affiliated with, endorsed by, or sponsored by Anthropic PBC or OpenAI.",
 		"The Clawd artwork, which the tray icon shows while Claude Code is signed in, depicts the Claude Code mascot, (c) Anthropic PBC. It is not covered by this licence, no licence from Anthropic is claimed, and it will be removed on request.",
-		"Apache License 2.0, changes included",
+		"(fyne.io/systray: Apache License 2.0, changes to its files included; files added by AI Usage: MIT)",
 	} {
 		i := strings.Index(s, want)
 		if i < 0 || i > first {
@@ -239,6 +239,32 @@ func TestLicenceFilesKeepTheirBytesInGit(t *testing.T) {
 	for _, want := range []string{"/LICENSE -text", "agent/internal/notices/licenses/** -text", "agent/third_party/systray/** -text"} {
 		if !lines[want] {
 			t.Fatalf(".gitattributes has no line %q", want)
+		}
+	}
+}
+
+// The binary's notice and the README say the same about the systray copy:
+// upstream's files with our changes are Apache-2.0, the files we added
+// are MIT (review m5).
+func TestSystrayLicenceAgreesWithTheReadme(t *testing.T) {
+	var b bytes.Buffer
+	Write(&b, nil, "go1.27.4")
+	notice := strings.Join(strings.Fields(b.String()), " ")
+	for _, want := range []string{"changes to its files included", "files added by AI Usage: MIT",
+		"files added there are under AI Usage's MIT licence"} {
+		if !strings.Contains(notice, want) {
+			t.Fatalf("the notices do not say %q", want)
+		}
+	}
+	r, err := os.ReadFile("../../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := strings.Join(strings.Fields(string(r)), " ")
+	for _, want := range []string{"Apache License 2.0 (`agent/third_party/systray/LICENSE`), changes to its files included",
+		"Only the files added to the copy", "are under the MIT licence"} {
+		if !strings.Contains(readme, want) {
+			t.Fatalf("the README does not say %q", want)
 		}
 	}
 }

@@ -69,7 +69,8 @@ func (m Module) embedded(f string) string {
 var Modules = []Module{
 	{Path: GoPath, Licence: "BSD 3-Clause", Note: "the Go standard library and runtime", Files: []string{"LICENSE", "PATENTS"}},
 	{Path: "fyne.io/systray", Licence: "Apache License 2.0",
-		Note:  "modified: the copy in agent/third_party/systray of the source repository; PATCHED.md there lists the changes",
+		Note: "modified: the copy in agent/third_party/systray of the source repository; PATCHED.md there lists the changes; " +
+			"files added there are under AI Usage's MIT licence",
 		Files: []string{"LICENSE"}},
 	{Path: "github.com/godbus/dbus/v5", Licence: "BSD 2-Clause", Files: []string{"LICENSE"}},
 	{Path: "github.com/miekg/dns", Licence: "BSD 3-Clause", Files: []string{"AUTHORS", "COPYRIGHT", "LICENSE"}},
@@ -122,8 +123,8 @@ func Write(w io.Writer, versions map[string]string, goVersion string) {
 			"no licence from %s is claimed, and it will be removed on request.",
 			m.Name, m.Shown, m.Depicts, m.Owner, m.Licensor))
 	}
-	fmt.Fprintln(w, "- The third-party software listed below keeps its own licence")
-	fmt.Fprintln(w, "  (fyne.io/systray: Apache License 2.0, changes included).")
+	wrap(w, "- ", "The third-party software listed below keeps its own licence "+
+		"(fyne.io/systray: Apache License 2.0, changes to its files included; files added by AI Usage: MIT).")
 	if b, err := files.ReadFile(OwnLicence); err == nil { // always: TestOwnLicenceIsTheRepositorysLicense
 		fmt.Fprintf(w, "\nLICENSE:\n\n%s", b)
 	}
