@@ -230,7 +230,7 @@ func parseRetryAfter(v string, now time.Time) time.Duration {
 		if n < 0 {
 			return 0
 		}
-		return time.Duration(n) * time.Second
+		return time.Duration(min(n, 7*24*3600)) * time.Second // no overflow from an absurd value
 	}
 	if t, err := http.ParseTime(v); err == nil {
 		if d := t.Sub(now).Round(time.Second); d > 0 {

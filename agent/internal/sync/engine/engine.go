@@ -57,6 +57,10 @@ const (
 	// one after the other, so two fetches and the sync that carries their
 	// results stay under the server's 90 s fetch timeout.
 	FetchTimeout = 35 * time.Second
+
+	// maxRetryAfter caps the Retry-After reported to the server (design
+	// D11, B7: a wait never exceeds one day).
+	maxRetryAfter = 24 * time.Hour
 )
 
 // Modes.
@@ -751,7 +755,7 @@ func (e *Engine) fetch(ctx context.Context, l *lane) {
 	item := backlog.Item{Provider: string(l.id), AccountKey: account, FetchedAt: protocol.Time{Time: res.FetchedAt}, HTTPStatus: st,
 		Usage: res.Usage, Source: res.Source, CLIVersion: res.CLIVersion, Detail: res.Detail}
 	if st == 429 && res.RetryAfter >= time.Second {
-		secs := int(res.RetryAfter / time.Second)
+		secs := int(min(res.RetryAfter, maxRetryAfter) / time.Second) // the design's longest wait (review N-4)
 		item.RetryAfterSeconds = &secs
 	}
 	if err := e.d.Backlog.Add(item); err != nil {

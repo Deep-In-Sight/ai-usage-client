@@ -27,6 +27,7 @@ type fakeProvider struct {
 	status int
 	state  string
 	at     []time.Time
+	wait   time.Duration // Retry-After of a 429 (0: 90 s)
 }
 
 func (f *fakeProvider) ID() provider.ID { return f.id }
@@ -52,6 +53,9 @@ func (f *fakeProvider) Fetch(context.Context) (provider.Result, error) {
 	}
 	if st == 429 {
 		r.RetryAfter = 90 * time.Second
+		if f.wait != 0 {
+			r.RetryAfter = f.wait
+		}
 	}
 	return r, nil
 }
@@ -244,4 +248,22 @@ func TestParseProblemEndsWithReadableNumbers(t *testing.T) {
 	r.step()
 	last := r.syncer.calls[len(r.syncer.calls)-1].v2
 	eq(t, string(last.Providers[0].ParseProblem), "")
+}
+
+// Review N-4: retry_after_seconds is capped at one day on the wire (the
+// design's longest wait; the server refuses absurd values).
+func TestRetryAfterIsCappedAtADay(t *testing.T) {
+	r := newRig(t, always(protocol.Response{}, errDown))
+	r.logins.login = creds.Login{}
+	other := &fakeProvider{id: provider.Codex, clk: r.clk, status: 429, wait: 400 * 24 * time.Hour}
+	r.extra = []provider.Provider{other}
+	r.e = r.build()
+	for len(other.at) == 0 && r.clk.Now().Sub(t0) < time.Hour {
+		r.step()
+	}
+	items := r.backlog.Pending(10, "codex")
+	if len(items) == 0 || items[0].RetryAfterSeconds == nil {
+		t.Fatalf("%+v", items)
+	}
+	eq(t, *items[0].RetryAfterSeconds, 86400)
 }
