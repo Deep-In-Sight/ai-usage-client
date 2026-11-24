@@ -42,7 +42,7 @@
             "FileDescription": "AI Usage agent",
             "FileVersion": "@FILE_VERSION@",
             "InternalName": "ai-usage",
-            "LegalCopyright": "Copyright (c) Deep-In-Sight",
+            "LegalCopyright": "Copyright (c) 2026 Deep-In-Sight. MIT License",
             "OriginalFilename": "ai-usage.exe",
             "ProductName": "AI Usage",
             "ProductVersion": "@PRODUCT_VERSION@",
