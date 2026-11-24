@@ -72,6 +72,7 @@ type server struct {
 	status int
 	body   string
 	delay  time.Duration
+	during func() // called while a request is being answered
 }
 
 func newServer(t *testing.T) *server {
@@ -79,8 +80,11 @@ func newServer(t *testing.T) *server {
 	s.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.n++
-		status, body, delay := s.status, s.body, s.delay
+		status, body, delay, during := s.status, s.body, s.delay, s.during
 		s.mu.Unlock()
+		if during != nil {
+			during()
+		}
 		if delay > 0 {
 			select {
 			case <-time.After(delay):
@@ -267,4 +271,33 @@ func TestForeignBaseURL(t *testing.T) {
 	_, err := p.Fetch(ctx)
 	must(t, err)
 	eq(t, s.count(), 1)
+}
+
+// Review m-1: a 401 refuses the auth.json the token came from. When Codex
+// renewed the sign-in while the request was on its way, the renewed one
+// is not refused.
+func Test401RefusesTheFileTheTokenCameFrom(t *testing.T) {
+	s := newServer(t)
+	p, home, _ := newProvider(t, s, nil)
+	signIn(t, home, t0.Add(9*24*time.Hour))
+	ctx := context.Background()
+	eq(t, p.Login(ctx).State, "ok")
+	s.mu.Lock()
+	s.status, s.body = 401, `{}`
+	s.during = func() {
+		signIn(t, home, t0.Add(10*24*time.Hour)) // Codex renews meanwhile
+		later := time.Now().Add(time.Hour)
+		must(t, os.Chtimes(filepath.Join(home, "auth.json"), later, later))
+	}
+	s.mu.Unlock()
+	res, err := p.Fetch(ctx)
+	must(t, err)
+	eq(t, res.HTTPStatus, 401)
+	eq(t, p.Login(ctx).State, "ok")
+	s.mu.Lock()
+	s.status, s.body, s.during = 200, `{"rate_limit":{}}`, nil
+	s.mu.Unlock()
+	_, err = p.Fetch(ctx)
+	must(t, err)
+	eq(t, s.count(), 2)
 }

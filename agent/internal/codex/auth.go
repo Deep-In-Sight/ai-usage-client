@@ -235,8 +235,18 @@ func stampOf(path string) stamp {
 // shared fully with Codex (sharedread: on Windows Codex can still rename
 // a new auth.json over it while it is open, review I-1).
 func readCapped(path string, limit int64) ([]byte, error) {
-	b, _, err := sharedread.ReadFile(path, limit)
+	b, _, err := readCappedStamp(path, limit)
 	return b, err
+}
+
+// readCappedStamp is readCapped with the stamp of the content read (from
+// the open file, not from a later look at the path).
+func readCappedStamp(path string, limit int64) ([]byte, stamp, error) {
+	b, info, err := sharedread.ReadFile(path, limit)
+	if err != nil {
+		return nil, stamp{}, err
+	}
+	return b, stamp{exists: true, mod: info.ModTime(), size: info.Size()}, nil
 }
 
 // Reader reads the Codex sign-in under the base spec's read rule (4.3): at
@@ -264,15 +274,25 @@ type Reader struct {
 	// counts as expired until auth.json changes (design D2)
 	rejected      bool
 	rejectedStamp stamp
+	// the content and the account the last token handed out came from
+	// (WithToken): a 401 refuses that content (review m-1)
+	readStamp   stamp
+	handed      bool
+	handedStamp stamp
 }
 
-// Rejected notes that the usage service refused the token (HTTP 401):
-// until auth.json changes (Codex renewed the sign-in) the sign-in counts
-// as expired and WithToken calls nothing.
+// Rejected notes that the usage service refused the token last handed out
+// (HTTP 401): until auth.json differs from the content that token came
+// from (Codex renewed the sign-in, perhaps while the request was on its
+// way) the sign-in counts as expired and WithToken calls nothing.
 func (r *Reader) Rejected() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.rejected, r.rejectedStamp = true, stampOf(r.authPath())
+	st := r.handedStamp
+	if !r.handed {
+		st = stampOf(r.authPath())
+	}
+	r.rejected, r.rejectedStamp = true, st
 }
 
 // stillRejected reports whether a 401 still stands (s.mu held).
@@ -357,20 +377,20 @@ func (r *Reader) login(now time.Time) provider.Login {
 // Sources/CodexBarCore/Providers/Codex/CodexProviderDescriptor.swift
 // loadCredentials @ a26ca57: a missing, unreadable or partly written
 // auth.json is read again twice, 50 ms apart; the file is never written.
-func (r *Reader) readAuth() (Auth, string, error) {
+func (r *Reader) readAuth() (Auth, string, stamp, error) {
 	var lastErr error
 	for i := 0; ; i++ {
-		b, err := readCapped(r.authPath(), maxAuthFile)
+		b, st, err := readCappedStamp(r.authPath(), maxAuthFile)
 		if err == nil {
 			a, tok, perr := parseAuth(b)
 			if perr == nil {
-				return a, tok, nil
+				return a, tok, st, nil
 			}
 			err = perr
 		}
 		lastErr = err
 		if i == readRetries {
-			return Auth{}, "", lastErr
+			return Auth{}, "", stamp{}, lastErr
 		}
 		r.sleep(retryGap)
 	}
@@ -382,8 +402,8 @@ func (r *Reader) read(_ context.Context) string {
 	r.reads++
 	r.have = true
 	r.cfgStamp = stampOf(r.configPath())
-	a, tok, err := r.readAuth()
-	r.authStamp = stampOf(r.authPath())
+	a, tok, st, err := r.readAuth()
+	r.authStamp, r.readStamp = stampOf(r.authPath()), st
 	r.problem = ""
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -450,6 +470,10 @@ func (r *Reader) Now() time.Time { return r.clk.Now() }
 // due for renewal is read again twice, 50 ms apart (Codex may be just
 // writing the renewed one), and fn is then not called.
 func (r *Reader) WithToken(ctx context.Context, fn func(accessToken, accountID string) error) error {
+	return r.withToken(ctx, fn)
+}
+
+func (r *Reader) withToken(ctx context.Context, fn func(accessToken, accountID string) error) error {
 	r.mu.Lock()
 	var tok string
 	var l provider.Login
@@ -462,6 +486,10 @@ func (r *Reader) WithToken(ctx context.Context, fn func(accessToken, accountID s
 		r.sleep(retryGap)
 	}
 	account := r.auth.AccountID
+	usable := l.State == "ok" && tok != ""
+	if usable {
+		r.handed, r.handedStamp = true, r.readStamp
+	}
 	r.mu.Unlock()
 	switch {
 	case l.State == "expired":
