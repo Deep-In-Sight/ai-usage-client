@@ -1,7 +1,8 @@
 // fakeserver is a stand-in for the team's AI Usage server in CI: it
 // takes syncs in schema 1 and 2 (-schema1-only: a server from before
 // schema 2, which refuses it), always answers "standby" (so the agent
-// never asks Anthropic),
+// never asks Anthropic or OpenAI; a signed-in Codex block gets a
+// wham-shaped latest),
 // serves the release files and the CI install scripts, and counts what it
 // saw. /stats shows counts and fake values only, never a key or a token.
 // POST /weekly?percent=N changes the weekly percentage it answers with;
@@ -29,7 +30,7 @@ import (
 // Config is the server's settings.
 type Config struct {
 	Key     string // the ingest key syncs must carry
-	Token   string // the fake access token that must never arrive here
+	Token   string // the fake tokens that must never arrive here (comma-separated)
 	Files   string // release files
 	Scripts string // install-ci.sh and install-ci.ps1
 	// Schema1Only answers schema 2 with 400 unsupported_schema.
@@ -46,6 +47,14 @@ type device struct {
 	LastSchema    int    `json:"last_schema"`
 	Machine       bool   `json:"machine"` // the last sync had a machine key (never shown)
 	Uninstalls    int    `json:"uninstall_events"`
+	// Providers: each provider block's last sign-in state and e-mail
+	// (schema 2)
+	Providers map[string]*providerSeen `json:"providers"`
+}
+
+type providerSeen struct {
+	LastAuthState string `json:"last_auth_state"`
+	LastEmail     string `json:"last_email"`
 }
 
 type server struct {
@@ -82,13 +91,18 @@ func (s *server) leakCheck(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 		r.Body = io.NopCloser(bytes.NewReader(body))
-		leak := s.cfg.Token != "" && bytes.Contains(body, []byte(s.cfg.Token))
-		for _, vs := range r.Header {
-			for _, v := range vs {
-				leak = leak || s.cfg.Token != "" && strings.Contains(v, s.cfg.Token)
+		leak := false
+		for _, tok := range strings.Split(s.cfg.Token, ",") {
+			if tok = strings.TrimSpace(tok); tok == "" {
+				continue
+			}
+			leak = leak || bytes.Contains(body, []byte(tok)) || strings.Contains(r.URL.String(), tok)
+			for _, vs := range r.Header {
+				for _, v := range vs {
+					leak = leak || strings.Contains(v, tok)
+				}
 			}
 		}
-		leak = leak || s.cfg.Token != "" && strings.Contains(r.URL.String(), s.cfg.Token)
 		if leak {
 			s.mu.Lock()
 			s.tokenLeaks++
@@ -157,7 +171,21 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "unsupported_schema"})
 		return
 	}
-	if req.Schema == 2 { // the Claude block in schema 1 terms
+	if req.Schema == 2 { // the Claude block in schema 1 terms; every block's sign-in
+		s.mu.Lock()
+		d := s.device(req.Device.ID)
+		for _, p := range req.Providers {
+			seen := d.Providers[p.Provider]
+			if seen == nil {
+				seen = &providerSeen{}
+				d.Providers[p.Provider] = seen
+			}
+			seen.LastAuthState = p.Auth.State
+			if p.Account != nil {
+				seen.LastEmail = p.Account.Email
+			}
+		}
+		s.mu.Unlock()
 		for _, p := range req.Providers {
 			if p.Provider == "claude" {
 				req.Auth.State, req.Account, req.WantFresh = p.Auth.State, p.Account, p.WantFresh
@@ -166,11 +194,7 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	s.syncs++
-	d := s.devices[req.Device.ID]
-	if d == nil {
-		d = &device{}
-		s.devices[req.Device.ID] = d
-	}
+	d := s.device(req.Device.ID)
 	d.Syncs++
 	d.LastSchema = req.Schema
 	d.Machine = len(req.Machine) > 0 && string(req.Machine) != "null"
@@ -205,13 +229,25 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 		for _, p := range req.Providers {
 			b := map[string]any{"provider": p.Provider, "role": "standby", "fetch_now": false, "latest": nil,
 				"peers": map[string]any{"devices": 0, "pcs": 0, "poller_hostname": nil}, "problem": nil}
-			if p.Provider == "claude" {
+			switch {
+			case p.Provider == "claude":
 				l := map[string]any{"source": nil}
 				for k, v := range latest {
 					l[k] = v
 				}
 				b["latest"] = l
 				b["peers"] = map[string]any{"devices": 2, "pcs": 2, "poller_hostname": "TEST-PC-01"}
+			case p.Provider == "codex" && p.Account != nil:
+				// a wham/usage-shaped fake reply: 5-hour 42 %, weekly 17 %
+				win := func(pct, secs int) map[string]any {
+					return map[string]any{"used_percent": pct, "limit_window_seconds": secs, "reset_after_seconds": 3600,
+						"reset_at": now.Add(time.Hour).Unix()}
+				}
+				b["latest"] = map[string]any{"fetched_at": stamp(now.Add(-60 * time.Second)), "source": "wham",
+					"usage": map[string]any{"plan_type": "plus", "rate_limit": map[string]any{"allowed": true, "limit_reached": false,
+						"primary_window": win(42, 18000), "secondary_window": win(17, 604800)}, "rate_limit_reached_type": nil,
+						"additional_rate_limits": nil}}
+				b["peers"] = map[string]any{"devices": 1, "pcs": 1, "poller_hostname": "TEST-PC-02"}
 			}
 			blocks = append(blocks, b)
 		}
@@ -225,6 +261,16 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 		"server_urls":           []string{base(r)},
 		"client_latest_version": nil,
 	})
+}
+
+// device is the record of one device id (s.mu held).
+func (s *server) device(id string) *device {
+	d := s.devices[id]
+	if d == nil {
+		d = &device{Providers: map[string]*providerSeen{}}
+		s.devices[id] = d
+	}
+	return d
 }
 
 func (s *server) file(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +337,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:18700", "address to listen on")
 	var cfg Config
 	flag.StringVar(&cfg.Key, "key", "", "ingest key")
-	flag.StringVar(&cfg.Token, "token", "", "fake access token to watch for")
+	flag.StringVar(&cfg.Token, "token", "", "fake tokens to watch for, comma-separated")
 	flag.StringVar(&cfg.Files, "files", ".", "release files")
 	flag.StringVar(&cfg.Scripts, "scripts", ".", "install-ci scripts")
 	flag.BoolVar(&cfg.Schema1Only, "schema1-only", false, "refuse schema 2 (400 unsupported_schema), as a server from before it")

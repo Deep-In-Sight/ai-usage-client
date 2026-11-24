@@ -321,3 +321,65 @@ func TestSyncCanBeHeld(t *testing.T) {
 		}
 	}
 }
+
+const v2bothBody = `{"schema":2,"client":{"version":"0.0.0-ci","os":"linux","mode":"tray"},"device":{"id":"dev-3"},
+ "machine":{"key":"0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b","source":"os"},"event":null,
+ "providers":[{"provider":"claude","account":{"key":"acc-ci-1","email":"user-a@example.com"},"auth":{"state":"ok","token_expires_at":null},
+  "parse_problem":null,"results":[],"want_fresh":false},
+  {"provider":"codex","account":{"key":"codex:00000000-0000-4000-8000-000000000001:user-ci","email":"user-ci@example.com","plan_type":"plus"},
+   "auth":{"state":"ok","token_expires_at":null},"parse_problem":null,"results":[],"want_fresh":false}]}`
+
+// Plan Task 11: a signed-in Codex block gets a standby answer with a
+// wham-shaped latest (5-hour 42 %, weekly 17 %); each provider's sign-in
+// state and e-mail are recorded per device.
+func TestSchema2CodexBlock(t *testing.T) {
+	srv, _ := newTest(t)
+	code, m := post(t, srv, "Bearer "+key, v2bothBody)
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	x := m["providers"].([]any)[1].(map[string]any)
+	if x["provider"] != "codex" || x["role"] != "standby" || x["fetch_now"] != false {
+		t.Fatalf("%v", x)
+	}
+	l, _ := x["latest"].(map[string]any)
+	if l == nil || l["source"] != "wham" {
+		t.Fatalf("latest %v", x["latest"])
+	}
+	rl := l["usage"].(map[string]any)["rate_limit"].(map[string]any)
+	p := rl["primary_window"].(map[string]any)
+	s := rl["secondary_window"].(map[string]any)
+	if p["used_percent"] != 42.0 || p["limit_window_seconds"] != 18000.0 || s["used_percent"] != 17.0 || s["limit_window_seconds"] != 604800.0 {
+		t.Fatalf("%v", rl)
+	}
+	var raw struct {
+		Devices map[string]struct {
+			Providers map[string]struct {
+				LastAuthState string `json:"last_auth_state"`
+				LastEmail     string `json:"last_email"`
+			} `json:"providers"`
+		} `json:"devices"`
+	}
+	_, body := get(t, srv, "/stats")
+	if err := json.Unmarshal([]byte(body), &raw); err != nil {
+		t.Fatal(err)
+	}
+	ps := raw.Devices["dev-3"].Providers
+	if ps["codex"].LastAuthState != "ok" || ps["codex"].LastEmail != "user-ci@example.com" || ps["claude"].LastAuthState != "ok" {
+		t.Fatalf("%+v", ps)
+	}
+}
+
+// -token takes several fake values (comma-separated): any of them in a
+// request is a leak.
+func TestEveryFakeTokenIsWatched(t *testing.T) {
+	files, scripts := t.TempDir(), t.TempDir()
+	srv := httptest.NewServer(newServer(Config{Key: key, Token: token + ",fake-codex-sig-ci-0123456789", Files: files, Scripts: scripts}))
+	defer srv.Close()
+	post(t, srv, "Bearer "+key, strings.Replace(v2bothBody, "user-ci@example.com", "x.fake-codex-sig-ci-0123456789", 1))
+	post(t, srv, "Bearer "+key, v2bothBody)
+	s, _ := stats(t, srv)
+	if s.TokenLeaks != 1 {
+		t.Fatalf("leaks %d", s.TokenLeaks)
+	}
+}

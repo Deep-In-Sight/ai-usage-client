@@ -2,18 +2,21 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/atomicfile"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/supervisor"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/version"
 )
 
@@ -126,7 +129,42 @@ func (l *trayLoop) draw() {
 		}
 		icons[id] = v
 	}
-	l.sup.Show(tray.BuildMenu(in), icons)
+	items := tray.BuildMenu(in)
+	l.dumpView(items)
+	l.sup.Show(items, icons)
+}
+
+// testDumpViewEnv names a file where a CI build (version 0.0.0-ci) writes
+// the menu it shows, as JSON, each time it is drawn (plan Task 11: the
+// -schema1-only check reads the Codex line). Any other build ignores it.
+const testDumpViewEnv = "AI_USAGE_TEST_DUMP_VIEW"
+
+// dumpView writes the visible menu items to testDumpViewEnv's file.
+func (l *trayLoop) dumpView(items []trayproto.Item) {
+	p := l.env.Getenv(testDumpViewEnv)
+	if p == "" || buildVersion() != "0.0.0-ci" {
+		return
+	}
+	type item struct {
+		ID      string `json:"id"`
+		Text    string `json:"text"`
+		Visible bool   `json:"visible"`
+	}
+	var v struct {
+		Items []item `json:"items"`
+	}
+	for _, it := range items {
+		if it.Visible {
+			v.Items = append(v.Items, item{it.ID, it.Text, true})
+		}
+	}
+	b, err := json.Marshal(v)
+	if err == nil {
+		err = atomicfile.Write(p, b, 0o600)
+	}
+	if err != nil {
+		l.log.Printf("test view dump: %v", err)
+	}
 }
 
 // run shows the tray until Quit, Remove or the end of ctx. notice is the

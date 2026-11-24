@@ -606,3 +606,44 @@ func TestDesktopIsWatchedWhereItCanBe(t *testing.T) {
 		}
 	}
 }
+
+// Plan Task 11: a CI build writes the menu it shows to the file
+// AI_USAGE_TEST_DUMP_VIEW names (the -schema1-only check reads it); any
+// other build ignores the variable.
+func TestDumpViewOnlyInACIBuild(t *testing.T) {
+	te := newEnv(t)
+	p := filepath.Join(t.TempDir(), "view.json")
+	te.vars[testDumpViewEnv] = p
+	l := &trayLoop{env: te.Env, log: log.New(io.Discard, "", 0)}
+	items := []trayproto.Item{{ID: "p.codex", Text: "Server does not support Codex yet", Visible: true}, {ID: "quit", Text: "Quit"}}
+	l.dumpView(items)
+	if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a release build wrote the view: %v", err)
+	}
+	asCIBuild(t)
+	l.dumpView(items)
+	b, err := os.ReadFile(p)
+	must(t, err)
+	var v struct {
+		Items []struct {
+			ID, Text string
+			Visible  bool
+		} `json:"items"`
+	}
+	must(t, json.Unmarshal(b, &v))
+	eq(t, len(v.Items), 1) // visible items only
+	eq(t, v.Items[0].Text, "Server does not support Codex yet")
+}
+
+// Plan Task 11: AI_USAGE_TEST_CODEX_OFFLINE=1 keeps a CI build's Codex
+// lane off the network (no request to chatgpt.com, no codex run): CI
+// runners have fake sign-ins only. Any other build ignores it.
+func TestCodexOfflineOnlyInACIBuild(t *testing.T) {
+	te := newEnv(t)
+	te.vars[testCodexOfflineEnv] = "1"
+	eq(t, codexOffline(te.Env), false)
+	asCIBuild(t)
+	eq(t, codexOffline(te.Env), true)
+	te.vars[testCodexOfflineEnv] = ""
+	eq(t, codexOffline(te.Env), false)
+}

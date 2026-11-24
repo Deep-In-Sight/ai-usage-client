@@ -23,6 +23,7 @@ agent_count() { pgrep -f "^$exe run" | wc -l; }
 main_pid() { systemctl --user show -p MainPID --value ai-usage.service 2>/dev/null; }
 
 fake_login file
+fake_codex_login
 start_fakeserver || { fail fakeserver "did not start"; finish; exit 1; }
 
 # install.oneline
@@ -51,6 +52,15 @@ sc=$(dev "$device" last_schema); mk=$(dev "$device" machine)
 if [ "$sc" = 2 ] && [ "$mk" = True ]; then pass sync.schema2 "schema $sc, machine key sent"
 else fail sync.schema2 "schema=$sc machine=$mk"; fi
 
+# sync.codex: the Codex block is signed in, with the fake Codex account
+if wait_for 30 codex_ok "$device"; then pass sync.codex "codex ok, $CODEX_EMAIL"
+else fail sync.codex "providers=$(dev "$device" providers)"; fi
+
+# status.both: the status command shows Claude's and Codex's parts, the
+# Codex rows from the server's latest (5-hour 42 %, weekly 17 %)
+if wait_for 30 both_in_status "$exe"; then pass status.both "Claude and Codex (Plus): 5-hour 42%, Weekly 17%"
+else fail status.both "$(head -c 300 "$out/status-both.txt")"; fi
+
 # status.json
 "$exe" status --json > "$out/status.json" 2>&1
 st="$out/status.json"
@@ -64,9 +74,14 @@ pid=$(main_pid)
 l=$(ss -H -lntup 2>/dev/null | grep "pid=$pid," || true)
 if [ -n "$pid" ] && [ "$pid" != 0 ] && [ -z "$l" ]; then pass run.no_listen "pid $pid"; else fail run.no_listen "pid=$pid $l"; fi
 
-# fakeserver.token_leaks
+# fakeserver.token_leaks (the Claude token and both Codex tokens)
 leaks=$(stats | jget - token_leaks)
 if [ "$leaks" = 0 ]; then pass fakeserver.token_leaks 0; else fail fakeserver.token_leaks "$leaks"; fi
+
+# files.token_leaks: no fake token in the agent's files (status.json,
+# backlog.json, latest-*.json, state.json, agent.log)
+if h=$(no_fake_tokens "$data"); then pass files.token_leaks "none in $(ls "$data" | tr '\n' ' ')"
+else fail files.token_leaks "$h"; fi
 
 # upgrade.in_place
 before=$(dev "$device" syncs)
@@ -109,6 +124,10 @@ sleep 2
 [ ! -e "$desktop" ] || problems="$problems desktop_file_left"
 [ "$(agent_count)" -eq 0 ] || problems="$problems processes_after_uninstall=$(agent_count)"
 if [ -z "$problems" ]; then pass desktop.fallback_headless "xdg-autostart, headless"; else fail desktop.fallback_headless "$problems"; fi
+
+# The tray checks below and the lifecycle want Claude alone (one icon);
+# tray.codex and sync.schema1 at the end put the Codex sign-in back.
+codex_aside
 
 # tray.label: a desktop session with a tray host (a fake StatusNotifierWatcher
 # on a private session bus). The item must export XAyatanaLabel (the text
@@ -329,6 +348,110 @@ stop_agents() {
   wait_for 15 none_left
 }
 lifecycle_checks
+codex_back
+
+# fake_session NAME: a private session bus with the fake tray host; sets
+# bus_addr, bus_pid, wpid (false if it did not come up).
+fake_session() {
+  bus_addr=""; bus_pid=""; wpid=""
+  : > "$out/bus-$1.addr"; : > "$out/bus-$1.pid"
+  dbus-daemon --session --fork --print-address=5 --print-pid=6 5>"$out/bus-$1.addr" 6>"$out/bus-$1.pid" || return 1
+  sbus_ready() { bus_addr=$(head -n 1 "$out/bus-$1.addr") && [ -n "$bus_addr" ] && bus_pid=$(head -n 1 "$out/bus-$1.pid") && [ -n "$bus_pid" ]; }
+  wait_for 10 sbus_ready "$1" || return 1
+  DBUS_SESSION_BUS_ADDRESS="$bus_addr" "$CI_BIN/fakewatcher" watch > "$out/watcher-$1.log" 2> "$out/watcher-$1.err" &
+  wpid=$!
+  swatcher_ready() { grep -q '^ready$' "$out/watcher-$1.log"; }
+  wait_for 10 swatcher_ready "$1"
+}
+end_session() { kill "$wpid" 2>/dev/null; kill "$bus_pid" 2>/dev/null; }
+
+# tray.codex: Claude and Codex signed in on a desktop: two items from two
+# helpers, labelled with each provider's number (Claude weekly 42 %, Codex
+# weekly 17 %: the server's latest), and Codex's section in the menu as a
+# tray host reads it (header with the plan, the 17 % weekly row). The
+# Codex lane is kept off the network (CI build switch).
+tray_codex_check() {
+  local problems="" items labels svc l layout got
+  fake_session codex || { fail tray.codex "no session bus or tray host"; end_session; return; }
+  XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS="$bus_addr" AI_USAGE_TEST_CODEX_OFFLINE=1 \
+    AI_USAGE_TEST_DUMP_VIEW="$out/view-codex.json" oneliner > "$out/install-codex.log" 2>&1 || problems="$problems install_rc=$?"
+  two_items() { items=$(awk '$1 == "registered" { s[$2] = 1 } END { for (k in s) print k }' "$out/watcher-codex.log" | sort) && [ "$(printf '%s\n' "$items" | grep -c .)" -eq 2 ]; }
+  both_labels() {
+    labels=""
+    for svc in $items; do
+      l=$(DBUS_SESSION_BUS_ADDRESS="$bus_addr" "$CI_BIN/fakewatcher" get "$svc" XAyatanaLabel 2>>"$out/watcher-codex.err")
+      labels="$labels $l"
+    done
+    labels=$(printf '%s\n' $labels | sort | tr '\n' ' ')
+    [ "$labels" = "17% 42% " ]
+  }
+  if wait_for 90 two_items; then
+    wait_for 60 both_labels || problems="$problems labels=[$labels]"
+    [ "$(pgrep -f "^$exe tray-helper" | wc -l)" -eq 2 ] || problems="$problems helpers=$(pgrep -f "^$exe tray-helper" | wc -l)"
+    svc=$(printf '%s\n' "$items" | head -n 1)
+    layout=$(timeout 15 busctl --address="$bus_addr" --timeout=10 --json=short -- \
+      call "$svc" /StatusNotifierItem/menu com.canonical.dbusmenu GetLayout iias 0 -1 0 2>&1)
+    printf '%s\n' "$layout" > "$out/menu-codex.json"
+    got=$(printf '%s' "$layout" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("no_layout"); sys.exit()
+labels = []
+def walk(n):
+    i, props, kids = n
+    p = {k: v["data"] for k, v in props.items()}
+    if p.get("visible", True) and p.get("label"):
+        labels.append(p["label"])
+    for k in kids:
+        walk(k["data"])
+walk(d["data"][1])
+head = [l for l in labels if l.startswith("Codex \u00b7 user-ci@") and l.endswith("Plus")]
+rows = [l for l in labels if "17%" in l and "Weekly" in l]
+print("ok" if head and rows else "missing: " + " | ".join(labels))
+')
+    [ "$got" = ok ] || problems="$problems codex_menu=[$got]"
+    grep -q 'Codex · user-ci' "$out/view-codex.json" 2>/dev/null || problems="$problems no_view_dump"
+  else
+    problems="$problems items=[$(printf '%s' "$items" | tr '\n' ' ')]"
+  fi
+  "$exe" uninstall > "$out/uninstall-codex.log" 2>&1 || problems="$problems uninstall_rc=$?"
+  sleep 2
+  [ "$(agent_count)" -eq 0 ] && [ "$(pgrep -f "^$exe tray-helper" | wc -l)" -eq 0 ] || problems="$problems processes_after_uninstall"
+  end_session
+  if [ -z "$problems" ]; then pass tray.codex "two items, labels [$labels], Codex section in the menu"; else fail tray.codex "$problems"; fi
+}
+tray_codex_check
+
+# sync.schema1: a server from before schema 2 (-schema1-only): the agent
+# falls back to schema 1 and keeps syncing (Claude), and the menu it shows
+# (dumped by the CI build) says the server does not support Codex yet.
+schema1_check() {
+  local problems="" base1=http://127.0.0.1:18701 dev1 sc n
+  start_fakeserver 18701 -schema1-only || { fail sync.schema1 "the schema-1 fake server did not start"; return; }
+  fake_session schema1 || { fail sync.schema1 "no session bus or tray host"; end_session; return; }
+  XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS="$bus_addr" AI_USAGE_TEST_CODEX_OFFLINE=1 \
+    AI_USAGE_TEST_DUMP_VIEW="$out/view-schema1.json" timeout 180 sh -c "wget -qO- $base1/files/install-ci.sh | sh" \
+    > "$out/install-schema1.log" 2>&1 || problems="$problems install_rc=$?"
+  s1stats() { curl -fsS --max-time 10 "$base1/stats"; }
+  synced1() { dev1=$(cat "$data/device-id" 2>/dev/null) && [ "$(s1stats | jget - devices "$dev1" syncs)" -ge 2 ] 2>/dev/null; }
+  wait_for 120 synced1 || problems="$problems syncs=$(s1stats | jget - devices "$dev1" syncs)"
+  sc=$(s1stats | jget - devices "$dev1" last_schema)
+  [ "$sc" = 1 ] || problems="$problems last_schema=$sc"
+  said() { grep -q 'Server does not support Codex yet' "$out/view-schema1.json" 2>/dev/null; }
+  wait_for 60 said || problems="$problems view=[$(head -c 200 "$out/view-schema1.json" 2>/dev/null)]"
+  n=$(s1stats | jget - token_leaks)
+  [ "$n" = 0 ] || problems="$problems token_leaks=$n"
+  "$exe" uninstall > "$out/uninstall-schema1.log" 2>&1 || problems="$problems uninstall_rc=$?"
+  sleep 2
+  end_session
+  n=$(s1stats | jget - devices "$dev1" syncs)
+  pkill -f -- "-listen 127.0.0.1:18701" 2>/dev/null
+  if [ -z "$problems" ]; then pass sync.schema1 "schema 1, $n syncs, menu: Server does not support Codex yet"
+  else fail sync.schema1 "$problems"; fi
+}
+schema1_check
 
 info linger "$(loginctl show-user "$USER" -p Linger 2>&1)"
 finish

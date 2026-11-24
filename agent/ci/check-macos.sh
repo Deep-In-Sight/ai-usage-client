@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# macOS runner checks: the sign-in only in the login keychain, one-line
-# install, LaunchAgent, tray mode sync, no listening port, no token leak,
-# in-place upgrade and uninstall. Results as annotations; exit 1 if a
+# macOS runner checks: the Claude sign-in only in the login keychain and a
+# fake Codex sign-in in ~/.codex, one-line install, LaunchAgent, tray mode
+# sync of both providers, one helper per provider, status, no listening
+# port, no token leak, in-place upgrade and uninstall (the server told). Results as annotations; exit 1 if a
 # required check failed.
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
@@ -26,6 +27,7 @@ rm -f "$HOME/.claude/.credentials.json"
 security add-generic-password -U -a "$USER" -s "Claude Code-credentials" -w "$(fake_creds_json)" > /dev/null 2>&1 ||
   fail keychain.setup "could not add the keychain item"
 trap 'security delete-generic-password -s "Claude Code-credentials" > /dev/null 2>&1' EXIT
+fake_codex_login
 start_fakeserver || { fail fakeserver "did not start"; finish; exit 1; }
 
 # install.oneline
@@ -61,6 +63,14 @@ synced_now() { device=$(cat "$data/device-id" 2>/dev/null) && sync_ok "$device" 
 if wait_for 90 synced_now; then pass sync.arrives "device $device (sign-in from the keychain)"
 else fail sync.arrives "device=$device stats=$(stats | jget - devices "$device")"; fi
 
+# sync.codex: the Codex block is signed in, with the fake Codex account
+if wait_for 30 codex_ok "$device"; then pass sync.codex "codex ok, $CODEX_EMAIL"
+else fail sync.codex "providers=$(dev "$device" providers)"; fi
+
+# status.both: the status command shows Claude's and Codex's parts
+if wait_for 30 both_in_status "$exe"; then pass status.both "Claude and Codex (Plus): 5-hour 42%, Weekly 17%"
+else fail status.both "$(head -c 300 "$out/status-both.txt")"; fi
+
 sleep $(( t_install + 30 - $(date +%s) > 0 ? t_install + 30 - $(date +%s) : 0 ))
 screencapture -x "$out/menubar-30s.png" 2>/dev/null
 info menubar.screenshot "menubar-5s.png and menubar-30s.png in the install-$RUNNER_LABEL artifact"
@@ -75,10 +85,11 @@ pid=$(la_pid)
 l=$(lsof -nP -a -p "$pid" -iTCP -sTCP:LISTEN 2>/dev/null); u=$(lsof -nP -a -p "$pid" -iUDP 2>/dev/null)
 if [ -n "$pid" ] && [ -z "$l" ] && [ -z "$u" ]; then pass run.no_listen "pid $pid"; else fail run.no_listen "pid=$pid tcp=$l udp=$u"; fi
 
-# tray.one_helper: Claude only, one helper of the agent
-one_helper() { [ "$(helper_count)" -eq 1 ] && [ "$(children "$pid")" -eq 1 ]; }
-if wait_for 30 one_helper; then pass tray.one_helper "agent $pid, helper $(pgrep -f "^$exe tray-helper")"
-else fail tray.one_helper "helpers=$(helper_count) children_of_$pid=$(children "$pid")"; fi
+# tray.provider_helpers: Claude and Codex signed in, one helper each, both
+# children of the agent
+provider_helpers() { [ "$(helper_count)" -eq 2 ] && [ "$(children "$pid")" -eq 2 ]; }
+if wait_for 30 provider_helpers; then pass tray.provider_helpers "agent $pid, helpers $(pgrep -f "^$exe tray-helper" | tr '\n' ' ')"
+else fail tray.provider_helpers "helpers=$(helper_count) children_of_$pid=$(children "$pid")"; fi
 
 # tray.helper_cmdline: the helper's command line names nothing but the
 # subcommand (its provider and icon folder come over its standard input)
@@ -118,9 +129,12 @@ launchctl bootstrap "gui/$(id -u)" "$plist" > /dev/null 2>&1
 wait_for 20 running
 pid=$(la_pid)
 
-# fakeserver.token_leaks
+# fakeserver.token_leaks (the Claude token and both Codex tokens)
 leaks=$(stats | jget - token_leaks)
 if [ "$leaks" = 0 ]; then pass fakeserver.token_leaks 0; else fail fakeserver.token_leaks "$leaks"; fi
+
+# files.token_leaks: no fake token in the agent's files
+if h=$(no_fake_tokens "$data"); then pass files.token_leaks "none"; else fail files.token_leaks "$h"; fi
 
 # upgrade.in_place
 before=$(dev "$device" syncs)
@@ -140,9 +154,10 @@ fi
 rc=$?
 sleep 3
 n=$(( $(agent_count) + $(helper_count) ))
-if [ $rc -eq 0 ] && [ ! -e "$plist" ] && ! launchctl print "gui/$(id -u)/$label" > /dev/null 2>&1 && [ "$n" -eq 0 ] && [ ! -e "$data" ]; then
-  pass uninstall "rc=0"
+ev=$(dev "$device" uninstall_events)
+if [ $rc -eq 0 ] && [ ! -e "$plist" ] && ! launchctl print "gui/$(id -u)/$label" > /dev/null 2>&1 && [ "$n" -eq 0 ] && [ ! -e "$data" ] && [ "$ev" = 1 ]; then
+  pass uninstall "rc=0, server told once"
 else
-  fail uninstall "rc=$rc plist=$([ -e "$plist" ] && echo left) loaded=$(launchctl print "gui/$(id -u)/$label" > /dev/null 2>&1 && echo yes) processes=$n data=$([ -e "$data" ] && echo left)"
+  fail uninstall "rc=$rc plist=$([ -e "$plist" ] && echo left) loaded=$(launchctl print "gui/$(id -u)/$label" > /dev/null 2>&1 && echo yes) processes=$n data=$([ -e "$data" ] && echo left) uninstall_events=$ev"
 fi
 finish

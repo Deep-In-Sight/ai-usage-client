@@ -14,6 +14,11 @@ $base = 'http://127.0.0.1:18700'
 $key = 'ci-ingest-key-0123456789'
 $token = 'fake-access-token-0123456789'
 $email = 'user-a@example.com'
+# the fake Codex sign-in (lib.sh has the same values)
+$codexSig = 'fake-codex-sig-ci-0123456789'
+$codexRefresh = 'fake-codex-refresh-ci-0123456789'
+$codexEmail = 'user-ci@example.com'
+$codexAccount = '00000000-0000-4000-8000-000000000001'
 $exe = Join-Path $env:LOCALAPPDATA 'Programs\AIUsage\ai-usage.exe'
 $installDir = Split-Path -Parent $exe
 $data = Join-Path $env:LOCALAPPDATA 'AIUsage'
@@ -122,9 +127,20 @@ $exp = [DateTimeOffset]::UtcNow.AddHours(8).ToUnixTimeMilliseconds()
 [IO.File]::WriteAllText((Join-Path $cd '.credentials.json'), "{`"claudeAiOauth`":{`"accessToken`":`"$token`",`"expiresAt`":$exp,`"subscriptionType`":`"max`"}}")
 [IO.File]::WriteAllText((Join-Path $env:USERPROFILE '.claude.json'), "{`"oauthAccount`":{`"accountUuid`":`"acc-ci-1`",`"emailAddress`":`"$email`",`"displayName`":`"User A`",`"organizationName`":`"Example`"}}")
 
+# the fake Codex sign-in: fake JWTs ending in $codexSig, the access token
+# expires in 9 days
+function B64Url([string]$s) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)).TrimEnd('=').Replace('+', '-').Replace('/', '_') }
+$cxAuth = "{`"chatgpt_account_id`":`"$codexAccount`",`"chatgpt_user_id`":`"user-ci`",`"chatgpt_plan_type`":`"plus`"}"
+$cxExp = [DateTimeOffset]::UtcNow.AddDays(9).ToUnixTimeSeconds()
+$cxAccess = "$(B64Url '{"alg":"none"}').$(B64Url "{`"exp`":$cxExp,`"https://api.openai.com/auth`":$cxAuth}").$codexSig"
+$cxId = "$(B64Url '{"alg":"none"}').$(B64Url "{`"email`":`"$codexEmail`",`"https://api.openai.com/auth`":$cxAuth}").$codexSig"
+$cxHome = Join-Path $env:USERPROFILE '.codex'
+New-Item -ItemType Directory -Force -Path $cxHome | Out-Null
+[IO.File]::WriteAllText((Join-Path $cxHome 'auth.json'), "{`"auth_mode`":`"chatgpt`",`"OPENAI_API_KEY`":null,`"tokens`":{`"access_token`":`"$cxAccess`",`"id_token`":`"$cxId`",`"refresh_token`":`"$codexRefresh`",`"account_id`":`"$codexAccount`"}}")
+
 # the fake team server
 $null = Start-Process -FilePath (Join-Path $env:CI_BIN 'fakeserver.exe') `
-    -ArgumentList @('-listen', '127.0.0.1:18700', '-key', $key, '-token', $token, '-files', $env:CI_DIST, '-scripts', $env:CI_SCRIPTS) `
+    -ArgumentList @('-listen', '127.0.0.1:18700', '-key', $key, '-token', "$token,$codexSig,$codexRefresh", '-files', $env:CI_DIST, '-scripts', $env:CI_SCRIPTS) `
     -RedirectStandardOutput (Join-Path $out 'fakeserver-out.log') -RedirectStandardError (Join-Path $out 'fakeserver.log') `
     -WindowStyle Hidden -PassThru
 if (-not (WaitFor 30 { try { $null = Invoke-RestMethod -TimeoutSec 5 "$base/healthz"; $true } catch { $false } })) {
@@ -189,12 +205,19 @@ if ($Desktop) {
     Info 'sync.mode' "$((DevStat $script:device).last_mode)"
 }
 
-# Claude only: one tray helper, the agent's child, with its tray window.
-Check 'tray.one_helper' {
-    $ok = WaitFor 30 { (HelpersWithWindow $script:agentPid).Count -eq 1 -and (HelperProcs).Count -eq 1 }
+# The Codex block is signed in, with the fake Codex account.
+Check 'sync.codex' {
+    $ok = WaitFor 30 { $d = DevStat $script:device; $d -and $d.providers.codex.last_auth_state -eq 'ok' -and $d.providers.codex.last_email -eq $codexEmail }
+    if ($ok) { Pass 'sync.codex' "codex ok, $codexEmail" } else { Fail 'sync.codex' "providers=$(ConvertTo-Json -Compress -InputObject (DevStat $script:device).providers)" }
+}
+
+# Claude and Codex signed in: one tray helper each, children of the
+# agent, each with its tray window.
+Check 'tray.provider_helpers' {
+    $ok = WaitFor 30 { (HelpersWithWindow $script:agentPid).Count -eq 2 -and (HelperProcs).Count -eq 2 }
     $h = HelperProcs
-    if ($ok) { Pass 'tray.one_helper' "helper pid $($h[0].ProcessId) of agent $($script:agentPid): $($h[0].CommandLine -replace '^.*tray-helper', 'tray-helper')" }
-    else { Fail 'tray.one_helper' "helpers=$($h.Count) with_window=$((HelpersWithWindow $script:agentPid).Count) cmd=$($h.CommandLine -join ' | ')" }
+    if ($ok) { Pass 'tray.provider_helpers' "helpers $($h.ProcessId -join ',') of agent $($script:agentPid)" }
+    else { Fail 'tray.provider_helpers' "helpers=$($h.Count) with_window=$((HelpersWithWindow $script:agentPid).Count) cmd=$($h.CommandLine -join ' | ')" }
 }
 
 # The helper's command line names nothing but the subcommand: its
@@ -212,6 +235,18 @@ Check 'status.json' {
     else { Fail 'status.json' "code=$($r.code) out=$($r.out) err=$($r.err)" }
 }
 
+# The status command shows Claude's and Codex's parts, the Codex rows
+# from the server's latest (5-hour 42 %, weekly 17 %).
+Check 'status.both' {
+    $ok = WaitFor 30 {
+        $r = RunExe $exe 'status' 30; $script:statusText = "$($r.out)"
+        $script:statusText -match '(?m)^Claude:\s+signed in' -and $script:statusText -match '(?m)^Codex:\s+signed in \(Plus\)' -and
+            $script:statusText -match '(?m)^\s+5-hour\s+42%' -and $script:statusText -match '(?m)^\s+Weekly\s+17%'
+    }
+    [IO.File]::WriteAllText((Join-Path $out 'status-both.txt'), "$script:statusText")
+    if ($ok) { Pass 'status.both' 'Claude and Codex (Plus): 5-hour 42%, Weekly 17%' } else { Fail 'status.both' $script:statusText }
+}
+
 Check 'run.no_listen' {
     $tcp = @(Get-NetTCPConnection -State Listen -OwningProcess $script:agentPid -ErrorAction SilentlyContinue)
     $udp = @(Get-NetUDPEndpoint -OwningProcess $script:agentPid -ErrorAction SilentlyContinue)
@@ -222,6 +257,19 @@ Check 'run.no_listen' {
 Check 'fakeserver.token_leaks' {
     $s = Stats
     if ($s -and $s.token_leaks -eq 0) { Pass 'fakeserver.token_leaks' '0' } else { Fail 'fakeserver.token_leaks' "$($s.token_leaks)" }
+}
+
+# A file's text, read while the agent may still write it (agent.log).
+function ReadShared([string]$Path) {
+    $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+    try { (New-Object IO.StreamReader($fs)).ReadToEnd() } finally { $fs.Dispose() }
+}
+# No fake token (Claude's or Codex's) in the agent's files.
+Check 'files.token_leaks' {
+    $hits = @(Get-ChildItem -LiteralPath $data -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $c = ReadShared $_.FullName; $c.Contains($token) -or $c.Contains($codexSig) -or $c.Contains($codexRefresh) } |
+        ForEach-Object { $_.Name })
+    if ($hits.Count -eq 0) { Pass 'files.token_leaks' 'none' } else { Fail 'files.token_leaks' ($hits -join ' ') }
 }
 
 if ($Desktop) {
@@ -299,6 +347,8 @@ Check 'uninstall.via_entry' {
     if (Test-Path -LiteralPath $installDir) { $problems += 'install_dir_left' }
     if (Test-Path -LiteralPath $data) { $problems += 'data_left' }
     if ((AllProcs).Count -ne 0) { $problems += "processes=$((AllProcs).Count)" }
+    $ev = (DevStat $script:device).uninstall_events
+    if ($ev -ne 1) { $problems += "uninstall_events=$ev" }
     if ($problems.Count -eq 0) { Pass 'uninstall.via_entry' 'everything removed' } else { Fail 'uninstall.via_entry' ($problems -join ' ') }
 }
 

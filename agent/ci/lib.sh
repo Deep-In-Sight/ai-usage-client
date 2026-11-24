@@ -9,6 +9,12 @@ BASE=http://127.0.0.1:18700
 KEY=ci-ingest-key-0123456789
 TOKEN=fake-access-token-0123456789
 EMAIL=user-a@example.com
+# The fake Codex sign-in: its JWTs end in CODEX_SIG (a leak of either
+# token shows it), its refresh token is CODEX_REFRESH.
+CODEX_SIG=fake-codex-sig-ci-0123456789
+CODEX_REFRESH=fake-codex-refresh-ci-0123456789
+CODEX_EMAIL=user-ci@example.com
+CODEX_ACCOUNT=00000000-0000-4000-8000-000000000001
 out="${GITHUB_WORKSPACE:-$PWD}/out"
 mkdir -p "$out"
 required=0
@@ -62,10 +68,61 @@ fake_login() {
   fi
 }
 
+# fake_codex_login: a fake ChatGPT sign-in in ~/.codex/auth.json (fake
+# JWTs, the access token expires in 9 days; account and user ids of the
+# plan: 00000000-0000-4000-8000-000000000001, user-ci).
+fake_codex_login() {
+  mkdir -p "$HOME/.codex"
+  python3 - "$HOME/.codex/auth.json" "$CODEX_SIG" "$CODEX_REFRESH" "$CODEX_EMAIL" "$CODEX_ACCOUNT" <<'PY'
+import base64, json, sys, time
+path, sig, refresh, email, account = sys.argv[1:6]
+b64 = lambda o: base64.urlsafe_b64encode(json.dumps(o).encode()).rstrip(b"=").decode()
+auth = {"chatgpt_account_id": account, "chatgpt_user_id": "user-ci", "chatgpt_plan_type": "plus"}
+jwt = lambda claims: b64({"alg": "none"}) + "." + b64(claims) + "." + sig
+access = jwt({"exp": int(time.time()) + 9 * 86400, "https://api.openai.com/auth": auth})
+idt = jwt({"email": email, "https://api.openai.com/auth": auth})
+json.dump({"auth_mode": "chatgpt", "OPENAI_API_KEY": None, "last_refresh": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "tokens": {"access_token": access, "id_token": idt, "refresh_token": refresh, "account_id": account}}, open(path, "w"))
+PY
+  chmod 600 "$HOME/.codex/auth.json"
+}
+# codex_aside / codex_back: the Codex sign-in out of the way of a check
+# that wants Claude alone, and back.
+codex_aside() { [ -d "$HOME/.codex" ] && mv "$HOME/.codex" "$HOME/.codex-aside"; true; }
+codex_back() { [ -d "$HOME/.codex-aside" ] && mv "$HOME/.codex-aside" "$HOME/.codex"; true; }
+
+# start_fakeserver [PORT [FLAGS...]]: the fake team server (default 18700).
 start_fakeserver() {
-  "$CI_BIN/fakeserver" -listen 127.0.0.1:18700 -key "$KEY" -token "$TOKEN" -files "$CI_DIST" -scripts "$CI_SCRIPTS" \
-    > "$out/fakeserver.log" 2>&1 &
-  wait_for 20 curl -fsS "$BASE/healthz" -o /dev/null
+  local port=${1:-18700}; shift 2>/dev/null
+  "$CI_BIN/fakeserver" -listen "127.0.0.1:$port" -key "$KEY" -token "$TOKEN,$CODEX_SIG,$CODEX_REFRESH" -files "$CI_DIST" \
+    -scripts "$CI_SCRIPTS" "$@" > "$out/fakeserver-$port.log" 2>&1 &
+  wait_for 20 curl -fsS "http://127.0.0.1:$port/healthz" -o /dev/null
+}
+
+# codex_ok DEVICE: the device's last Codex block was signed in (ok) with
+# the fake Codex account.
+codex_ok() {
+  [ "$(dev "$1" providers | jget - codex last_auth_state)" = ok ] &&
+    [ "$(dev "$1" providers | jget - codex last_email)" = "$CODEX_EMAIL" ]
+}
+# both_in_status EXE: `status` shows Claude's part and Codex's, with the
+# Codex rows the fake server's latest gives (5-hour 42 %, weekly 17 %).
+both_in_status() {
+  local s
+  s=$("$1" status 2>&1)
+  printf '%s\n' "$s" > "$out/status-both.txt"
+  printf '%s' "$s" | grep -q '^Claude:     signed in' &&
+    printf '%s' "$s" | grep -q '^Codex:      signed in (Plus)' &&
+    printf '%s' "$s" | grep -Eq '^ +5-hour +42%' &&
+    printf '%s' "$s" | grep -Eq '^ +Weekly +17%'
+}
+# no_fake_tokens DIR: no fake token (Claude's or Codex's) in any file
+# under DIR (status.json, backlog.json, latest-*.json, state.json,
+# agent.log); prints the files that have one.
+no_fake_tokens() {
+  local hits
+  hits=$(grep -rlF -e "$TOKEN" -e "$CODEX_SIG" -e "$CODEX_REFRESH" "$1" 2>/dev/null)
+  [ -z "$hits" ] || { printf '%s' "$hits" | tr '\n' ' '; return 1; }
 }
 
 # sync_ok DEVICE MODE: the device synced at least twice, signed in, with the

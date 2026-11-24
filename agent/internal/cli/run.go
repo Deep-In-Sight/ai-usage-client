@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -139,6 +140,11 @@ func runCmd(env Env, args []string) int {
 
 	codexHome := codex.Home(cfg, env.Dirs.Home)
 	codexUsageURL, _ := codex.UsageURL("") // the address is set from config.toml at each fetch
+	codexTransport := env.CodexTransport
+	if codexOffline(env) {
+		codexTransport = offlineTransport{}
+		logger.Print("CI build: the Codex lane makes no request and runs no codex (" + testCodexOfflineEnv + ")")
+	}
 	e := engine.New(engine.Deps{
 		Clock: env.Clock,
 		// Claude: the reader hands the token to the usage client inside the
@@ -149,7 +155,7 @@ func runCmd(env Env, args []string) int {
 		Providers: []provider.Provider{
 			claude.New(reader, anthropic.New(anthropic.UsageURL, ua, env.Clock), env.Clock),
 			codexprov.New(codex.NewReader(codexHome, env.Clock),
-				codex.NewClientWith(codexUsageURL, ua, env.Clock, env.CodexTransport), codexFallback(env, cfg, codexHome)),
+				codex.NewClientWith(codexUsageURL, ua, env.Clock, codexTransport), codexFallback(env, cfg, codexHome)),
 		},
 		Syncer:           env.syncer(cfg, ua),
 		Backlog:          bl,
@@ -344,9 +350,30 @@ func sameFile(w io.Writer, p string) bool {
 // and run only under its own rules (internal/codex AppServer).
 func codexFallback(env Env, cfg config.Config, codexHome string) *codex.AppServer {
 	home := env.Dirs.Home
+	list := func() []string { return codex.FindCLI(cfg, home, env.Getenv) }
+	if codexOffline(env) {
+		list = func() []string { return nil }
+	}
 	return &codex.AppServer{
-		CLIs:    &codex.CLIFinder{List: func() []string { return codex.FindCLI(cfg, home, env.Getenv) }, Version: env.CodexVersion},
+		CLIs:    &codex.CLIFinder{List: list, Version: env.CodexVersion},
 		Home:    codexHome,
 		Version: version.Version,
 	}
+}
+
+// testCodexOfflineEnv=1 keeps a CI build's (version 0.0.0-ci) Codex lane
+// off the network: no request to chatgpt.com and no codex run (CI runners
+// have fake sign-ins only, and a lane the server does not serve fetches
+// on its own). Any other build ignores it.
+const testCodexOfflineEnv = "AI_USAGE_TEST_CODEX_OFFLINE"
+
+func codexOffline(env Env) bool {
+	return buildVersion() == "0.0.0-ci" && env.Getenv(testCodexOfflineEnv) == "1"
+}
+
+// offlineTransport refuses every request (testCodexOfflineEnv).
+type offlineTransport struct{}
+
+func (offlineTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("CI build: no Codex request (" + testCodexOfflineEnv + ")")
 }
