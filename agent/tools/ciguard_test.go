@@ -67,12 +67,20 @@ func TestCIScriptsRefuseOutsideARunner(t *testing.T) {
 				t.Fatalf("%s %v ran: %v\n%s", r.name, partial, err, out)
 			}
 			for _, d := range []string{home, wd} {
-				if ents, _ := os.ReadDir(d); len(ents) != 0 {
+				ents, _ := os.ReadDir(d)
+				for _, e := range ents {
+					// pwsh itself makes AppData under the profile it is
+					// given; what the script would write is checked below
+					if runtime.GOOS == "windows" && d == home && e.Name() == "AppData" {
+						continue
+					}
 					t.Fatalf("%s %v wrote into %s: %v", r.name, partial, d, ents)
 				}
 			}
-			for _, d := range []string{"AIUsage", filepath.Join("Programs", "AIUsage")} {
-				if _, err := os.Stat(filepath.Join(local, d)); err == nil {
+			for _, d := range []string{filepath.Join(local, "AIUsage"), filepath.Join(local, "Programs", "AIUsage"),
+				filepath.Join(home, "AppData", "Local", "AIUsage"), filepath.Join(home, ".claude"), filepath.Join(home, ".claude.json"),
+				filepath.Join(home, ".codex")} {
+				if _, err := os.Stat(d); err == nil {
 					t.Fatalf("%s %v made %s", r.name, partial, d)
 				}
 			}

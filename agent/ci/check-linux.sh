@@ -484,8 +484,11 @@ release_codex_check() {
   # both families: a name mapped for IPv4 only is looked up in DNS for IPv6
   printf '127.0.0.1 %s # ai-usage CI fake vendors\n::1 %s # ai-usage CI fake vendors\n' "$names" "$names" | sudo tee -a /etc/hosts > /dev/null
   for h in $names; do
-    got=$(getent ahosts "$h" | awk '{ print $1 }' | sort -u | tr '\n' ' ')
-    case "$got" in "::1 127.0.0.1 "|"127.0.0.1 "|"::1 ") ;; *) problems="$problems $h=[$got]" ;; esac
+    got=$(getent ahosts "$h" | awk '{ print $1 }' | sort -u)
+    # at least one address, and every one a loopback address
+    if [ -z "$got" ] || ! printf '%s\n' "$got" | awk '$0 != "127.0.0.1" && $0 != "::1" { bad = 1 } END { exit bad }'; then
+      problems="$problems $h=[$(printf '%s' "$got" | tr '\n' ' ')]"
+    fi
   done
   if [ -n "$problems" ]; then fail release.no_codex_cli "vendor names not mapped to this runner:$problems"; release_cleanup; return; fi
   # 2. the fake vendors on 127.0.0.1:443, their CA trusted by the system
