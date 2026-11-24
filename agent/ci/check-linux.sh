@@ -459,5 +459,85 @@ schema1_check() {
 }
 schema1_check
 
+# release.no_codex_cli: a release-style build (version 0.0.0-relcheck: no
+# CI-build switch, no refusing transport) never starts the Codex CLI
+# (ruling F1). Every Anthropic and OpenAI host name is mapped to this
+# runner first and answered by fakevendor, whose made-up CA the system
+# trusts, so nothing can reach the real hosts; the check stops before the
+# install if any name is not local. A fakecodex that records every run is
+# first on PATH (install's and the service's), is the codex_path install
+# records, and is named by the CI build's fallback switch. chatgpt.com
+# answers 403 for three fetch rounds, then 200 with both limit fields
+# null for three more: codex must never have run, and every Codex result
+# the server got must be the direct request's own answer.
+release_codex_check() {
+  local problems="" relbin="$RUNNER_TEMP/relbin" ca="$out/fakevendor-ca.pem" marker="$out/codex-ran.txt"
+  local base2=http://127.0.0.1:18702 admin=http://127.0.0.1:18799 dev2="" vpid="" h code got old_path results v
+  local names="chatgpt.com chat.openai.com api.openai.com auth.openai.com api.anthropic.com console.anthropic.com claude.ai"
+  if [ -z "${CI_REL:-}" ] || [ ! -f "$CI_REL/ai-usage-linux-amd64" ]; then fail release.no_codex_cli "no release-style build in CI_REL"; return; fi
+  # 1. the vendors' names are this runner's, before anything could ask them
+  printf '127.0.0.1 %s # ai-usage CI fake vendors\n' "$names" | sudo tee -a /etc/hosts > /dev/null
+  for h in $names; do
+    got=$(getent hosts "$h" | awk '{ print $1 }' | sort -u | tr '\n' ' ')
+    [ "$got" = "127.0.0.1 " ] || problems="$problems $h=[$got]"
+  done
+  if [ -n "$problems" ]; then fail release.no_codex_cli "vendor names not mapped to this runner:$problems"; release_cleanup; return; fi
+  # 2. the fake vendors on 127.0.0.1:443, their CA trusted by the system
+  sudo sysctl -q -w net.ipv4.ip_unprivileged_port_start=443
+  "$CI_BIN/fakevendor" -listen 127.0.0.1:443 -admin 127.0.0.1:18799 -ca "$ca" -mode 403 > "$out/fakevendor.log" 2>&1 &
+  vpid=$!
+  if ! wait_for 20 curl -fsS --max-time 5 "$admin/healthz" -o /dev/null; then
+    fail release.no_codex_cli "fakevendor did not start: $(head -c 200 "$out/fakevendor.log")"; release_cleanup; return
+  fi
+  sudo cp "$ca" /usr/local/share/ca-certificates/ai-usage-ci-fakevendor.crt && sudo update-ca-certificates > "$out/update-ca.log" 2>&1
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 https://chatgpt.com/backend-api/wham/usage)
+  if [ "$code" != 403 ]; then fail release.no_codex_cli "chatgpt.com is not the fake vendor (HTTP $code)"; release_cleanup; return; fi
+  # 3. the fakecodex, first on PATH for install and for the service
+  mkdir -p "$relbin"
+  cp "$CI_BIN/fakecodex" "$relbin/codex"
+  printf -- '-record\n%s\n' "$marker" > "$relbin/codex.args"
+  old_path=$(systemctl --user show-environment | sed -n 's/^PATH=//p')
+  systemctl --user set-environment PATH="$relbin:${old_path:-$PATH}" AI_USAGE_TEST_CODEX_FALLBACK="$relbin/codex"
+  # 4. a fake server with the release-style files that asks for Codex at every sync
+  start_fakeserver 18702 -codex-poller -files "$CI_REL" || { fail release.no_codex_cli "the second fake server did not start"; release_cleanup; return; }
+  PATH="$relbin:$PATH" AI_USAGE_TEST_CODEX_FALLBACK="$relbin/codex" timeout 180 sh -c "wget -qO- $base2/files/install-ci.sh | sh" \
+    > "$out/install-release.log" 2>&1 || problems="$problems install_rc=$?"
+  s2() { curl -fsS --max-time 10 "$base2/stats"; }
+  rounds() { dev2=$(cat "$data/device-id" 2>/dev/null) && [ "$(s2 | jget - devices "$dev2" codex_results "$1")" -ge "$2" ] 2>/dev/null; }
+  wait_for 300 rounds "wham 403" 3 || problems="$problems rounds_403=[$(s2 | jget - devices "$dev2" codex_results)]"
+  curl -fsS --max-time 10 -X POST "$admin/mode?m=nulls" || problems="$problems mode_failed"
+  wait_for 300 rounds "wham 200" 3 || problems="$problems rounds_200=[$(s2 | jget - devices "$dev2" codex_results)]"
+  # 5. what happened
+  [ ! -e "$marker" ] || problems="$problems codex_was_run=[$(head -c 200 "$marker" | tr '\n' ' ')]"
+  results=$(s2 | jget - devices "$dev2" codex_results)
+  printf '%s' "$results" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d and set(d) <= {"wham 403", "wham 200"} else 1)' ||
+    problems="$problems results=[$results]"
+  [ "$(jget "$data/config.json" codex_path)" = "$relbin/codex" ] || problems="$problems codex_path=[$(jget "$data/config.json" codex_path)]"
+  v=$(s2 | jget - devices "$dev2" last_version)
+  [ "$v" = 0.0.0-relcheck ] || problems="$problems version=$v"
+  ! grep -q 'CI build' "$data/agent.log" 2>/dev/null || problems="$problems behaves_as_ci_build"
+  [ "$(s2 | jget - token_leaks)" = 0 ] || problems="$problems token_leaks=$(s2 | jget - token_leaks)"
+  curl -fsS --max-time 10 "$admin/stats" > "$out/fakevendor-stats.json" 2>&1
+  cp "$data/agent.log" "$out/agent-release.log" 2>/dev/null
+  "$exe" uninstall > "$out/uninstall-release.log" 2>&1 || problems="$problems uninstall_rc=$?"
+  sleep 2
+  [ "$(agent_count)" -eq 0 ] || problems="$problems processes_after_uninstall=$(agent_count)"
+  release_cleanup
+  if [ -z "$problems" ]; then pass release.no_codex_cli "$v: Codex results $results, all direct; fakecodex (PATH, codex_path, switch) never run"
+  else fail release.no_codex_cli "$problems"; fi
+}
+release_cleanup() {
+  [ -n "${vpid:-}" ] && kill "$vpid" 2>/dev/null
+  pkill -f -- "-listen 127.0.0.1:18702" 2>/dev/null
+  [ -n "${old_path:-}" ] && systemctl --user set-environment PATH="$old_path"
+  systemctl --user unset-environment AI_USAGE_TEST_CODEX_FALLBACK 2>/dev/null
+  sudo sed -i '/# ai-usage CI fake vendors$/d' /etc/hosts
+  if [ -e /usr/local/share/ca-certificates/ai-usage-ci-fakevendor.crt ]; then
+    sudo rm -f /usr/local/share/ca-certificates/ai-usage-ci-fakevendor.crt && sudo update-ca-certificates --fresh > /dev/null 2>&1
+  fi
+  true
+}
+release_codex_check
+
 info linger "$(loginctl show-user "$USER" -p Linger 2>&1)"
 finish

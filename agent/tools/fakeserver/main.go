@@ -8,6 +8,9 @@
 // POST /weekly?percent=N changes the weekly percentage it answers with;
 // POST /hold?seconds=N makes syncs wait that long before the answer (a
 // server that takes a sync and does not answer in time; 0 ends it).
+// -codex-poller makes a signed-in Codex block the poller, asked to fetch
+// at every sync (the release-style check, whose vendors are fakes), and
+// /stats then counts the Codex results by source and HTTP status.
 package main
 
 import (
@@ -35,6 +38,9 @@ type Config struct {
 	Scripts string // install-ci.sh and install-ci.ps1
 	// Schema1Only answers schema 2 with 400 unsupported_schema.
 	Schema1Only bool
+	// CodexPoller: a signed-in Codex block is the poller, fetch_now at
+	// every sync.
+	CodexPoller bool
 }
 
 type device struct {
@@ -50,6 +56,9 @@ type device struct {
 	// Providers: each provider block's last sign-in state and e-mail
 	// (schema 2)
 	Providers map[string]*providerSeen `json:"providers"`
+	// CodexResults counts the Codex results sent, by "<source> <HTTP
+	// status>" (schema 2)
+	CodexResults map[string]int `json:"codex_results"`
 }
 
 type providerSeen struct {
@@ -161,6 +170,10 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 				State string `json:"state"`
 			} `json:"auth"`
 			WantFresh bool `json:"want_fresh"`
+			Results   []struct {
+				HTTPStatus int     `json:"http_status"`
+				Source     *string `json:"source"`
+			} `json:"results"`
 		} `json:"providers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -183,6 +196,15 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 			seen.LastAuthState = p.Auth.State
 			if p.Account != nil {
 				seen.LastEmail = p.Account.Email
+			}
+			if p.Provider == "codex" {
+				for _, r := range p.Results {
+					src := "null"
+					if r.Source != nil {
+						src = *r.Source
+					}
+					d.CodexResults[fmt.Sprintf("%s %d", src, r.HTTPStatus)]++
+				}
 			}
 		}
 		s.mu.Unlock()
@@ -248,6 +270,9 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 						"primary_window": win(42, 18000), "secondary_window": win(17, 604800)}, "rate_limit_reached_type": nil,
 						"additional_rate_limits": nil}}
 				b["peers"] = map[string]any{"devices": 1, "pcs": 1, "poller_hostname": "TEST-PC-02"}
+				if s.cfg.CodexPoller {
+					b["role"], b["fetch_now"] = "poller", true
+				}
 			}
 			blocks = append(blocks, b)
 		}
@@ -267,7 +292,7 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 func (s *server) device(id string) *device {
 	d := s.devices[id]
 	if d == nil {
-		d = &device{Providers: map[string]*providerSeen{}}
+		d = &device{Providers: map[string]*providerSeen{}, CodexResults: map[string]int{}}
 		s.devices[id] = d
 	}
 	return d
@@ -341,6 +366,7 @@ func main() {
 	flag.StringVar(&cfg.Files, "files", ".", "release files")
 	flag.StringVar(&cfg.Scripts, "scripts", ".", "install-ci scripts")
 	flag.BoolVar(&cfg.Schema1Only, "schema1-only", false, "refuse schema 2 (400 unsupported_schema), as a server from before it")
+	flag.BoolVar(&cfg.CodexPoller, "codex-poller", false, "make a signed-in Codex block the poller, asked to fetch at every sync")
 	flag.Parse()
 	if cfg.Key == "" {
 		fmt.Fprintln(os.Stderr, "fakeserver: -key is required")

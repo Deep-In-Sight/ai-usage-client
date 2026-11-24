@@ -93,14 +93,14 @@ function RunExe([string]$Path, [string]$Arguments, [int]$TimeoutSec = 60) {
     }
     return @{ timeout = $false; code = $p.ExitCode; out = "$(Get-Content -Raw "$o.out" -ErrorAction SilentlyContinue)"; err = "$(Get-Content -Raw "$o.err" -ErrorAction SilentlyContinue)" }
 }
-function OneLiner([string]$LogName) {
+function OneLiner([string]$LogName, [string]$From = $base) {
     # Windows PowerShell started from pwsh inherits pwsh's PSModulePath and
     # then cannot load its own modules (Get-FileHash is missing). A user's
     # PowerShell window does not have this, so start it with its defaults.
     $saved = $env:PSModulePath
     [Environment]::SetEnvironmentVariable('PSModulePath', $null, 'Process')
     try {
-        $r = RunExe 'powershell.exe' "-NoProfile -ExecutionPolicy Bypass -Command `"irm $base/files/install-ci.ps1 | iex`"" 240
+        $r = RunExe 'powershell.exe' "-NoProfile -ExecutionPolicy Bypass -Command `"irm $From/files/install-ci.ps1 | iex`"" 240
     } finally {
         [Environment]::SetEnvironmentVariable('PSModulePath', $saved, 'Process')
     }
@@ -365,6 +365,112 @@ Check 'uninstall.via_entry' {
     $ev = (DevStat $script:device).uninstall_events
     if ($ev -ne 1) { $problems += "uninstall_events=$ev" }
     if ($problems.Count -eq 0) { Pass 'uninstall.via_entry' 'everything removed' } else { Fail 'uninstall.via_entry' ($problems -join ' ') }
+}
+
+# A release-style build (version 0.0.0-relcheck: no CI-build switch, no
+# refusing transport) never starts the Codex CLI (ruling F1). Every
+# Anthropic and OpenAI host name is mapped to this runner first and
+# answered by fakevendor, whose made-up CA the machine trusts, so nothing
+# can reach the real hosts; the check stops before the install if any
+# name is not local. A fakecodex that records every run is first on PATH
+# (install's and the agent's), is the codex_path install records, and is
+# named by the CI build's fallback switch. chatgpt.com answers 403 for
+# three fetch rounds, then 200 with both limit fields null for three
+# more: codex must never have run, and every Codex result the server got
+# must be the direct request's own answer.
+$vendorNames = @('chatgpt.com', 'chat.openai.com', 'api.openai.com', 'auth.openai.com', 'api.anthropic.com', 'console.anthropic.com', 'claude.ai')
+$hostsFile = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
+$vendorTag = '# ai-usage CI fake vendors'
+$script:vendorProc = $null
+$script:server2 = $null
+$script:caThumb = $null
+function ReleaseCleanup {
+    if ($script:vendorProc) { Stop-Process -Id $script:vendorProc.Id -Force -ErrorAction SilentlyContinue }
+    if ($script:server2) { Stop-Process -Id $script:server2.Id -Force -ErrorAction SilentlyContinue }
+    try {
+        $kept = @(Get-Content -LiteralPath $hostsFile -ErrorAction Stop | Where-Object { -not $_.EndsWith($vendorTag) })
+        Set-Content -LiteralPath $hostsFile -Value $kept -Encoding ascii
+    } catch { }
+    if ($script:caThumb) { Remove-Item -LiteralPath "Cert:\LocalMachine\Root\$($script:caThumb)" -ErrorAction SilentlyContinue }
+    Remove-Item Env:AI_USAGE_TEST_CODEX_FALLBACK -ErrorAction SilentlyContinue
+}
+if ($Desktop) {
+    Check 'release.no_codex_cli' {
+        $problems = @()
+        $rel = $env:CI_REL
+        if (-not $rel -or -not (Test-Path -LiteralPath (Join-Path $rel 'ai-usage-windows-amd64.exe'))) { Fail 'release.no_codex_cli' 'no release-style build in CI_REL'; return }
+        # 1. the vendors' names are this runner's, before anything could ask them
+        Add-Content -LiteralPath $hostsFile -Value ("`r`n127.0.0.1 " + ($vendorNames -join ' ') + " $vendorTag") -Encoding ascii
+        $null = & ipconfig.exe /flushdns
+        foreach ($h in $vendorNames) {
+            $a = @(); try { $a = @([System.Net.Dns]::GetHostAddresses($h) | ForEach-Object { $_.IPAddressToString } | Sort-Object -Unique) } catch { }
+            if (($a -join ',') -ne '127.0.0.1') { $problems += "$h=[$($a -join ',')]" }
+        }
+        if ($problems.Count -gt 0) { Fail 'release.no_codex_cli' "vendor names not mapped to this runner: $($problems -join ' ')"; ReleaseCleanup; return }
+        # 2. the fake vendors on 127.0.0.1:443, their CA trusted by the machine
+        $ca = Join-Path $out 'fakevendor-ca.pem'
+        $admin = 'http://127.0.0.1:18799'
+        $script:vendorProc = Start-Process -FilePath (Join-Path $env:CI_BIN 'fakevendor.exe') `
+            -ArgumentList @('-listen', '127.0.0.1:443', '-admin', '127.0.0.1:18799', '-ca', $ca, '-mode', '403') `
+            -RedirectStandardOutput (Join-Path $out 'fakevendor-out.log') -RedirectStandardError (Join-Path $out 'fakevendor.log') -WindowStyle Hidden -PassThru
+        if (-not (WaitFor 20 { try { $null = Invoke-RestMethod -TimeoutSec 5 "$admin/healthz"; $true } catch { $false } })) {
+            Fail 'release.no_codex_cli' "fakevendor did not start: $(Get-Content -Raw (Join-Path $out 'fakevendor.log') -ErrorAction SilentlyContinue)"; ReleaseCleanup; return
+        }
+        $der = [Convert]::FromBase64String(((Get-Content -Raw -LiteralPath $ca) -replace '-----[A-Z ]+-----', '') -replace '\s', '')
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList (, $der)
+        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store -ArgumentList 'Root', 'LocalMachine'
+        $store.Open('ReadWrite'); $store.Add($cert); $store.Close()
+        $script:caThumb = $cert.Thumbprint
+        $code = 0
+        try { $code = [int](Invoke-WebRequest -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 10 -Uri 'https://chatgpt.com/backend-api/wham/usage').StatusCode } catch { $code = "error: $($_.Exception.Message)" }
+        if ("$code" -ne '403') { Fail 'release.no_codex_cli' "chatgpt.com is not the fake vendor (HTTP $code)"; ReleaseCleanup; return }
+        # 3. the fakecodex, first on PATH for install and the agent it starts
+        $relbin = Join-Path $env:RUNNER_TEMP 'relbin'
+        New-Item -ItemType Directory -Force -Path $relbin | Out-Null
+        $fake = Join-Path $relbin 'codex.exe'
+        Copy-Item -LiteralPath (Join-Path $env:CI_BIN 'fakecodex.exe') -Destination $fake
+        $marker = Join-Path $out 'codex-ran.txt'
+        [IO.File]::WriteAllText("$fake.args", "-record`n$marker`n")
+        # 4. a fake server with the release-style files that asks for Codex at every sync
+        $base2 = 'http://127.0.0.1:18702'
+        $script:server2 = Start-Process -FilePath (Join-Path $env:CI_BIN 'fakeserver.exe') `
+            -ArgumentList @('-listen', '127.0.0.1:18702', '-key', $key, '-token', "$token,$codexSig,$codexRefresh", '-files', $rel, '-scripts', $env:CI_SCRIPTS, '-codex-poller') `
+            -RedirectStandardOutput (Join-Path $out 'fakeserver2-out.log') -RedirectStandardError (Join-Path $out 'fakeserver2.log') -WindowStyle Hidden -PassThru
+        if (-not (WaitFor 30 { try { $null = Invoke-RestMethod -TimeoutSec 5 "$base2/healthz"; $true } catch { $false } })) { Fail 'release.no_codex_cli' 'the second fake server did not start'; ReleaseCleanup; return }
+        $savedPath = $env:Path
+        $env:Path = "$relbin;$savedPath"
+        $env:AI_USAGE_TEST_CODEX_FALLBACK = $fake
+        try { $r = OneLiner 'install-release.log' $base2 } finally { $env:Path = $savedPath; Remove-Item Env:AI_USAGE_TEST_CODEX_FALLBACK -ErrorAction SilentlyContinue }
+        if ($r.code -ne 0) { $problems += "install_code=$($r.code)" }
+        function S2 { try { Invoke-RestMethod -TimeoutSec 10 "$base2/stats" } catch { $null } }
+        function Results { $s = S2; $d = DeviceId; if ($s -and $d -and $s.devices.$d) { $s.devices.$d.codex_results } else { $null } }
+        function Rounds([string]$Kind, [int]$N) { $c = Results; $c -and $c.$Kind -ge $N }
+        if (-not (WaitFor 300 { Rounds 'wham 403' 3 })) { $problems += "rounds_403=[$(ConvertTo-Json -Compress -InputObject (Results))]" }
+        try { $null = Invoke-WebRequest -UseBasicParsing -Method Post -TimeoutSec 10 -Uri "$admin/mode?m=nulls" } catch { $problems += 'mode_failed' }
+        if (-not (WaitFor 300 { Rounds 'wham 200' 3 })) { $problems += "rounds_200=[$(ConvertTo-Json -Compress -InputObject (Results))]" }
+        # 5. what happened
+        if (Test-Path -LiteralPath $marker) { $problems += "codex_was_run=[$((Get-Content -Raw -LiteralPath $marker) -replace '\s+', ' ')]" }
+        $res = Results
+        $kinds = @(); if ($res) { $kinds = @($res.PSObject.Properties.Name) }
+        if ($kinds.Count -eq 0 -or @($kinds | Where-Object { $_ -ne 'wham 403' -and $_ -ne 'wham 200' }).Count -gt 0) { $problems += "results=[$(ConvertTo-Json -Compress -InputObject $res)]" }
+        $cfg = $null; try { $cfg = Get-Content -Raw -LiteralPath (Join-Path $data 'config.json') | ConvertFrom-Json } catch { }
+        if (-not $cfg -or "$($cfg.codex_path)" -ine $fake) { $problems += "codex_path=[$($cfg.codex_path)]" }
+        $d2 = (S2).devices.(DeviceId)
+        if ($d2.last_version -ne '0.0.0-relcheck') { $problems += "version=$($d2.last_version)" }
+        $log = ReadShared (Join-Path $data 'agent.log')
+        if ($log.Contains('CI build')) { $problems += 'behaves_as_ci_build' }
+        if ((S2).token_leaks -ne 0) { $problems += "token_leaks=$((S2).token_leaks)" }
+        try { [IO.File]::WriteAllText((Join-Path $out 'fakevendor-stats.json'), (Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 "$admin/stats").Content) } catch { }
+        [IO.File]::WriteAllText((Join-Path $out 'agent-release.log'), $log)
+        $u = RunExe $exe 'uninstall' 120
+        if ($u.code -ne 0) { $problems += "uninstall_code=$($u.code)" }
+        $null = WaitFor 15 { (AllProcs).Count -eq 0 }
+        if ((AllProcs).Count -ne 0) { $problems += "processes=$((AllProcs).Count)" }
+        ReleaseCleanup
+        if ($problems.Count -eq 0) { Pass 'release.no_codex_cli' "0.0.0-relcheck: Codex results $(ConvertTo-Json -Compress -InputObject $res), all direct; fakecodex (PATH, codex_path, switch) never run" }
+        else { Fail 'release.no_codex_cli' ($problems -join ' ') }
+    }
+    ReleaseCleanup
 }
 
 $failed = ''

@@ -383,3 +383,37 @@ func TestEveryFakeTokenIsWatched(t *testing.T) {
 		t.Fatalf("leaks %d", s.TokenLeaks)
 	}
 }
+
+// -codex-poller: a signed-in Codex block is the poller and asked to fetch
+// at every sync, and the Codex results are counted by source and status
+// (the release-style check reads them); without it Codex stays standby.
+func TestCodexPoller(t *testing.T) {
+	files, scripts := t.TempDir(), t.TempDir()
+	srv := httptest.NewServer(newServer(Config{Key: key, Token: token, Files: files, Scripts: scripts, CodexPoller: true}))
+	defer srv.Close()
+	body := strings.Replace(v2bothBody, `"parse_problem":null,"results":[],"want_fresh":false}]}`,
+		`"parse_problem":null,"results":[{"account_key":"x","fetched_at":"2026-01-05T09:00:00.000Z","http_status":403,"usage":null,"source":"wham"},`+
+			`{"account_key":"x","fetched_at":"2026-01-05T09:01:00.000Z","http_status":403,"usage":null,"source":"wham"}],"want_fresh":false}]}`, 1)
+	for i := 0; i < 2; i++ {
+		code, m := post(t, srv, "Bearer "+key, body)
+		if code != 200 {
+			t.Fatalf("status %d", code)
+		}
+		x := m["providers"].([]any)[1].(map[string]any)
+		if x["role"] != "poller" || x["fetch_now"] != true {
+			t.Fatalf("%v", x)
+		}
+	}
+	var raw struct {
+		Devices map[string]struct {
+			CodexResults map[string]int `json:"codex_results"`
+		} `json:"devices"`
+	}
+	_, st := get(t, srv, "/stats")
+	if err := json.Unmarshal([]byte(st), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if got := raw.Devices["dev-3"].CodexResults; len(got) != 1 || got["wham 403"] != 4 {
+		t.Fatalf("%v", got)
+	}
+}

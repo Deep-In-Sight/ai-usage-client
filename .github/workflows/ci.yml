@@ -84,16 +84,46 @@ jobs:
     with:
       version: 0.0.0-ci
 
+  # A release-style build (any version but 0.0.0-ci behaves as a release:
+  # no test switch, nothing refused) for the checks that a released agent
+  # never starts the Codex CLI (release.no_codex_cli, Linux and Windows).
+  # 0.0.0-relcheck can never be released (tools/version.sh).
+  build-relcheck:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+      - name: build
+        run: tools/build.sh 0.0.0-relcheck
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: relcheck-files
+          path: |
+            agent/dist/ai-usage-linux-amd64
+            agent/dist/ai-usage-windows-amd64.exe
+            agent/dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
   # Install, run, upgrade and uninstall on each runner against a fake team
   # server, with the files the build made. Results are annotations.
   install-linux:
-    needs: build
+    needs: [build, build-relcheck]
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -106,14 +136,21 @@ jobs:
         with:
           name: release-files
           path: dist
-      - name: fake server and tray host
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: relcheck-files
+          path: relcheck
+      - name: fake server, tray host, vendors and codex
         working-directory: agent
         run: |
           go build -o "$RUNNER_TEMP/bin/fakeserver" ./tools/fakeserver
           go build -o "$RUNNER_TEMP/bin/fakewatcher" ./tools/fakewatcher
+          go build -o "$RUNNER_TEMP/bin/fakevendor" ./tools/fakevendor
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/bin/fakecodex" ./tools/fakecodex
       - name: checks
         env:
           CI_DIST: ${{ github.workspace }}/dist
+          CI_REL: ${{ github.workspace }}/relcheck
           CI_BIN: ${{ runner.temp }}/bin
           CI_SCRIPTS: ${{ github.workspace }}/agent/ci
           RUNNER_LABEL: ${{ matrix.os }}
@@ -165,7 +202,7 @@ jobs:
           retention-days: 7
 
   install-windows:
-    needs: build
+    needs: [build, build-relcheck]
     strategy:
       fail-fast: false
       matrix:
@@ -175,7 +212,7 @@ jobs:
           - os: windows-11-arm
             desktop: "false"
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     defaults:
       run:
         shell: pwsh
@@ -191,12 +228,21 @@ jobs:
         with:
           name: release-files
           path: dist
-      - name: fake server
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: relcheck-files
+          path: relcheck
+      - name: fake server, vendors and codex
         working-directory: agent
-        run: go build -o "$env:RUNNER_TEMP/bin/fakeserver.exe" ./tools/fakeserver
+        run: |
+          go build -o "$env:RUNNER_TEMP/bin/fakeserver.exe" ./tools/fakeserver
+          go build -o "$env:RUNNER_TEMP/bin/fakevendor.exe" ./tools/fakevendor
+          $env:CGO_ENABLED = '0'
+          go build -o "$env:RUNNER_TEMP/bin/fakecodex.exe" ./tools/fakecodex
       - name: checks
         env:
           CI_DIST: ${{ github.workspace }}\dist
+          CI_REL: ${{ github.workspace }}\relcheck
           CI_BIN: ${{ runner.temp }}\bin
           CI_SCRIPTS: ${{ github.workspace }}\agent\ci
           CI_DESKTOP: ${{ matrix.desktop }}
