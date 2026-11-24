@@ -141,10 +141,9 @@ func runCmd(env Env, args []string) int {
 
 	codexHome := codex.Home(cfg, env.Dirs.Home)
 	codexUsageURL, _ := codex.UsageURL("") // the address is set from config.toml at each fetch
-	codexTransport := env.CodexTransport
-	if codexOffline(env) {
-		codexTransport = offlineTransport{}
-		logger.Print("CI build: the Codex lane makes no request and runs no codex (" + testCodexOfflineEnv + ")")
+	claudeTransport, codexTransport := vendorTransports(env)
+	if _, off := codexTransport.(offlineTransport); off {
+		logger.Print("CI build: no request to Anthropic or OpenAI")
 	}
 	e := engine.New(engine.Deps{
 		Clock: env.Clock,
@@ -154,7 +153,7 @@ func runCmd(env Env, args []string) int {
 		// chatgpt.com; its lane is there on every PC (signed out: account
 		// null), as the server expects (design 6.8).
 		Providers: []provider.Provider{
-			claude.New(reader, anthropic.New(anthropic.UsageURL, ua, env.Clock), env.Clock),
+			claude.New(reader, anthropic.NewWith(anthropic.UsageURL, ua, env.Clock, claudeTransport), env.Clock),
 			codexprov.New(codex.NewReader(codexHome, env.Clock),
 				codex.NewClientWith(codexUsageURL, ua, env.Clock, codexTransport), codexFallback(env, codexHome)),
 		},
@@ -374,19 +373,28 @@ func codexFallback(env Env, codexHome string) *codex.AppServer {
 	}
 }
 
-// testCodexOfflineEnv=1 keeps a CI build's (version 0.0.0-ci) Codex lane
-// off the network: no request to chatgpt.com and no codex run (CI runners
-// have fake sign-ins only, and a lane the server does not serve fetches
-// on its own). Any other build ignores it.
-const testCodexOfflineEnv = "AI_USAGE_TEST_CODEX_OFFLINE"
-
-func codexOffline(env Env) bool {
-	return buildVersion() == "0.0.0-ci" && env.Getenv(testCodexOfflineEnv) == "1"
+// vendorTransports are the transports of the usage requests to Anthropic
+// and OpenAI. A CI build (version 0.0.0-ci) refuses every such request
+// unless a test gave its own: CI runners have fake sign-ins only, and a
+// lane the server does not serve, or every lane while the server cannot
+// be reached, fetches on its own, so not even a fake token may leave a
+// runner for those hosts (review N-5, ruling F5).
+func vendorTransports(env Env) (claude, codex http.RoundTripper) {
+	claude, codex = env.ClaudeTransport, env.CodexTransport
+	if buildVersion() == "0.0.0-ci" {
+		if claude == nil {
+			claude = offlineTransport{"Anthropic"}
+		}
+		if codex == nil {
+			codex = offlineTransport{"OpenAI"}
+		}
+	}
+	return claude, codex
 }
 
-// offlineTransport refuses every request (testCodexOfflineEnv).
-type offlineTransport struct{}
+// offlineTransport refuses every request, sending nothing.
+type offlineTransport struct{ host string }
 
-func (offlineTransport) RoundTrip(*http.Request) (*http.Response, error) {
-	return nil, errors.New("CI build: no Codex request (" + testCodexOfflineEnv + ")")
+func (o offlineTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("CI build: no request to " + o.host)
 }

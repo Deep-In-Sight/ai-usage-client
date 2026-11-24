@@ -46,6 +46,10 @@ synced_now() { device=$(cat "$data/device-id" 2>/dev/null) && sync_ok "$device" 
 if wait_for 90 synced_now; then pass sync.arrives "device $device"
 else fail sync.arrives "device=$device stats=$(stats | jget - devices "$device")"; fi
 
+# run.vendors_off: the CI build sends nothing to Anthropic or OpenAI
+if vendors_off "$data"; then pass run.vendors_off "CI build: no request to Anthropic or OpenAI"
+else fail run.vendors_off "no such line in agent.log"; fi
+
 # sync.schema2: the agent speaks schema 2 with a machine key (the fake
 # server records only that one was there)
 sc=$(dev "$device" last_schema); mk=$(dev "$device" machine)
@@ -368,14 +372,14 @@ end_session() { kill "$wpid" 2>/dev/null; kill "$bus_pid" 2>/dev/null; }
 # tray.codex: Claude and Codex signed in on a desktop: two items from two
 # helpers, labelled with each provider's number (Claude weekly 42 %, Codex
 # weekly 17 %: the server's latest), and Codex's section in the menu as a
-# tray host reads it (header with the plan, the 17 % weekly row). The
-# Codex lane is kept off the network (CI build switch).
+# tray host reads it (header with the plan, the 17 % weekly row). A CI
+# build sends nothing to Anthropic or OpenAI.
 tray_codex_check() {
   local problems="" items labels svc l layout got
   # Claude's weekly number as the server answers it (earlier checks change it)
   curl -fsS --max-time 10 -X POST "$BASE/weekly?percent=42" || problems="$problems set_weekly_failed"
   fake_session codex || { fail tray.codex "no session bus or tray host"; end_session; return; }
-  XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS="$bus_addr" AI_USAGE_TEST_CODEX_OFFLINE=1 \
+  XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS="$bus_addr" \
     AI_USAGE_TEST_DUMP_VIEW="$out/view-codex.json" oneliner > "$out/install-codex.log" 2>&1 || problems="$problems install_rc=$?"
   two_items() { items=$(awk '$1 == "registered" { s[$2] = 1 } END { for (k in s) print k }' "$out/watcher-codex.log" | sort) && [ "$(printf '%s\n' "$items" | grep -c .)" -eq 2 ]; }
   both_labels() {
@@ -433,7 +437,7 @@ schema1_check() {
   local problems="" base1=http://127.0.0.1:18701 dev1 sc n
   start_fakeserver 18701 -schema1-only || { fail sync.schema1 "the schema-1 fake server did not start"; return; }
   fake_session schema1 || { fail sync.schema1 "no session bus or tray host"; end_session; return; }
-  XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS="$bus_addr" AI_USAGE_TEST_CODEX_OFFLINE=1 \
+  XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS="$bus_addr" \
     AI_USAGE_TEST_DUMP_VIEW="$out/view-schema1.json" timeout 180 sh -c "wget -qO- $base1/files/install-ci.sh | sh" \
     > "$out/install-schema1.log" 2>&1 || problems="$problems install_rc=$?"
   s1stats() { curl -fsS --max-time 10 "$base1/stats"; }

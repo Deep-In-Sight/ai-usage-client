@@ -125,6 +125,10 @@ no_fake_tokens() {
   [ -z "$hits" ] || { printf '%s' "$hits" | tr '\n' ' '; return 1; }
 }
 
+# vendors_off DATA: the CI build's log says it sends nothing to Anthropic
+# or OpenAI (every lane's request is refused before it leaves the runner).
+vendors_off() { grep -q 'CI build: no request to Anthropic or OpenAI' "$1/agent.log" 2>/dev/null; }
+
 # sync_ok DEVICE MODE: the device synced at least twice, signed in, with the
 # fake account, this build's version and MODE.
 sync_ok() {

@@ -120,6 +120,14 @@ function Shot([string]$Name) {
     } catch { return "screenshot failed: $($_.Exception.Message)" }
 }
 
+# A file's text, read while the agent may still write it (agent.log).
+# A file the agent keeps locked (run.lock) reads as "".
+function ReadShared([string]$Path) {
+    try {
+        $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        try { (New-Object IO.StreamReader($fs)).ReadToEnd() } finally { $fs.Dispose() }
+    } catch { '' }
+}
 # fake sign-in and account (never real ones)
 $cd = Join-Path $env:USERPROFILE '.claude'
 New-Item -ItemType Directory -Force -Path $cd | Out-Null
@@ -210,6 +218,13 @@ if ($Desktop) {
     Info 'sync.mode' "$((DevStat $script:device).last_mode)"
 }
 
+# The CI build sends nothing to Anthropic or OpenAI (its log says so).
+Check 'run.vendors_off' {
+    $log = ReadShared (Join-Path $data 'agent.log')
+    if ($log.Contains('CI build: no request to Anthropic or OpenAI')) { Pass 'run.vendors_off' 'CI build: no request to Anthropic or OpenAI' }
+    else { Fail 'run.vendors_off' 'no such line in agent.log' }
+}
+
 # The Codex block is signed in, with the fake Codex account.
 Check 'sync.codex' {
     $ok = WaitFor 30 { $d = DevStat $script:device; $d -and $d.providers.codex.last_auth_state -eq 'ok' -and $d.providers.codex.last_email -eq $codexEmail }
@@ -264,14 +279,6 @@ Check 'fakeserver.token_leaks' {
     if ($s -and $s.token_leaks -eq 0) { Pass 'fakeserver.token_leaks' '0' } else { Fail 'fakeserver.token_leaks' "$($s.token_leaks)" }
 }
 
-# A file's text, read while the agent may still write it (agent.log).
-# A file the agent keeps locked (run.lock) reads as "".
-function ReadShared([string]$Path) {
-    try {
-        $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
-        try { (New-Object IO.StreamReader($fs)).ReadToEnd() } finally { $fs.Dispose() }
-    } catch { '' }
-}
 # No fake token (Claude's or Codex's) in the agent's files.
 Check 'files.token_leaks' {
     $hits = @(Get-ChildItem -LiteralPath $data -Recurse -File -ErrorAction SilentlyContinue |

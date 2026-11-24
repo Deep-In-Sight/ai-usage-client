@@ -635,15 +635,46 @@ func TestDumpViewOnlyInACIBuild(t *testing.T) {
 	eq(t, v.Items[0].Text, "Server does not support Codex yet")
 }
 
-// Plan Task 11: AI_USAGE_TEST_CODEX_OFFLINE=1 keeps a CI build's Codex
-// lane off the network (no request to chatgpt.com, no codex run): CI
-// runners have fake sign-ins only. Any other build ignores it.
-func TestCodexOfflineOnlyInACIBuild(t *testing.T) {
+// Ruling F5 (review N-5): a CI build sends nothing to Anthropic or
+// OpenAI: both usage requests get a transport that refuses them (checked
+// by its type, never by sending). Any other build keeps the default
+// transports, and a test's own transport is kept in every build.
+func TestCIBuildSendsNothingToTheVendors(t *testing.T) {
 	te := newEnv(t)
-	te.vars[testCodexOfflineEnv] = "1"
-	eq(t, codexOffline(te.Env), false)
+	te.ClaudeTransport, te.CodexTransport = nil, nil
+	c, x := vendorTransports(te.Env)
+	if c != nil || x != nil {
+		t.Fatalf("a release build changed the transports: %T %T", c, x)
+	}
 	asCIBuild(t)
-	eq(t, codexOffline(te.Env), true)
-	te.vars[testCodexOfflineEnv] = ""
-	eq(t, codexOffline(te.Env), false)
+	c, x = vendorTransports(te.Env)
+	if _, ok := c.(offlineTransport); !ok {
+		t.Fatalf("Claude transport %T", c)
+	}
+	if _, ok := x.(offlineTransport); !ok {
+		t.Fatalf("Codex transport %T", x)
+	}
+	te.CodexTransport = refuseTransport{}
+	if _, x = vendorTransports(te.Env); x != (refuseTransport{}) {
+		t.Fatalf("a test's transport was replaced: %T", x)
+	}
+	// a CI build's run says so in its log
+	te = newEnv(t)
+	te.ClaudeTransport, te.CodexTransport = nil, nil
+	must(t, config.Save(te.Dirs.File(paths.ConfigFile), mustParse(t, validConfig)))
+	cancel, code := te.mainAsync("run", "--headless")
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(readOrEmpty(te.Dirs.File(paths.LogFile)), "CI build: no request to Anthropic or OpenAI") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no CI-build line in the log:\n%s", readOrEmpty(te.Dirs.File(paths.LogFile)))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	eq(t, waitCode(t, code), 0)
+}
+
+func readOrEmpty(p string) string {
+	b, _ := os.ReadFile(p)
+	return string(b)
 }

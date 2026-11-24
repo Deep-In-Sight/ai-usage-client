@@ -49,15 +49,22 @@ type Client struct {
 }
 
 // New returns a client for url (UsageURL outside tests).
-func New(url, userAgent string, clk clock.Clock) *Client {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.Proxy = http.ProxyFromEnvironment // the internet side follows a company proxy
+func New(url, userAgent string, clk clock.Clock) *Client { return NewWith(url, userAgent, clk, nil) }
+
+// NewWith uses transport rt (nil: the default, which follows a company
+// proxy from the environment).
+func NewWith(url, userAgent string, clk clock.Clock, rt http.RoundTripper) *Client {
+	if rt == nil {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.Proxy = http.ProxyFromEnvironment // the internet side follows a company proxy
+		rt = tr
+	}
 	return &Client{
 		url: url,
 		ua:  userAgent,
 		clk: clk,
 		hc: &http.Client{
-			Transport:     tr,
+			Transport:     rt,
 			Timeout:       requestTimeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},

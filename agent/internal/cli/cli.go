@@ -77,10 +77,12 @@ type Env struct {
 	// Machine is this PC's machine key and its source (nil means
 	// machine.Key).
 	Machine func() (key, source string)
-	// CodexTransport carries the Codex usage request (nil means the
-	// default transport; tests point it at a fake server, and refuse
-	// everything by default).
-	CodexTransport http.RoundTripper
+	// ClaudeTransport and CodexTransport carry the usage requests to
+	// Anthropic and OpenAI (nil means the default transport, or in a CI
+	// build one that refuses every request; tests point them at fake
+	// servers, and refuse everything by default).
+	ClaudeTransport http.RoundTripper
+	CodexTransport  http.RoundTripper
 	// CodexVersion asks a codex executable its version for the Codex
 	// fallback, which only a CI build's test switch wires (nil means
 	// running `<path> --version`; tests run nothing).

@@ -63,6 +63,10 @@ synced_now() { device=$(cat "$data/device-id" 2>/dev/null) && sync_ok "$device" 
 if wait_for 90 synced_now; then pass sync.arrives "device $device (sign-in from the keychain)"
 else fail sync.arrives "device=$device stats=$(stats | jget - devices "$device")"; fi
 
+# run.vendors_off: the CI build sends nothing to Anthropic or OpenAI
+if vendors_off "$data"; then pass run.vendors_off "CI build: no request to Anthropic or OpenAI"
+else fail run.vendors_off "no such line in agent.log"; fi
+
 # sync.codex: the Codex block is signed in, with the fake Codex account
 if wait_for 30 codex_ok "$device"; then pass sync.codex "codex ok, $CODEX_EMAIL"
 else fail sync.codex "providers=$(dev "$device" providers)"; fi
