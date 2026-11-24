@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sharedread"
 )
 
 // CLI is a codex executable and its version.
@@ -190,7 +191,7 @@ func isShim(p string) bool {
 	case ".js", ".cjs", ".mjs", ".cmd", ".bat", ".ps1":
 		return true
 	}
-	f, err := os.Open(real)
+	f, err := sharedread.Open(real)
 	if err != nil {
 		return false
 	}

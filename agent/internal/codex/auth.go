@@ -13,7 +13,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,6 +23,7 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sharedread"
 )
 
 // Auth is what the agent uses of auth.json, without any token.
@@ -231,17 +231,10 @@ func stampOf(path string) stamp {
 	return stamp{exists: true, mod: st.ModTime(), size: st.Size()}
 }
 
-// readCapped reads at most limit bytes of a file opened read-only. On
-// Windows os.Open shares the file for reading and writing, so Codex can
-// write it meanwhile; it is closed at once.
-func readCapped(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return io.ReadAll(io.LimitReader(f, limit))
-}
+// readCapped reads at most limit bytes of a file opened read-only and
+// shared fully with Codex (sharedread: on Windows Codex can still rename
+// a new auth.json over it while it is open, review I-1).
+func readCapped(path string, limit int64) ([]byte, error) { return sharedread.ReadFile(path, limit) }
 
 // Reader reads the Codex sign-in under the base spec's read rule (4.3): at
 // start, when auth.json or config.toml changes, once when the known expiry

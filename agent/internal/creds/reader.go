@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sharedread"
 )
 
 // Options say where the sign-in lives.
@@ -40,14 +41,10 @@ func capText(n int64) string {
 	return fmt.Sprintf("%d bytes", n)
 }
 
-func readCapped(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return io.ReadAll(io.LimitReader(f, limit))
-}
+// readCapped reads at most limit bytes of one of Claude Code's files,
+// opened read-only and shared fully (sharedread: on Windows Claude Code can
+// still replace it by rename while it is open, review I-1).
+func readCapped(path string, limit int64) ([]byte, error) { return sharedread.ReadFile(path, limit) }
 
 // macReloginGap limits keychain re-reads triggered by .claude.json changes.
 const macReloginGap = 10 * time.Minute
@@ -225,7 +222,7 @@ func (r *Reader) read(ctx context.Context, now time.Time) (Login, string) {
 		r.bad = 0
 		r.retry = false
 		if l.HasToken {
-			if f, err := os.Open(r.accountPath()); err == nil {
+			if f, err := sharedread.Open(r.accountPath()); err == nil {
 				// One byte over the cap tells a file that is too large from
 				// one that is exactly the cap.
 				lr := &io.LimitedReader{R: f, N: maxAccountFile + 1}
