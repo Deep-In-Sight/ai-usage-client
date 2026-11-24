@@ -22,3 +22,6 @@ require (
 )
 
 tool github.com/tc-hib/go-winres
+
+// A copy of fyne.io/systray v1.12.2 with one addition; see third_party/systray/PATCHED.md.
+replace fyne.io/systray => ./third_party/systray
