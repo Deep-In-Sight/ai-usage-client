@@ -19,9 +19,10 @@ import (
 // DefaultBaseURL is Codex's own default chatgpt_base_url.
 const DefaultBaseURL = "https://chatgpt.com/backend-api/"
 
-// ErrBaseURLNotAllowed: config.toml's chatgpt_base_url is not an OpenAI
-// address over https, so the token is not sent (design D1).
-var ErrBaseURLNotAllowed = errors.New("codex: chatgpt_base_url host is not an OpenAI host")
+// ErrBaseURLNotAllowed: config.toml's chatgpt_base_url is not
+// https://chatgpt.com or https://chat.openai.com, so the token is not sent
+// (design D1; exact hosts, controller ruling on review m-7).
+var ErrBaseURLNotAllowed = errors.New("codex: chatgpt_base_url is not chatgpt.com or chat.openai.com")
 
 // UsageURL is the usage address for a chatgpt_base_url ("" for the
 // default), or ErrBaseURLNotAllowed.
@@ -32,8 +33,9 @@ var ErrBaseURLNotAllowed = errors.New("codex: chatgpt_base_url host is not an Op
 // https://chat.openai.com when missing; "/wham/usage" when the address
 // has "/backend-api", else "/api/codex/usage". Our addition (CodexBar has
 // none): the address must be https, without user, port, query or
-// fragment, on chatgpt.com, chat.openai.com or a host under chatgpt.com
-// or openai.com, so that a config file cannot send the token elsewhere.
+// fragment, on chatgpt.com or chat.openai.com exactly (no other host,
+// not even under those domains), so that a config file cannot send the
+// token elsewhere.
 func UsageURL(base string) (string, error) {
 	b := strings.TrimSpace(base)
 	if b == "" {
@@ -63,11 +65,10 @@ func allowed(s string) (*url.URL, error) {
 		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.ContainsAny(s, "\\?#") {
 		return nil, ErrBaseURLNotAllowed
 	}
+	// exact hosts only (controller ruling on review m-7): other hosts under
+	// openai.com and chatgpt.com include services run by third parties
 	host := strings.ToLower(u.Hostname())
-	if host != "chatgpt.com" && host != "chat.openai.com" && !strings.HasSuffix(host, ".chatgpt.com") && !strings.HasSuffix(host, ".openai.com") {
-		return nil, ErrBaseURLNotAllowed
-	}
-	if strings.HasPrefix(host, ".") || strings.Contains(host, "..") {
+	if host != "chatgpt.com" && host != "chat.openai.com" {
 		return nil, ErrBaseURLNotAllowed
 	}
 	u.Scheme, u.Host = "https", host

@@ -134,7 +134,8 @@ func TestFetchHeaders(t *testing.T) {
 	}
 }
 
-// RF5: chatgpt_base_url can only point at OpenAI's hosts over https;
+// RF5: chatgpt_base_url can only point at chatgpt.com or chat.openai.com
+// over https;
 // anything else sends nothing (the fake server, reachable for every host,
 // hears no request).
 func TestBaseURLOutsideAllowListSendsNothing(t *testing.T) {
@@ -143,8 +144,6 @@ func TestBaseURLOutsideAllowListSendsNothing(t *testing.T) {
 		"https://chatgpt.com":                    "https://chatgpt.com/backend-api/wham/usage",
 		"https://chatgpt.com/":                   "https://chatgpt.com/backend-api/wham/usage",
 		" https://chat.openai.com/backend-api/ ": "https://chat.openai.com/backend-api/wham/usage",
-		"https://ab.chatgpt.com":                 "https://ab.chatgpt.com/api/codex/usage",
-		"https://api.openai.com/backend-api":     "https://api.openai.com/backend-api/wham/usage",
 		"HTTPS://ChatGPT.com/backend-api":        "https://chatgpt.com/backend-api/wham/usage",
 	} {
 		got, err := UsageURL(base)
@@ -156,7 +155,11 @@ func TestBaseURLOutsideAllowListSendsNothing(t *testing.T) {
 	for _, base := range []string{"http://chatgpt.com", "https://evil.example", "https://chatgpt.com.evil.example",
 		"https://openai.com.example", "https://evilchatgpt.com", "https://user@chatgpt.com", "https://chatgpt.com:8443",
 		"ftp://chatgpt.com", "chatgpt.com", "https://chatgpt.com/backend-api?x=1", "https://chatgpt.com#x",
-		"https://xn--chatgpt-.com", "https://chatgpt.com\\@evil.example", "https://[::1]"} {
+		"https://xn--chatgpt-.com", "https://chatgpt.com\\@evil.example", "https://[::1]",
+		// exact hosts only (controller ruling on review m-7): other hosts
+		// under openai.com or chatgpt.com include third parties' services
+		"https://community.openai.com", "https://api.openai.com/backend-api", "https://ab.chatgpt.com",
+		"https://chatgpt.com.", "https://help.openai.com/backend-api"} {
 		if u, err := UsageURL(base); !errors.Is(err, ErrBaseURLNotAllowed) {
 			t.Fatalf("%q allowed as %q (%v)", base, u, err)
 		}

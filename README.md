@@ -108,9 +108,10 @@ Your token, your conversations, your files, this PC's machine identifier
   `config.toml` in the Codex folder (`~/.codex`, or `CODEX_HOME` as it was
   when you installed), opening them read-only, and never refreshes,
   rewrites or locks them. The Codex token goes only to
-  `chatgpt.com/backend-api/wham/usage` (or another `chatgpt.com` or
-  `openai.com` address over HTTPS that `chatgpt_base_url` in `config.toml`
-  names; any other address gets no request), with this agent's own name as
+  `chatgpt.com/backend-api/wham/usage` (or another address on
+  `chatgpt.com` or `chat.openai.com` over HTTPS that `chatgpt_base_url` in
+  `config.toml` names; any other host, even one under `openai.com`, gets no
+  request), with this agent's own name as
   its User-Agent. An expired sign-in makes no request: running Codex once
   renews it.
 - Only when `chatgpt.com` turns the direct request away (HTTP 403 or 404, or

@@ -78,7 +78,7 @@ func (p *Provider) Login(ctx context.Context) provider.Login {
 	l := p.reader.Login(ctx)
 	if l.State == "ok" || l.State == "expired" {
 		if _, err := p.usageURL(); err != nil {
-			l.State, l.Problem = "unsupported_base_url", "chatgpt_base_url in Codex's config.toml is not an OpenAI address"
+			l.State, l.Problem = "unsupported_base_url", "chatgpt_base_url in Codex's config.toml is not chatgpt.com or chat.openai.com"
 		} else if p.fallback != nil {
 			l.FallbackCLI, l.FallbackProblem = p.fallback.Status()
 		}
