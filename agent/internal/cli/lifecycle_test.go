@@ -375,3 +375,28 @@ func TestNewcomerThatCannotRunLeavesTheRunningAgent(t *testing.T) {
 		})
 	}
 }
+
+// A crash report the Go runtime wrote into agent.log (past the scrubber)
+// is scrubbed by the next run, in agent.log and agent.log.1 (review m3).
+func TestRunScrubsWhatACrashLeft(t *testing.T) {
+	fs := newFakeServer(t)
+	te := trayEnv(t, fs)
+	te.GOOS = "linux"
+	te.vars["XDG_SESSION_TYPE"] = "wayland"
+	te.Tray = func(context.Context, tray.Controller, <-chan struct{}, string) error { return nil }
+	p := te.Dirs.File(paths.LogFile)
+	must(t, os.MkdirAll(filepath.Dir(p), 0o700))
+	crash := "panic: key test-ingest-key-0123456789 under " + te.home + "\n\ngoroutine 1 [running]:\n"
+	must(t, os.WriteFile(p, []byte(crash), 0o600))
+	must(t, os.WriteFile(p+".1", []byte(crash), 0o600))
+	eq(t, te.main("run"), 0)
+	for _, f := range []string{p, p + ".1"} {
+		got := read(t, f)
+		contains(t, got, "panic: key [ingest key] under ~\n")
+		for _, bad := range []string{"test-ingest-key-0123456789", te.home} {
+			if strings.Contains(got, bad) {
+				t.Fatalf("%q in %s:\n%s", bad, f, got)
+			}
+		}
+	}
+}

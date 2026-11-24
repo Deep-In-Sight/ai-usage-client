@@ -7,9 +7,11 @@ package logfile
 import (
 	"errors"
 	"io"
+	"net/url"
 	"os"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -170,10 +172,14 @@ type Personal struct {
 }
 
 // Scrubber replaces secrets and personal details in log text: the home
-// folder with ~, the given secrets (the ingest key) with [ingest key],
-// sign-in tokens and bearer values with [token], e-mail addresses with
-// [email], private IPv4 addresses (10/8, 172.16/12, 192.168/16) with
-// [lan address], and the host and user names with [host] and [user].
+// folder with ~, the given secrets (the ingest key, also URL-encoded) with
+// [ingest key], sign-in tokens (sk-…, JWTs, bearer values, long values
+// after a token or key name) with [token], e-mail addresses with [email],
+// private IPv4 addresses (10/8, 172.16/12, 192.168/16) with [lan address],
+// and the host and user names with [host] and [user]. A name that is an
+// ordinary word (letters only, such as "user" or "ubuntu") is replaced only
+// in a path or after a user or host label, so that messages keep their
+// words; other names wherever they stand as a word.
 type Scrubber struct {
 	homes   []string
 	secrets []string
@@ -183,10 +189,23 @@ type Scrubber struct {
 
 var (
 	// API keys and sign-in tokens of the form sk-<kind>-<value>
-	tokenRE  = regexp.MustCompile(`\bsk-[A-Za-z0-9]{2,8}-[A-Za-z0-9_-]{6,}`)
-	bearerRE = regexp.MustCompile(`(?i)\b(bearer )\S+`)
-	emailRE  = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
-	lanRE    = regexp.MustCompile(`\b(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b`)
+	tokenRE = regexp.MustCompile(`\bsk-[A-Za-z0-9]{2,8}-[A-Za-z0-9_-]{6,}`)
+	// JSON Web Tokens (Codex and ChatGPT sign-ins are JWTs): header.payload.signature
+	jwtRE    = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*`)
+	bearerRE = regexp.MustCompile(`(?i)\b(bearer[ \t]+)\S+`)
+	// a long opaque value after a name that ends in token, key, secret, …
+	namedRE = regexp.MustCompile(`(?i)(\b[a-z0-9_-]*(?:token|key|secret|password|passwd|credential)s?["']?[ \t]*[:=][ \t]*["']?)` +
+		`[A-Za-z0-9._~+/=-]{16,}`)
+	emailRE = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
+	lanRE   = regexp.MustCompile(`\b(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b`)
+	// letters only: could be an ordinary word
+	wordLike = regexp.MustCompile(`^[A-Za-z]+$`)
+)
+
+// Labels before a user or a host name.
+const (
+	userLabels = `os_user|username|user|login|owner`
+	hostLabels = `hostname|host|computername|computer|machine`
 )
 
 // NewScrubber makes a scrubber for this PC's details and the given
@@ -201,13 +220,28 @@ func NewScrubber(p Personal, secrets ...string) *Scrubber {
 		}
 	}
 	for _, v := range secrets {
-		if len(v) >= 8 {
-			s.secrets = append(s.secrets, v)
+		if len(v) < 8 {
+			continue
+		}
+		for _, form := range []string{v, url.QueryEscape(v), url.PathEscape(v)} {
+			if !slices.Contains(s.secrets, form) {
+				s.secrets = append(s.secrets, form)
+			}
 		}
 	}
-	for _, w := range []struct{ v, repl string }{{p.Host, "[host]"}, {p.User, "[user]"}} {
-		if len(w.v) >= 3 {
-			s.words = append(s.words, regexp.MustCompile(`\b`+regexp.QuoteMeta(w.v)+`\b`))
+	// the longest first, so no form is left half replaced
+	slices.SortStableFunc(s.secrets, func(a, b string) int { return len(b) - len(a) })
+	for _, w := range []struct{ v, repl, labels string }{{p.Host, "[host]", hostLabels}, {p.User, "[user]", userLabels}} {
+		if len(w.v) < 3 {
+			continue
+		}
+		q := regexp.QuoteMeta(w.v)
+		if wordLike.MatchString(w.v) {
+			s.words = append(s.words, regexp.MustCompile(`([/\\])`+q+`\b`),
+				regexp.MustCompile(`(\b(?i:`+w.labels+`)["']?[ \t]*[:=]?[ \t]*["']?)`+q+`\b`))
+			s.repl = append(s.repl, "${1}"+w.repl, "${1}"+w.repl)
+		} else {
+			s.words = append(s.words, regexp.MustCompile(`\b`+q+`\b`))
 			s.repl = append(s.repl, w.repl)
 		}
 	}
@@ -223,13 +257,47 @@ func (s *Scrubber) Scrub(line string) string {
 		line = strings.ReplaceAll(line, v, "[ingest key]")
 	}
 	line = tokenRE.ReplaceAllString(line, "[token]")
+	line = jwtRE.ReplaceAllString(line, "[token]")
 	line = bearerRE.ReplaceAllString(line, "${1}[token]")
+	line = namedRE.ReplaceAllString(line, "${1}[token]")
 	line = emailRE.ReplaceAllString(line, "[email]")
 	line = lanRE.ReplaceAllString(line, "[lan address]")
 	for i, re := range s.words {
 		line = re.ReplaceAllString(line, s.repl[i])
 	}
 	return line
+}
+
+// maxScrubFile is the most of a log file ScrubFile reads: a log file is at
+// most Max plus one crash report.
+const maxScrubFile = 8 << 20
+
+// ScrubFile scrubs a log file in place. Go crash reports reach agent.log
+// from the runtime, past the scrubber, so a run scrubs the files the run
+// before it left (review m3). A missing file, or one that needs nothing,
+// is left alone. It rewrites the same file (not a new one), because under
+// launchd standard error stays open on it.
+func ScrubFile(path string, s *Scrubber) error {
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxScrubFile+1))
+	f.Close()
+	if err != nil {
+		return err
+	}
+	if len(b) > maxScrubFile {
+		return errors.New("log file too large to scrub")
+	}
+	clean := s.Scrub(string(b))
+	if clean == string(b) {
+		return nil
+	}
+	return os.WriteFile(path, []byte(clean), 0o600)
 }
 
 // Writer returns a writer that scrubs each write before passing it to w.

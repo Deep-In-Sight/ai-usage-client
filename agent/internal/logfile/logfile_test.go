@@ -201,6 +201,90 @@ func TestScrubberTakesOutSecretsAndPersonalData(t *testing.T) {
 	}
 }
 
+// Review m3: JWTs (what Codex and ChatGPT sign-ins are) and long opaque
+// values after a token or key name are taken out, "bearer" followed by a
+// tab too, and the ingest key also in its URL-encoded forms.
+func TestScrubberTakesOutJWTsAndOpaqueTokens(t *testing.T) {
+	key := "fake/ingest+key=0123456789"
+	s := NewScrubber(Personal{}, key)
+	cases := map[string]string{
+		"id_token eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.c2lnLXBhcnQ_1 read":         "id_token [token] read",
+		"claims eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0. end":                         "claims [token] end",
+		`{"access_token":"abcdef0123456789abcdef","x":1}`:                          `{"access_token":"[token]","x":1}`,
+		"refresh_token=rt_AbCdEf0123456789xyz&a=b":                                "refresh_token=[token]&a=b",
+		"api_key: Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MA== sent":                          "api_key: [token] sent",
+		"Authorization: bearer\tabc.def":                                          "Authorization: bearer\t[token]",
+		"url ?key=fake%2Fingest%2Bkey%3D0123456789 refused":                       "url ?key=[ingest key] refused",
+		"path /k/fake%2Fingest+key=0123456789/x":                                  "path /k/[ingest key]/x",
+		"token expired; key file missing; access_token: short":                    "token expired; key file missing; access_token: short",
+		"sync: bad ingest key: HTTP 401 (machine key not shown)":                  "sync: bad ingest key: HTTP 401 (machine key not shown)",
+	}
+	for in, want := range cases {
+		in, want = strings.ReplaceAll(in, `\t`, "\t"), strings.ReplaceAll(want, `\t`, "\t")
+		if got := s.Scrub(in); got != want {
+			t.Errorf("Scrub(%q)\n got %q\nwant %q", in, got, want)
+		}
+	}
+}
+
+// Review m3: a user or host name that is an ordinary word ("user",
+// "ubuntu") is replaced only in a path or after a user or host label, so
+// messages keep their words; a name with digits or punctuation is
+// replaced wherever it stands.
+func TestScrubberLeavesOrdinaryWordsAlone(t *testing.T) {
+	s := NewScrubber(Personal{Home: "/srv/u/x", User: "user", Host: "ubuntu"})
+	cases := map[string]string{
+		"systray error: dbus: connection closed by user":         "systray error: dbus: connection closed by user",
+		"desktop ubuntu:GNOME, session x11":                      "desktop ubuntu:GNOME, session x11",
+		"open /media/user/disk and C:\\Users\\user\\x": "open /media/[user]/disk and C:\\Users\\[user]\\x",
+		"user=user host=ubuntu":                                  "user=[user] host=[host]",
+		`{"os_user":"user","hostname":"ubuntu"}`:                 `{"os_user":"[user]","hostname":"[host]"}`,
+		"Hostname: ubuntu, user: user":                           "Hostname: [host], user: [user]",
+	}
+	for in, want := range cases {
+		if got := s.Scrub(in); got != want {
+			t.Errorf("Scrub(%q)\n got %q\nwant %q", in, got, want)
+		}
+	}
+	d := NewScrubber(Personal{User: "j.doe", Host: "DEV-PC-07"})
+	if got := d.Scrub("from DEV-PC-07 as j.doe"); got != "from [host] as [user]" {
+		t.Fatalf("%q", got)
+	}
+}
+
+// Go crash reports are written by the runtime, past the scrubber; the
+// next start scrubs the log files (review m3), and a file that needs
+// nothing is left as it is.
+func TestScrubFileCleansCrashReports(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "agent.log")
+	crash := "2026-01-05 09:30:00 ai-usage started\npanic: open /srv/u/jdoe/x: token sk-xyz-oat01-AbC_d-9\n\ngoroutine 1 [running]:\nmain.main()\n"
+	if err := os.WriteFile(p, []byte(crash), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := NewScrubber(Personal{Home: "/srv/u/jdoe"})
+	if err := ScrubFile(p, s); err != nil {
+		t.Fatal(err)
+	}
+	want := "2026-01-05 09:30:00 ai-usage started\npanic: open ~/x: token [token]\n\ngoroutine 1 [running]:\nmain.main()\n"
+	if got := read(t, p); got != want {
+		t.Fatalf("%q", got)
+	}
+	st1, _ := os.Stat(p)
+	if err := ScrubFile(p, s); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, p); got != want {
+		t.Fatalf("second pass changed it: %q", got)
+	}
+	if st2, _ := os.Stat(p); !st2.ModTime().Equal(st1.ModTime()) {
+		t.Fatal("a clean file was rewritten")
+	}
+	if err := ScrubFile(filepath.Join(dir, "missing.log"), s); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestScrubberIgnoresShortOrEmptyValues(t *testing.T) {
 	s := NewScrubber(Personal{Home: "/", User: "a", Host: ""}, "", "k")
 	if got := s.Scrub("a / k line"); got != "a / k line" {

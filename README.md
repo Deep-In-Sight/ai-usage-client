@@ -158,7 +158,9 @@ The menu, from top to bottom:
   new session starts replaces one left over from the old session.
 - The agent keeps a log, `agent.log` in its settings folder (`status`
   prints where); the previous one is `agent.log.1`. It never holds sign-in
-  tokens or the team key, and your home folder is written as `~`.
+  tokens or the team key, and your home folder is written as `~`. A crash
+  report, which Go writes into the log itself, is cleaned the same way when
+  the agent starts again.
 
 ### Remove
 

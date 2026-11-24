@@ -382,13 +382,17 @@ var trayRecheck = 5 * time.Minute
 
 // logOutput is where run logs, every line scrubbed: the data folder's
 // agent.log (each line stamped, moved to agent.log.1 past 1 MiB, Go crash
-// reports included) and standard error. The agent that install starts has
+// reports included, scrubbed at the next start) and standard error. The agent that install starts has
 // no standard error anyone reads (Linux, macOS: /dev/null; Windows: a GUI
 // process has none), so the file is the log users can read. When standard
 // error already is agent.log (launchd on macOS), only standard error is
 // written, and the file is cut at start past 1 MiB.
 func logOutput(env Env, scrub *logfile.Scrubber) (io.Writer, func()) {
 	p := env.Dirs.File(paths.LogFile)
+	// Crash reports from the run before reached the files unscrubbed.
+	for _, f := range []string{p, p + ".1"} {
+		_ = logfile.ScrubFile(f, scrub)
+	}
 	if sameFile(env.Stderr, p) {
 		if st, err := os.Stat(p); err == nil && st.Size() > logfile.Max {
 			_ = os.Truncate(p, 0)
