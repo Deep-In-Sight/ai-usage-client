@@ -22,7 +22,7 @@ const staleTestID = 4242
 // TestStaleIconChild is the child of TestAnotherProcessRemovesAStaleIcon:
 // it adds a notification icon, says its window and waits to be killed.
 func TestStaleIconChild(t *testing.T) {
-	if os.Getenv(staleChildEnv) != "1" {
+	if os.Getenv(staleChildEnv) == "" {
 		t.Skip("child of TestAnotherProcessRemovesAStaleIcon")
 	}
 	if err := registerWatch(); err != nil {
@@ -45,12 +45,12 @@ func TestStaleIconChild(t *testing.T) {
 	time.Sleep(30 * time.Second) // killed long before
 }
 
-// A helper killed after it added its icon leaves the icon; another process
-// removes it with the dead helper's window and id (review n-2). Needs a
-// taskbar (CI's Windows runners have one).
-func TestAnotherProcessRemovesAStaleIcon(t *testing.T) {
+// startStaleChild starts the child and returns it with its icon's window
+// (skips the test without a notification area).
+func startStaleChild(t *testing.T, mode string) (*exec.Cmd, uint64) {
+	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestStaleIconChild$", "-test.v")
-	cmd.Env = append(os.Environ(), staleChildEnv+"=1")
+	cmd.Env = append(os.Environ(), staleChildEnv+"="+mode)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -58,8 +58,7 @@ func TestAnotherProcessRemovesAStaleIcon(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer cmd.Process.Kill()
-	var window uint64
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 	sc := bufio.NewScanner(out)
 	for sc.Scan() {
 		line := sc.Text()
@@ -67,25 +66,65 @@ func TestAnotherProcessRemovesAStaleIcon(t *testing.T) {
 			t.Skipf("no notification area here: %s", line)
 		}
 		if w, ok := strings.CutPrefix(line, "window "); ok {
-			window, err = strconv.ParseUint(w, 10, 64)
+			window, err := strconv.ParseUint(w, 10, 64)
 			if err != nil {
 				t.Fatal(err)
 			}
-			break
+			go func() { // drain
+				for sc.Scan() {
+				}
+			}()
+			return cmd, window
 		}
 	}
-	if window == 0 {
-		t.Fatal("the child said no window")
+	t.Fatal("the child said no window")
+	return nil, 0
+}
+
+var pShellNotifyIconGetRect = windows.NewLazySystemDLL("shell32.dll").NewProc("Shell_NotifyIconGetRect")
+
+// iconThere asks the notification area whether it has the icon
+// (Shell_NotifyIconGetRect: S_OK when it does).
+func iconThere(window uint64, id uint32) bool {
+	type identifier struct {
+		size     uint32
+		wnd      windows.Handle
+		id       uint32
+		guidItem windows.GUID
 	}
+	n := identifier{wnd: windows.Handle(window), id: id}
+	n.size = uint32(unsafe.Sizeof(n))
+	var rect [4]int32
+	r, _, _ := pShellNotifyIconGetRect.Call(uintptr(unsafe.Pointer(&n)), uintptr(unsafe.Pointer(&rect)))
+	return r == 0
+}
+
+// A helper killed after it added its icon leaves the icon; another process
+// removes it with the dead helper's window and id (review n-2). Needs a
+// taskbar (CI's Windows runners have one). The measurements go into the
+// failure message: whether the icon outlives a killed process, and
+// whether another process may remove a live or a dead one's icon.
+func TestAnotherProcessRemovesAStaleIcon(t *testing.T) {
+	live, lw := startStaleChild(t, "1")
+	liveThere := iconThere(lw, staleTestID)
+	liveRemoved := removeIcon(lw, staleTestID)
+	_ = live.Process.Kill()
+	_ = live.Wait()
+
+	cmd, window := startStaleChild(t, "1")
+	before := iconThere(window, staleTestID)
 	if err := cmd.Process.Kill(); err != nil { // TerminateProcess: the icon is not removed
 		t.Fatal(err)
 	}
 	_ = cmd.Wait()
-	if !removeIcon(window, staleTestID) {
-		t.Fatal("the icon the killed process left could not be removed by another process")
-	}
-	if removeIcon(window, staleTestID) {
-		t.Fatal("removed twice: the first removal did not take it away")
+	time.Sleep(200 * time.Millisecond)
+	after := iconThere(window, staleTestID)
+	removed := removeIcon(window, staleTestID)
+	gone := !iconThere(window, staleTestID)
+	again := removeIcon(window, staleTestID)
+	if !removed || again {
+		t.Fatalf("measured: live icon there %v, removed by another process %v; killed child's icon there before %v, after the kill %v, removed by another process %v, gone after %v, removed twice %v",
+			liveThere, liveRemoved, before, after, removed, gone, again)
 	}
 }
 
