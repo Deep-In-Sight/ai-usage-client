@@ -191,14 +191,10 @@ func isShim(p string) bool {
 	case ".js", ".cjs", ".mjs", ".cmd", ".bat", ".ps1":
 		return true
 	}
-	f, err := sharedread.Open(real)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	head := make([]byte, 2)
-	n, _ := f.Read(head)
-	return n == 2 && bytes.Equal(head, []byte("#!"))
+	// bounded in time like every read of another program's files: install
+	// and the engine never wait on a hung share (review N-2)
+	head, _, err := sharedread.ReadFile(real, 2)
+	return err == nil && bytes.Equal(head, []byte("#!"))
 }
 
 // ResolveShim gives the native codex binary an npm shim at path runs, ""

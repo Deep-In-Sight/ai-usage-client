@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sharedread"
 )
 
 // exe writes an executable file (a stand-in; it is never run).
@@ -204,4 +205,25 @@ func TestRelativePathsAreNeverCandidates(t *testing.T) {
 	}
 	cfg := config.Config{CodexPath: filepath.Join("rel", exeName()), CodexHome: filepath.Join(t.TempDir(), "none")}
 	eq(t, len(FindCLI(cfg, t.TempDir(), func(string) string { return "" })), 0)
+}
+
+// Review N-2: telling a shim from a binary reads the file like every
+// other read of Codex's files, bounded in time: while an earlier read of
+// that file still hangs, the look ends at once (the file counts as no
+// shim) instead of waiting.
+func TestShimCheckIsBounded(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "codex")
+	must(t, os.WriteFile(p, []byte("#!/bin/sh\nexec node codex.js\n"), 0o755))
+	eq(t, isShim(p), true)
+	release, holding := make(chan struct{}), make(chan struct{})
+	go func() {
+		_ = sharedread.Do(p, func(*os.File) error { close(holding); <-release; return nil })
+	}()
+	<-holding
+	defer close(release)
+	start := time.Now()
+	eq(t, isShim(p), false)
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("waited %v", d)
+	}
 }

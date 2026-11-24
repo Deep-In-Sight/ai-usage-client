@@ -107,3 +107,23 @@ func TestRenameOverAnOpenFileSucceeds(t *testing.T) {
 	}
 	h.Close()
 }
+
+// Review N-2: a file deeper than MAX_PATH opens (os.Open manages it; a
+// bare CreateFile does not).
+func TestLongPathOpens(t *testing.T) {
+	dir := t.TempDir()
+	for len(dir) < 300 {
+		dir = filepath.Join(dir, "a-folder-name-of-some-length")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(p, []byte(`{"x":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := ReadFile(p, 100)
+	if err != nil || string(b) != `{"x":1}` {
+		t.Fatalf("%q %v", b, err)
+	}
+}

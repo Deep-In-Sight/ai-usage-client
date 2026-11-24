@@ -10,7 +10,7 @@ import (
 // FILE_SHARE_DELETE (os.Open shares only read and write), as Codex's own
 // readers open auth.json (review I-1).
 func open(path string) (*os.File, error) {
-	p, err := windows.UTF16PtrFromString(path)
+	p, err := windows.UTF16PtrFromString(longPath(path))
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
