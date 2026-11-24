@@ -234,7 +234,10 @@ func stampOf(path string) stamp {
 // readCapped reads at most limit bytes of a file opened read-only and
 // shared fully with Codex (sharedread: on Windows Codex can still rename
 // a new auth.json over it while it is open, review I-1).
-func readCapped(path string, limit int64) ([]byte, error) { return sharedread.ReadFile(path, limit) }
+func readCapped(path string, limit int64) ([]byte, error) {
+	b, _, err := sharedread.ReadFile(path, limit)
+	return b, err
+}
 
 // Reader reads the Codex sign-in under the base spec's read rule (4.3): at
 // start, when auth.json or config.toml changes, once when the known expiry

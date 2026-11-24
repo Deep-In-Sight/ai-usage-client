@@ -44,7 +44,10 @@ func capText(n int64) string {
 // readCapped reads at most limit bytes of one of Claude Code's files,
 // opened read-only and shared fully (sharedread: on Windows Claude Code can
 // still replace it by rename while it is open, review I-1).
-func readCapped(path string, limit int64) ([]byte, error) { return sharedread.ReadFile(path, limit) }
+func readCapped(path string, limit int64) ([]byte, error) {
+	b, _, err := sharedread.ReadFile(path, limit)
+	return b, err
+}
 
 // macReloginGap limits keychain re-reads triggered by .claude.json changes.
 const macReloginGap = 10 * time.Minute
@@ -222,13 +225,19 @@ func (r *Reader) read(ctx context.Context, now time.Time) (Login, string) {
 		r.bad = 0
 		r.retry = false
 		if l.HasToken {
-			if f, err := sharedread.Open(r.accountPath()); err == nil {
+			var acct *Account
+			tooLarge := false
+			// bounded in time (a hung share holds up this read only, review m-3)
+			if err := sharedread.Do(r.accountPath(), func(f *os.File) error {
 				// One byte over the cap tells a file that is too large from
 				// one that is exactly the cap.
 				lr := &io.LimitedReader{R: f, N: maxAccountFile + 1}
-				l.Account = parseAccountFrom(lr)
-				f.Close()
-				if l.Account == nil && lr.N == 0 {
+				acct = parseAccountFrom(lr)
+				tooLarge = acct == nil && lr.N == 0
+				return nil
+			}); err == nil {
+				l.Account = acct
+				if tooLarge {
 					l.Problem = "account file larger than " + capText(maxAccountFile)
 				}
 			}
