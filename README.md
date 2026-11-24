@@ -177,8 +177,8 @@ install deletes it there, or you can delete it yourself.
 - Every release carries `SHA256SUMS`, and the install commands check the
   file they download against it.
 - All the source is in this repository, under `agent/`.
-- `ai-usage licenses` prints the licences of the third-party code inside the
-  program.
+- `ai-usage licenses` prints the program's licence (MIT, see
+  [Licence](#licence)) and the licences of the third-party code inside it.
 
 ### Building and releases
 
@@ -293,6 +293,32 @@ and prints the status and limits.
 
 `dev/xinput_fake.py` is a small stand-in for `xdotool` (clicks, key presses
 and an idle check on X11), used to click through the real indicator.
+
+## Licence
+
+This repository is under the MIT licence; see [`LICENSE`](LICENSE). These
+parts are not covered by it:
+
+- **Clawd.** The Clawd mascot artwork is © Anthropic PBC (see
+  [Credits](#credits)): `claude-usage@localhost/clawd.svg` and everything
+  drawn from it, which is the pixel grid in `agent/internal/icon/mascot.go`,
+  the tray icons that show Clawd and the program icon
+  `agent/winres/icon.png`. `docs/screenshot.png` shows Clawd and
+  parts of the Ubuntu desktop, which remain under their owners' terms.
+- **The systray copy.** `agent/third_party/systray` is a modified copy of
+  `fyne.io/systray` v1.12.2. It stays under its own Apache License 2.0
+  (`agent/third_party/systray/LICENSE`), changes to its files included; each
+  changed file says so at the top, and `PATCHED.md` lists the changes. Only
+  the files added to the copy, which start with "Not upstream code", are
+  under the MIT licence.
+- **Other third-party code** compiled into the program keeps its own
+  licence: Go (BSD 3-Clause), `github.com/godbus/dbus/v5` (BSD 2-Clause),
+  `github.com/miekg/dns`, `golang.org/x/net` and `golang.org/x/sys` (BSD
+  3-Clause). Their texts are in `agent/internal/notices/licenses`, and
+  `ai-usage licenses` prints them after this repository's licence.
+
+The MIT licence gives no rights to anyone's names or trademarks, such as
+"Claude", "Claude Code" or "Anthropic".
 
 ## Credits
 
