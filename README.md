@@ -299,14 +299,8 @@ and an idle check on X11), used to click through the real indicator.
 This repository is under the MIT licence; see [`LICENSE`](LICENSE). These
 parts are not covered by it:
 
-- **Clawd.** `claude-usage@localhost/clawd.svg` and its rasterised
-  derivatives depict the Claude Code mascot, © Anthropic PBC. They are not
-  covered by this project's licence, no licence from Anthropic is claimed,
-  and they will be removed on request. The derivatives are the pixel grid in
-  `agent/internal/icon/mascot.go` and the tray icons that show Clawd;
-  `docs/screenshot.png` also shows
-  Clawd, and parts of the Ubuntu desktop, which remain under their owners'
-  terms. See [Credits](#credits).
+- **Other companies' marks**, listed under
+  [Third-party marks](#third-party-marks).
 - **The systray copy.** `agent/third_party/systray` is a modified copy of
   `fyne.io/systray` v1.12.2. It stays under its own Apache License 2.0
   (`agent/third_party/systray/LICENSE`), changes to its files included; each
@@ -319,11 +313,24 @@ parts are not covered by it:
   3-Clause). Their texts are in `agent/internal/notices/licenses`, and
   `ai-usage licenses` prints them after this repository's licence.
 
+### Third-party marks
+
 AI Usage is an independent internal tool. It is not affiliated with,
 endorsed by, or sponsored by Anthropic PBC or OpenAI. "Claude" and "Claude
 Code" are trademarks of Anthropic PBC; "OpenAI", "ChatGPT" and "Codex" are
 trademarks of OpenAI. These names are used only to identify the services
 whose usage this tool displays.
+
+The program's own icon (`agent/winres/icon.ico`) is original artwork. These
+files show other companies' marks:
+
+- **Clawd.** `claude-usage@localhost/clawd.svg` and its rasterised
+  derivatives depict the Claude Code mascot, © Anthropic PBC. They are not
+  covered by this project's licence, no licence from Anthropic is claimed,
+  and they will be removed on request. The derivatives are the pixel grid
+  in `agent/internal/icon/mascot.go`, the tray icons drawn from it and
+  `docs/screenshot.png`, which also shows parts of the Ubuntu desktop under
+  their owners' terms. See [Credits](#credits).
 
 ## Credits
 

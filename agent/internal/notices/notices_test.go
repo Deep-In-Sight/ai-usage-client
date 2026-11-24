@@ -134,8 +134,7 @@ func TestTextStartsWithTheProgramsLicence(t *testing.T) {
 		"Licence: MIT License",
 		"Copyright (c) 2026 Deep-In-Sight", "Permission is hereby granted", // LICENSE
 		"AI Usage is an independent internal tool. It is not affiliated with, endorsed by, or sponsored by Anthropic PBC or OpenAI.",
-		"Claude Code mascot, (c) Anthropic PBC",
-		"no licence from Anthropic is claimed, and it will be removed on request",
+		"The Clawd artwork, which the tray icon shows while Claude Code is signed in, depicts the Claude Code mascot, (c) Anthropic PBC. It is not covered by this licence, no licence from Anthropic is claimed, and it will be removed on request.",
 		"Apache License 2.0, changes included",
 	} {
 		i := strings.Index(s, want)
@@ -145,6 +144,63 @@ func TestTextStartsWithTheProgramsLicence(t *testing.T) {
 	}
 	if !strings.Contains(s[:first], "not covered by this licence") {
 		t.Fatal("the exceptions are not stated")
+	}
+}
+
+// Every third-party mark gets the same three statements in the notices.
+func TestEveryMarkHasItsNotice(t *testing.T) {
+	if len(Marks) == 0 {
+		t.Fatal("no marks: Clawd is in the tray icon")
+	}
+	var b bytes.Buffer
+	Write(&b, nil, "go1.27.4")
+	s := strings.Join(strings.Fields(b.String()), " ")
+	first := strings.Index(s, "Go go1.27.4")
+	for _, m := range Marks {
+		want := "depicts " + m.Depicts + ", (c) " + m.Owner + ". It is not covered by this licence, no licence from " +
+			m.Licensor + " is claimed, and it will be removed on request."
+		if i := strings.Index(s, want); i < 0 || i > first {
+			t.Fatalf("no %q before the third-party software", want)
+		}
+	}
+}
+
+// The README's "Third-party marks" section has the same notice for every
+// mark, naming its files: Marks and that section are the one place a mark
+// is added.
+func TestReadmeListsEveryMark(t *testing.T) {
+	b, err := os.ReadFile("../../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	i := strings.Index(s, "\n### Third-party marks\n")
+	if i < 0 {
+		t.Fatal("README has no Third-party marks section")
+	}
+	s = s[i+1:]
+	if j := strings.Index(s[4:], "\n#"); j >= 0 {
+		s = s[:j+4]
+	}
+	s = strings.Join(strings.Fields(s), " ")
+	for _, want := range []string{
+		"AI Usage is an independent internal tool. It is not affiliated with, endorsed by, or sponsored by Anthropic PBC or OpenAI.",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("the section does not say %q", want)
+		}
+	}
+	for _, m := range Marks {
+		for _, f := range m.Files {
+			if !strings.Contains(s, "`"+f+"`") {
+				t.Fatalf("the section does not name %s's file %s", m.Name, f)
+			}
+		}
+		want := "depict " + m.Depicts + ", © " + m.Owner + ". They are not covered by this project's licence, no licence from " +
+			m.Licensor + " is claimed, and they will be removed on request."
+		if !strings.Contains(s, want) {
+			t.Fatalf("the section does not say %q", want)
+		}
 	}
 }
 

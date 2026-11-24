@@ -22,6 +22,28 @@ var files embed.FS
 // OwnLicence is AI Usage's licence, a copy of the repository's LICENSE.
 const OwnLicence = "licenses/ai-usage/LICENSE"
 
+// Mark is another company's artwork or logo that the program shows,
+// used without a licence from its owner.
+type Mark struct {
+	Name     string   // as the notices name it: "The Clawd artwork"
+	Shown    string   // where the program shows it
+	Depicts  string   // what it is
+	Owner    string   // the rights holder: "Anthropic PBC"
+	Licensor string   // the owner in "no licence from … is claimed"
+	Files    []string // the repository's files with it (the README names them)
+}
+
+// Marks are the other companies' marks in the program. Adding one is an
+// entry here and a bullet in the README's "Third-party marks" section
+// (TestReadmeListsEveryMark); the notices then state the same three
+// things for it: not covered by the MIT licence, no licence claimed,
+// removed on request.
+var Marks = []Mark{
+	{Name: "The Clawd artwork", Shown: "which the tray icon shows while Claude Code is signed in",
+		Depicts: "the Claude Code mascot", Owner: "Anthropic PBC", Licensor: "Anthropic",
+		Files: []string{"claude-usage@localhost/clawd.svg", "agent/internal/icon/mascot.go"}},
+}
+
 // GoPath stands for the Go standard library and runtime.
 const GoPath = "Go"
 
@@ -66,6 +88,24 @@ func BuildVersions() map[string]string {
 	return v
 }
 
+// wrap prints text as lines of at most 76 columns, the first starting
+// with lead and the others indented to match.
+func wrap(w io.Writer, lead, text string) {
+	line, words := lead, 0
+	for _, word := range strings.Fields(text) {
+		if words > 0 && len(line)+1+len(word) > 76 {
+			fmt.Fprintln(w, line)
+			line, words = strings.Repeat(" ", len(lead)), 0
+		}
+		if words > 0 {
+			line += " "
+		}
+		line += word
+		words++
+	}
+	fmt.Fprintln(w, line)
+}
+
 const rule = "----------------------------------------------------------------------"
 
 // Write prints the notices: AI Usage's own licence and what it does not
@@ -77,10 +117,11 @@ func Write(w io.Writer, versions map[string]string, goVersion string) {
 	fmt.Fprintln(w, "AI Usage is an independent internal tool. It is not affiliated with,")
 	fmt.Fprintln(w, "endorsed by, or sponsored by Anthropic PBC or OpenAI.")
 	fmt.Fprintln(w, "These parts of the program are not covered by this licence:")
-	fmt.Fprintln(w, "- The Clawd artwork, which the tray icon shows while Claude Code is signed")
-	fmt.Fprintln(w, "  in, depicts the Claude Code mascot, (c) Anthropic PBC. It is not covered")
-	fmt.Fprintln(w, "  by this licence, no licence from Anthropic is claimed, and it will be")
-	fmt.Fprintln(w, "  removed on request.")
+	for _, m := range Marks {
+		wrap(w, "- ", fmt.Sprintf("%s, %s, depicts %s, (c) %s. It is not covered by this licence, "+
+			"no licence from %s is claimed, and it will be removed on request.",
+			m.Name, m.Shown, m.Depicts, m.Owner, m.Licensor))
+	}
 	fmt.Fprintln(w, "- The third-party software listed below keeps its own licence")
 	fmt.Fprintln(w, "  (fyne.io/systray: Apache License 2.0, changes included).")
 	if b, err := files.ReadFile(OwnLicence); err == nil { // always: TestOwnLicenceIsTheRepositorysLicense
