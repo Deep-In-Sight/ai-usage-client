@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -194,5 +195,84 @@ func TestBuildRejectsBadVersion(t *testing.T) {
 	}
 	if _, code := script(t, "build-macos.sh", nil, "1.2"); code != 2 {
 		t.Fatalf("build-macos.sh accepted 1.2: %d", code)
+	}
+}
+
+// Ruling F4 (review N-4): versions of test builds are never released:
+// release.yml's tag check and publish-release.sh refuse them.
+func TestReleaseVersionRefusesTestBuilds(t *testing.T) {
+	for v, ok := range map[string]bool{
+		"0.8.3": true, "v0.8.3": true, "1.2.3-rc.1": true, "0.9.0-beta": true, "1.0.0-circle": true,
+		"0.0.0-ci": false, "v0.0.0-ci": false, "0.0.0": false, "0.0.0-dev": false, "0.0.0-dryrun": false,
+		"0.0.0-local": false, "0.8.3-ci": false, "0.8.3-rc.ci": false, "0.8.3-ci.1": false, "0.8.3-dev": false,
+		"0.8.3-relcheck": false, "0.0.0-relcheck": false,
+	} {
+		cmd := exec.Command("bash", "-c", `. ./version.sh && release_version "$1"`, "x", v)
+		err := cmd.Run()
+		if (err == nil) != ok {
+			t.Errorf("release_version %s: accepted=%v", v, err == nil)
+		}
+	}
+	for _, tag := range []string{"v0.0.0-ci", "v0.8.3-ci", "v0.0.0-dev"} {
+		out, code := script(t, "publish-release.sh", []string{"GH_TOKEN=x"}, publishable(t), tag)
+		if code == 0 || !strings.Contains(out, "a test build is never published") {
+			t.Fatalf("%s: %d %s", tag, code, out)
+		}
+	}
+	b, err := os.ReadFile("../../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `release_version "${tag#v}"`) {
+		t.Fatal("release.yml does not refuse a test build's tag")
+	}
+}
+
+// buildAgent builds the agent at version (and, if not "", with the CI
+// build's version set to ci) into a new folder.
+func buildAgent(t *testing.T, version, ci string) string {
+	t.Helper()
+	goBin := filepath.Join(runtime.GOROOT(), "bin", "go")
+	if _, err := os.Stat(goBin); err != nil {
+		goBin = "go"
+	}
+	out := filepath.Join(t.TempDir(), "ai-usage")
+	ld := "-X github.com/Deep-In-Sight/ai-usage-client/agent/internal/version.Version=" + version
+	if ci != "" {
+		ld += " -X github.com/Deep-In-Sight/ai-usage-client/agent/internal/cli.ciVersion=" + ci
+	}
+	cmd := exec.Command(goBin, "build", "-trimpath", "-ldflags", ld, "-o", out, "../cmd/ai-usage")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v: %s", err, b)
+	}
+	return out
+}
+
+// Ruling F4: the check run on release executables passes a release
+// build, and fails one that reports the CI version, one that reports
+// another version than the release's, and one that honours the CI
+// build's test switches under a release's version.
+func TestCheckRelease(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the agent three times")
+	}
+	rel := buildAgent(t, "1.2.3", "")
+	if out, code := script(t, "check-release.sh", nil, rel, "1.2.3"); code != 0 || !strings.Contains(out, "no test switch honoured") {
+		t.Fatalf("a release build failed: %d %s", code, out)
+	}
+	if out, code := script(t, "check-release.sh", nil, rel, "1.2.4"); code == 0 || !strings.Contains(out, "not 1.2.4") {
+		t.Fatalf("another version passed: %d %s", code, out)
+	}
+	ci := buildAgent(t, "0.0.0-ci", "")
+	for _, want := range []string{"0.0.0-ci", "1.2.3"} {
+		if out, code := script(t, "check-release.sh", nil, ci, want); code == 0 {
+			t.Fatalf("the CI build passed as %s: %s", want, out)
+		}
+	}
+	bad := buildAgent(t, "1.2.3", "1.2.3") // a release's version, a CI build's behaviour
+	out, code := script(t, "check-release.sh", nil, bad, "1.2.3")
+	if code == 0 || !strings.Contains(out, "behaves as a CI build") || !strings.Contains(out, "AI_USAGE_TEST_CODEX_FALLBACK") {
+		t.Fatalf("a build that honours the test switches passed: %d %s", code, out)
 	}
 }

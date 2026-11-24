@@ -98,8 +98,17 @@ const testHelpersEnv = "AI_USAGE_TEST_FAKE_PROVIDERS"
 // buildVersion is this build's version (tests stand in for a CI build).
 var buildVersion = func() string { return version.Version }
 
+// ciVersion is the version of a CI build, the only build that reads the
+// AI_USAGE_TEST_* switches (testSwitches). It is a variable so that the
+// release check's own test can build an executable that wrongly behaves
+// as a CI build under a release's version (tools/scripts_test.go).
+var ciVersion = "0.0.0-ci"
+
+// isCIBuild: this build is a CI build.
+func isCIBuild() bool { return buildVersion() == ciVersion }
+
 func testHelpers(env Env) []provider.ID {
-	if buildVersion() != "0.0.0-ci" {
+	if !isCIBuild() {
 		return nil
 	}
 	var out []provider.ID
@@ -142,7 +151,7 @@ const testDumpViewEnv = "AI_USAGE_TEST_DUMP_VIEW"
 // dumpView writes the visible menu items to testDumpViewEnv's file.
 func (l *trayLoop) dumpView(items []trayproto.Item) {
 	p := l.env.Getenv(testDumpViewEnv)
-	if p == "" || buildVersion() != "0.0.0-ci" {
+	if p == "" || !isCIBuild() {
 		return
 	}
 	type item struct {

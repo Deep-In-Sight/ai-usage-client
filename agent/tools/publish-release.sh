@@ -9,6 +9,8 @@ dir="$1"
 tag="$2"
 fail() { echo "publish-release: $*" >&2; exit 1; }
 printf '%s\n' "$tag" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' || fail "bad tag: $tag"
+. "$(dirname "$0")/version.sh"
+if [ "${DRY_RUN:-}" != "1" ]; then release_version "$tag" || fail "a test build is never published: $tag"; fi
 names="ai-usage-linux-amd64 ai-usage-macos-universal ai-usage-windows-amd64.exe"
 for n in $names SHA256SUMS; do
   [ -f "$dir/$n" ] || fail "$dir/$n is missing"

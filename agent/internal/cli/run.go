@@ -184,6 +184,7 @@ func runCmd(env Env, args []string) int {
 	ctrl.eng = e
 
 	logger.Printf("ai-usage %s started (pid %d, device %s, data %s, %s)", version.Version, os.Getpid(), deviceID, env.Dirs.Data, clientMode)
+	logTestSwitches(env, logger)
 	if replaced.PID != 0 {
 		logger.Printf("took over from the agent that ran before (pid %d)", replaced.PID)
 	}
@@ -361,7 +362,7 @@ const testCodexCLIEnv = "AI_USAGE_TEST_CODEX_FALLBACK"
 // process can start codex either.
 func codexFallback(env Env, codexHome string) *codex.AppServer {
 	cli := env.Getenv(testCodexCLIEnv)
-	on := buildVersion() == "0.0.0-ci" && filepath.IsAbs(cli)
+	on := isCIBuild() && filepath.IsAbs(cli)
 	codex.AllowCLIRuns(on)
 	if !on {
 		return nil
@@ -373,6 +374,23 @@ func codexFallback(env Env, codexHome string) *codex.AppServer {
 	}
 }
 
+// testSwitches are all the environment variables a CI build (version
+// 0.0.0-ci) reads; any other build reads none of them. A CI build logs
+// each one that is set, and tools/check-release.sh sets them all on a
+// release executable and fails if it logs one (ruling F4).
+var testSwitches = []string{testHelpersEnv, testDumpViewEnv, testCodexCLIEnv}
+
+func logTestSwitches(env Env, logger *log.Logger) {
+	if !isCIBuild() {
+		return
+	}
+	for _, n := range testSwitches {
+		if env.Getenv(n) != "" {
+			logger.Printf("CI build: test switch %s on", n)
+		}
+	}
+}
+
 // vendorTransports are the transports of the usage requests to Anthropic
 // and OpenAI. A CI build (version 0.0.0-ci) refuses every such request
 // unless a test gave its own: CI runners have fake sign-ins only, and a
@@ -381,7 +399,7 @@ func codexFallback(env Env, codexHome string) *codex.AppServer {
 // runner for those hosts (review N-5, ruling F5).
 func vendorTransports(env Env) (claude, codex http.RoundTripper) {
 	claude, codex = env.ClaudeTransport, env.CodexTransport
-	if buildVersion() == "0.0.0-ci" {
+	if isCIBuild() {
 		if claude == nil {
 			claude = offlineTransport{"Anthropic"}
 		}

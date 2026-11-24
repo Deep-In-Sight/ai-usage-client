@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -677,4 +678,69 @@ func TestCIBuildSendsNothingToTheVendors(t *testing.T) {
 func readOrEmpty(p string) string {
 	b, _ := os.ReadFile(p)
 	return string(b)
+}
+
+// Ruling F4: testSwitches lists every AI_USAGE_TEST_ variable the
+// program reads, and the release check sets each of them.
+func TestEveryTestSwitchIsListed(t *testing.T) {
+	re := regexp.MustCompile(`"(AI_USAGE_TEST_[A-Z0-9_]+)"`)
+	found := map[string]bool{}
+	err := filepath.WalkDir("..", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		for _, m := range re.FindAllStringSubmatch(string(b), -1) {
+			found[m[1]] = true
+		}
+		return err
+	})
+	must(t, err)
+	if len(found) == 0 {
+		t.Fatal("no switch found: the scan is broken")
+	}
+	script := read(t, "../../tools/check-release.sh")
+	for n := range found {
+		if !slices.Contains(testSwitches, n) {
+			t.Errorf("%s is read but not in testSwitches", n)
+		}
+	}
+	for _, n := range testSwitches {
+		if !found[n] {
+			t.Errorf("%s is listed but not read", n)
+		}
+		if !strings.Contains(script, n+"=") {
+			t.Errorf("tools/check-release.sh does not set %s", n)
+		}
+	}
+}
+
+// A CI build logs every test switch that is set; any other build logs
+// none (the release check looks for these lines).
+func TestCIBuildLogsItsSwitches(t *testing.T) {
+	for _, ci := range []bool{false, true} {
+		te := newEnv(t)
+		if ci {
+			asCIBuild(t)
+		}
+		for _, n := range testSwitches {
+			te.vars[n] = filepath.Join(t.TempDir(), "x")
+		}
+		must(t, config.Save(te.Dirs.File(paths.ConfigFile), mustParse(t, validConfig)))
+		cancel, code := te.mainAsync("run", "--headless")
+		deadline := time.Now().Add(5 * time.Second)
+		for !strings.Contains(readOrEmpty(te.Dirs.File(paths.LogFile)), " started (pid ") {
+			if time.Now().After(deadline) {
+				t.Fatal("the run did not start")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+		eq(t, waitCode(t, code), 0)
+		log := readOrEmpty(te.Dirs.File(paths.LogFile))
+		for _, n := range testSwitches {
+			eq(t, strings.Contains(log, "CI build: test switch "+n+" on"), ci)
+		}
+		eq(t, strings.Contains(log, "CI build"), ci)
+	}
 }
