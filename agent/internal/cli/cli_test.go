@@ -313,6 +313,11 @@ func TestStatusShowsCodex(t *testing.T) {
 				}},
 		}}
 	must(t, status.Write(te.Dirs.File(paths.StatusFile), snap))
+	// status writes a path under the home folder as ~/… except on Windows
+	cliShown := "~/.codex/packages/standalone/current/bin/codex"
+	if runtime.GOOS == "windows" {
+		cliShown = filepath.Join(te.home, ".codex", "packages", "standalone", "current", "bin", "codex")
+	}
 	eq(t, te.main("status"), 0)
 	contains(t, te.out.String(), `Claude:     signed in, expires 17:30 · poller
             Weekly 30%
@@ -320,7 +325,7 @@ Codex:      signed in (Plus), expires Jan 12 09:00 · poller
             5-hour 100% blocked  Resets Mon 14:20 · in 5h 20m
             Weekly  38%  Resets Fri 06:00 · in 3d 21h
             Updated 08:58 · last fetch 08:58 HTTP 200
-            source: direct  (fallback CLI: ~/.codex/packages/standalone/current/bin/codex 0.160.1)
+            source: direct  (fallback CLI: `+cliShown+` 0.160.1)
 Backlog:`)
 	// the fallback answered; an old CLI; none found
 	cx := snap.Providers[provider.Codex]

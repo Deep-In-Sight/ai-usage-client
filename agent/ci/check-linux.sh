@@ -372,6 +372,8 @@ end_session() { kill "$wpid" 2>/dev/null; kill "$bus_pid" 2>/dev/null; }
 # Codex lane is kept off the network (CI build switch).
 tray_codex_check() {
   local problems="" items labels svc l layout got
+  # Claude's weekly number as the server answers it (earlier checks change it)
+  curl -fsS --max-time 10 -X POST "$BASE/weekly?percent=42" || problems="$problems set_weekly_failed"
   fake_session codex || { fail tray.codex "no session bus or tray host"; end_session; return; }
   XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS="$bus_addr" AI_USAGE_TEST_CODEX_OFFLINE=1 \
     AI_USAGE_TEST_DUMP_VIEW="$out/view-codex.json" oneliner > "$out/install-codex.log" 2>&1 || problems="$problems install_rc=$?"

@@ -130,13 +130,18 @@ $exp = [DateTimeOffset]::UtcNow.AddHours(8).ToUnixTimeMilliseconds()
 # the fake Codex sign-in: fake JWTs ending in $codexSig, the access token
 # expires in 9 days
 function B64Url([string]$s) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)).TrimEnd('=').Replace('+', '-').Replace('/', '_') }
-$cxAuth = "{`"chatgpt_account_id`":`"$codexAccount`",`"chatgpt_user_id`":`"user-ci`",`"chatgpt_plan_type`":`"plus`"}"
+$cxAuth = '{"chatgpt_account_id":"' + $codexAccount + '","chatgpt_user_id":"user-ci","chatgpt_plan_type":"plus"}'
 $cxExp = [DateTimeOffset]::UtcNow.AddDays(9).ToUnixTimeSeconds()
-$cxAccess = "$(B64Url '{"alg":"none"}').$(B64Url "{`"exp`":$cxExp,`"https://api.openai.com/auth`":$cxAuth}").$codexSig"
-$cxId = "$(B64Url '{"alg":"none"}').$(B64Url "{`"email`":`"$codexEmail`",`"https://api.openai.com/auth`":$cxAuth}").$codexSig"
+$cxHeader = B64Url '{"alg":"none"}'
+$cxAccess = $cxHeader + '.' + (B64Url ('{"exp":' + $cxExp + ',"https://api.openai.com/auth":' + $cxAuth + '}')) + '.' + $codexSig
+$cxId = $cxHeader + '.' + (B64Url ('{"email":"' + $codexEmail + '","https://api.openai.com/auth":' + $cxAuth + '}')) + '.' + $codexSig
+$cxRefreshed = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
 $cxHome = Join-Path $env:USERPROFILE '.codex'
 New-Item -ItemType Directory -Force -Path $cxHome | Out-Null
-[IO.File]::WriteAllText((Join-Path $cxHome 'auth.json'), "{`"auth_mode`":`"chatgpt`",`"OPENAI_API_KEY`":null,`"tokens`":{`"access_token`":`"$cxAccess`",`"id_token`":`"$cxId`",`"refresh_token`":`"$codexRefresh`",`"account_id`":`"$codexAccount`"}}")
+$cxJson = '{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"last_refresh":"' + $cxRefreshed + '","tokens":{"access_token":"' + $cxAccess +
+    '","id_token":"' + $cxId + '","refresh_token":"' + $codexRefresh + '","account_id":"' + $codexAccount + '"}}'
+[IO.File]::WriteAllText((Join-Path $cxHome 'auth.json'), $cxJson)
+Info 'codex.fake_signin' "auth.json $($cxJson.Length) bytes, access token $($cxAccess.Split('.').Count) parts"
 
 # the fake team server
 $null = Start-Process -FilePath (Join-Path $env:CI_BIN 'fakeserver.exe') `
@@ -260,9 +265,12 @@ Check 'fakeserver.token_leaks' {
 }
 
 # A file's text, read while the agent may still write it (agent.log).
+# A file the agent keeps locked (run.lock) reads as "".
 function ReadShared([string]$Path) {
-    $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
-    try { (New-Object IO.StreamReader($fs)).ReadToEnd() } finally { $fs.Dispose() }
+    try {
+        $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        try { (New-Object IO.StreamReader($fs)).ReadToEnd() } finally { $fs.Dispose() }
+    } catch { '' }
 }
 # No fake token (Claude's or Codex's) in the agent's files.
 Check 'files.token_leaks' {
