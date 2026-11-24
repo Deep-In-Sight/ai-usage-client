@@ -128,6 +128,7 @@ type Response struct {
 
 type Latest struct {
 	FetchedAt string          `json:"fetched_at"`
+	Source    string          `json:"source,omitempty"` // schema 2: "wham", "app-server"; "" for Claude
 	Usage     json.RawMessage `json:"usage"`
 }
 

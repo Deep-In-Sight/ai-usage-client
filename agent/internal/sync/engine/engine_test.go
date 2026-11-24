@@ -17,6 +17,8 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/creds"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider/claude"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/backlog"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
@@ -135,6 +137,7 @@ type rig struct {
 	snaps   []status.Snapshot
 	rnd     []float64
 	ri      int
+	extra   []provider.Provider // lanes after Claude's
 }
 
 func newRig(t *testing.T, fn func(int, string, protocol.Request) (protocol.Response, error)) *rig {
@@ -152,9 +155,12 @@ func newRig(t *testing.T, fn func(int, string, protocol.Request) (protocol.Respo
 
 func (r *rig) build() *Engine {
 	return New(Deps{
-		Clock: r.clk, Logins: r.logins, Fetcher: r.fetcher, Syncer: r.syncer, Backlog: r.backlog,
-		Config:    config.Config{ServerURLs: []string{"http://192.0.2.10:8700"}, IngestKey: ingestKey},
-		StatePath: filepath.Join(r.dir, "state.json"), LatestPath: filepath.Join(r.dir, "latest.json"),
+		Clock: r.clk, Providers: append([]provider.Provider{claude.Wrap(r.logins, r.fetcher, r.clk)}, r.extra...),
+		Syncer: r.syncer, Backlog: r.backlog,
+		Config:           config.Config{ServerURLs: []string{"http://192.0.2.10:8700"}, IngestKey: ingestKey},
+		StatePath:        filepath.Join(r.dir, "state.json"),
+		LatestPath:       func(id provider.ID) string { return filepath.Join(r.dir, "latest-"+string(id)+".json") },
+		LegacyLatestPath: filepath.Join(r.dir, "latest.json"),
 		Identity: Identity{DeviceID: "dev-a", Hostname: "TEST-PC-A", OSUser: "user-a", OS: "linux", OSVersion: "24.04",
 			Arch: "amd64", Version: "0.0.0-dev", Mode: "headless"},
 		Publish: func(s status.Snapshot) { r.snaps = append(r.snaps, s) },
@@ -176,6 +182,15 @@ func (r *rig) step() time.Duration {
 }
 
 func (r *rig) snap() status.Snapshot { return r.snaps[len(r.snaps)-1] }
+
+// cl is Claude's part of the last snapshot.
+func (r *rig) cl() status.ProviderStatus { return r.snap().Providers[provider.Claude] }
+
+// weekly is Claude's weekly percentage in a snapshot.
+func weekly(s status.Snapshot) *float64 {
+	row, _ := s.Providers[provider.Claude].Row("weekly_all")
+	return row.Percent
+}
 
 // stepUntil steps until cond holds, failing after limit of fake time.
 func (r *rig) stepUntil(t *testing.T, limit time.Duration, cond func() bool) {
@@ -207,8 +222,8 @@ func TestPollerFetchesAndSyncsAtOnce(t *testing.T) {
 	eq(t, r.backlog.Len(), 0)
 	eq(t, d, 60*time.Second)
 	eq(t, r.snap().Mode, "coordinated")
-	eq(t, r.snap().Role, "poller")
-	eq(t, *r.snap().WeeklyPercent, 5.0)
+	eq(t, r.cl().Role, "poller")
+	eq(t, *weekly(r.snap()), 5.0)
 }
 
 func TestSecondFetchNowInSameStepIsIgnored(t *testing.T) {
@@ -261,7 +276,7 @@ func TestRequestFields(t *testing.T) {
 	if !strings.Contains(string(b), `"account":null`) || !strings.Contains(string(b), `"results":[]`) {
 		t.Fatal(string(b))
 	}
-	eq(t, r.snap().AuthState, "not_signed_in")
+	eq(t, r.cl().State, "not_signed_in")
 }
 
 func TestLongTextsAreClipped(t *testing.T) {
@@ -350,7 +365,7 @@ func TestStandaloneSkipsWithoutLogin(t *testing.T) {
 	eq(t, steps, 120)
 	eq(t, r.fetcher.calls, 0)
 	eq(t, r.snap().Mode, "standalone")
-	eq(t, r.snap().AuthState, "expired")
+	eq(t, r.cl().State, "expired")
 }
 
 func TestOutageThenRecoveryDeliversBacklog(t *testing.T) {
@@ -415,7 +430,7 @@ func TestTooLargeHalvesBatch(t *testing.T) {
 	})
 	add := func(n int, from time.Time) {
 		for i := 0; i < n; i++ {
-			_ = r.backlog.Add(protocol.Result{AccountUUID: "acc-1", FetchedAt: protocol.Time{Time: from.Add(time.Duration(i) * time.Second)}, HTTPStatus: 200})
+			_ = r.backlog.Add(backlog.Item{Provider: "claude", AccountKey: "acc-1", FetchedAt: protocol.Time{Time: from.Add(time.Duration(i) * time.Second)}, HTTPStatus: 200})
 		}
 	}
 	add(1000, t0.Add(-24*time.Hour))
@@ -653,14 +668,15 @@ func TestLatestIsShownAndSaved(t *testing.T) {
 	x.Latest = &protocol.Latest{FetchedAt: "2026-01-05T08:59:00.000Z", Usage: json.RawMessage(usageBody)}
 	r := newRig(t, always(x, nil))
 	r.step()
-	s := r.snap()
-	eq(t, *s.WeeklyPercent, 5.0)
+	s := r.cl()
+	eq(t, *weekly(r.snap()), 5.0)
 	eq(t, s.LatestFetchedAt, time.Date(2026, 1, 5, 8, 59, 0, 0, time.UTC))
-	eq(t, s.PeersDevices, 2)
+	eq(t, s.PeersPCs, 2)
 	eq(t, s.PollerHostname, "TEST-PC-B")
-	eq(t, s.WeeklyResetsAt, time.Date(2026, 1, 9, 6, 0, 0, 0, time.UTC))
+	w, _ := s.Row("weekly_all")
+	eq(t, w.ResetsAt.UTC(), time.Date(2026, 1, 9, 6, 0, 0, 0, time.UTC))
 	var saved protocol.Latest
-	b, err := os.ReadFile(filepath.Join(r.dir, "latest.json"))
+	b, err := os.ReadFile(filepath.Join(r.dir, "latest-claude.json"))
 	if err != nil || json.Unmarshal(b, &saved) != nil {
 		t.Fatalf("latest.json: %v", err)
 	}
@@ -719,7 +735,7 @@ func TestEmptyUsageDoesNotReplaceNumbers(t *testing.T) {
 	r.fetcher.body = `{}`
 	r.step()
 	eq(t, r.fetcher.calls, 1)
-	eq(t, *r.snap().WeeklyPercent, 5.0)
+	eq(t, *weekly(r.snap()), 5.0)
 	eq(t, len(r.syncer.calls[1].req.Results), 1) // the result still goes to the server unchanged
 	eq(t, string(r.syncer.calls[1].req.Results[0].Usage), `{}`)
 }
@@ -745,8 +761,8 @@ func TestSignInProblemIsShown(t *testing.T) {
 	l.Account, l.Problem = nil, "account file larger than 32 MiB"
 	r.logins.login = l
 	r.step()
-	eq(t, r.snap().SignInProblem, "account file larger than 32 MiB")
+	eq(t, r.cl().Problem, "account file larger than 32 MiB")
 	r.logins.login = okLogin()
 	r.step()
-	eq(t, r.snap().SignInProblem, "")
+	eq(t, r.cl().Problem, "")
 }

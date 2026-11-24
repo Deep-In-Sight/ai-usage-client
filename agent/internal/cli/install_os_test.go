@@ -329,7 +329,7 @@ func TestStatusNamesTheMethodInUse(t *testing.T) {
 	main.name, other.name = "systemd-user", "xdg-autostart"
 	te.Autostart = func(bool) (autostart.Method, error) { return &stateMethod{main, "not installed"}, nil }
 	te.Others = func(bool) []autostart.Method { return []autostart.Method{&stateMethod{other, "registered"}} }
-	must(t, status.Write(te.Dirs.File(paths.StatusFile), status.Snapshot{Mode: "coordinated", AuthState: "ok"}))
+	must(t, status.Write(te.Dirs.File(paths.StatusFile), status.Snapshot{Mode: "coordinated", Providers: claudeSnap(status.ProviderStatus{State: "ok"})}))
 	eq(t, te.main("status"), 0)
 	contains(t, te.out.String(), "Service:    registered (xdg-autostart)")
 }

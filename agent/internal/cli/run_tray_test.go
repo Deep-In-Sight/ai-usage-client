@@ -313,9 +313,10 @@ func TestVersionOutputNamesTray(t *testing.T) {
 
 func TestStatusShowsClientMode(t *testing.T) {
 	te := newEnv(t)
-	must(t, status.Write(te.Dirs.File(paths.StatusFile), status.Snapshot{Mode: "coordinated", Role: "standby", ClientMode: "tray", AuthState: "ok"}))
+	must(t, status.Write(te.Dirs.File(paths.StatusFile), status.Snapshot{Mode: "coordinated", ClientMode: "tray", Providers: claudeSnap(status.ProviderStatus{State: "ok", Role: "standby"})}))
 	eq(t, te.main("status"), 0)
-	contains(t, te.out.String(), "Mode:       coordinated, standby (tray)")
+	contains(t, te.out.String(), "Mode:       coordinated (tray)\n")
+	contains(t, te.out.String(), "Claude:     signed in · standby\n") // the role is per provider (design 6.12)
 }
 
 func TestTrayRemoveRemovesEverything(t *testing.T) {

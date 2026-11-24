@@ -3,8 +3,12 @@
 // three failed syncs. The coordination rules live on the server; Step is a
 // deterministic function of its inputs and the (fake or real) clock.
 //
-// The engine sees the sign-in only as creds.Login (no token). Fetching goes
-// through the Fetcher, which is the only path to the token.
+// The engine has one lane per provider (Claude, Codex): each lane has its
+// own sign-in, role, fetch limit, stand-alone schedule and newest numbers,
+// so one provider's 401 or 429 never delays another's fetch. All lanes
+// share one sync per round. The engine sees sign-ins only as
+// provider.Login (no token); fetching goes through the provider, which is
+// the only path to the token.
 package engine
 
 import (
@@ -16,6 +20,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,12 +29,11 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/atomicfile"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
-	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/creds"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/backlog"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/discover"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
-	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
 )
 
 const (
@@ -55,16 +59,6 @@ const (
 	ModeStandalone  = "standalone"
 )
 
-// Logins gives the current sign-in (without the token).
-type Logins interface {
-	Current(ctx context.Context) creds.Login
-}
-
-// Fetcher asks Anthropic for the usage once.
-type Fetcher interface {
-	Fetch(ctx context.Context) (anthropic.Result, error)
-}
-
 // Syncer sends one sync request to one server URL.
 type Syncer interface {
 	Sync(ctx context.Context, baseURL string, req protocol.Request) (protocol.Response, error)
@@ -77,43 +71,82 @@ type Identity struct {
 
 // Deps are the engine's inputs.
 type Deps struct {
-	Clock      clock.Clock
-	Logins     Logins
-	Fetcher    Fetcher
-	Syncer     Syncer
-	Backlog    *backlog.Store
-	Config     config.Config
-	StatePath  string
-	LatestPath string
-	Identity   Identity
-	Publish    func(status.Snapshot)
-	Rand       func() float64
-	Log        *log.Logger
+	Clock     clock.Clock
+	Providers []provider.Provider // one lane each, in this order
+	Syncer    Syncer
+	Backlog   *backlog.Store
+	Config    config.Config
+	StatePath string
+	// LatestPath is the file with a provider's newest numbers (nil: none).
+	LatestPath func(provider.ID) string
+	// LegacyLatestPath is the v0.7/v0.8 latest.json: at the first start it
+	// becomes Claude's file.
+	LegacyLatestPath string
+	Identity         Identity
+	Publish          func(status.Snapshot)
+	Rand             func() float64
+	Log              *log.Logger
 }
 
-// Engine holds the loop's state between steps.
-type Engine struct {
-	d       Deps
-	state   config.State
-	limiter anthropic.Limiter
+// lane is one provider's part of the engine. Engine goroutine only.
+type lane struct {
+	p  provider.Provider
+	id provider.ID
 
-	mode           string
-	failures       int
+	login provider.Login // read at the start of each step
+
+	// from the server's last answer for this provider
+	role          string
+	fetchNow      bool
+	pcs           int
+	poller        string
+	serverProblem string
+
+	latest      *protocol.Latest
+	latestSaved string
+	latestPath  string
+
+	limiter        anthropic.Limiter // this provider's own fetch limit
 	nextStandalone time.Time
-	batchLimit     int
-
-	lastResp    *protocol.Response
-	serverURL   string
-	lastSyncAt  time.Time
-	lastSyncOK  bool
-	syncProblem string
 
 	lastFetchAt     time.Time
 	lastFetchStatus *int
 	lastFetchNote   string
+}
 
-	latest      *protocol.Latest
-	latestSaved string
+// reply is one provider's part of a server answer.
+type reply struct {
+	role     string
+	fetchNow bool
+	latest   *protocol.Latest
+	pcs      int
+	poller   *string
+	problem  string
+}
+
+// answer is a server answer in the engine's terms.
+type answer struct {
+	lanes        map[provider.ID]reply
+	next         int
+	serverURLs   []string
+	clientLatest *string
+}
+
+// Engine holds the loop's state between steps.
+type Engine struct {
+	d     Deps
+	state config.State
+	lanes []*lane
+
+	mode       string
+	failures   int
+	batchLimit int
+
+	serverURL    string
+	lastSyncAt   time.Time
+	lastSyncOK   bool
+	syncProblem  string
+	clientLatest string
 
 	// Safe from any goroutine.
 	fresh      atomic.Bool   // a refresh was asked for and not yet sent with a 200
@@ -123,11 +156,12 @@ type Engine struct {
 
 	// Engine goroutine only.
 	followUps    int    // short waits left after a want_fresh sync
-	freshBase    string // latest fetched_at when the refresh was sent
+	freshBase    string // the lanes' latest fetched_at when the refresh was sent
 	freshWaiting bool   // this step's wait is a follow-up wait
 }
 
-// New prepares an engine; it reads state.json and latest.json.
+// New prepares an engine; it reads state.json and each provider's latest
+// file (a v0.8 latest.json becomes Claude's first).
 func New(d Deps) *Engine {
 	if d.Clock == nil {
 		d.Clock = clock.Real{}
@@ -145,19 +179,70 @@ func New(d Deps) *Engine {
 	if d.StatePath != "" {
 		e.state = config.LoadState(d.StatePath)
 	}
-	e.limiter.Restore(e.state.FetchLimit)
 	if b := e.state.BatchLimit; b >= 1 && b < defaultBatch {
 		e.batchLimit = b
 	}
-	if d.LatestPath != "" {
-		if b, err := os.ReadFile(d.LatestPath); err == nil {
-			var l protocol.Latest
-			if json.Unmarshal(b, &l) == nil && l.FetchedAt != "" {
-				e.latest, e.latestSaved = &l, l.FetchedAt
+	if d.LatestPath != nil && d.LegacyLatestPath != "" {
+		migrateLatest(d.LegacyLatestPath, d.LatestPath(provider.Claude), d.Log)
+	}
+	for _, p := range d.Providers {
+		l := &lane{p: p, id: p.ID()}
+		l.limiter.Restore(e.savedLimit(l.id))
+		if d.LatestPath != nil {
+			l.latestPath = d.LatestPath(l.id)
+			if b, err := os.ReadFile(l.latestPath); err == nil {
+				var x protocol.Latest
+				if json.Unmarshal(b, &x) == nil && x.FetchedAt != "" {
+					l.latest, l.latestSaved = &x, x.FetchedAt
+				}
 			}
 		}
+		e.lanes = append(e.lanes, l)
 	}
 	return e
+}
+
+// migrateLatest renames a v0.7/v0.8 latest.json to Claude's file, unless
+// that exists already.
+func migrateLatest(legacy, claude string, lg *log.Logger) {
+	if _, err := os.Stat(claude); err == nil {
+		return
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		return
+	}
+	if err := os.Rename(legacy, claude); err != nil {
+		lg.Printf("latest: %v", err)
+	}
+}
+
+func (e *Engine) savedLimit(id provider.ID) config.FetchLimit {
+	if id == provider.Claude {
+		return e.state.FetchLimit
+	}
+	return e.state.FetchLimits[string(id)]
+}
+
+func (e *Engine) saveLimit(l *lane) {
+	if l.id == provider.Claude {
+		e.state.FetchLimit = l.limiter.Snapshot()
+	} else {
+		if e.state.FetchLimits == nil {
+			e.state.FetchLimits = map[string]config.FetchLimit{}
+		}
+		e.state.FetchLimits[string(l.id)] = l.limiter.Snapshot()
+	}
+	e.saveState()
+}
+
+// lane returns the lane of provider id, or nil.
+func (e *Engine) lane(id provider.ID) *lane {
+	for _, l := range e.lanes {
+		if l.id == id {
+			return l
+		}
+	}
+	return nil
 }
 
 // Run steps until ctx ends, waiting on clk between steps, or less when
@@ -206,11 +291,16 @@ func (e *Engine) currentClientMode() string {
 	return e.clientMode
 }
 
-func (e *Engine) latestAt() string {
-	if e.latest == nil {
-		return ""
+// latestKey changes whenever any lane's newest numbers change.
+func (e *Engine) latestKey() string {
+	var b strings.Builder
+	for _, l := range e.lanes {
+		if l.latest != nil {
+			b.WriteString(l.latest.FetchedAt)
+		}
+		b.WriteByte('|')
 	}
-	return e.latest.FetchedAt
+	return b.String()
 }
 
 // Step runs one round and returns how long to wait before the next.
@@ -220,45 +310,60 @@ func (e *Engine) Step(ctx context.Context) time.Duration {
 	default:
 	}
 	now := e.d.Clock.Now()
-	login := e.d.Logins.Current(ctx)
-	before := e.latestAt()
+	for _, l := range e.lanes {
+		l.login = l.p.Login(ctx)
+	}
+	before := e.latestKey()
 	if err := e.d.Backlog.Prune(now); err != nil {
 		e.d.Log.Printf("backlog: %v", err)
 	}
 
-	if e.mode == ModeStandalone && !now.Before(e.nextStandalone) && e.canFetch(login, now) {
-		e.fetch(ctx, login)
-		gap := StandaloneMin + time.Duration(e.d.Rand()*float64(StandaloneMax-StandaloneMin))
-		if wait := e.limiter.NextAllowed().Sub(now); wait > gap {
-			gap = wait
+	if e.mode == ModeStandalone {
+		for _, l := range e.lanes {
+			if now.Before(l.nextStandalone) || !e.canFetch(l, now) {
+				continue
+			}
+			e.fetch(ctx, l)
+			gap := StandaloneMin + time.Duration(e.d.Rand()*float64(StandaloneMax-StandaloneMin))
+			if wait := l.limiter.NextAllowed().Sub(now); wait > gap {
+				gap = wait
+			}
+			l.nextStandalone = now.Add(gap)
 		}
-		e.nextStandalone = now.Add(gap)
 	}
 
 	var wait time.Duration
 	wantFresh := e.fresh.Swap(false)
-	resp, err := e.syncOnce(ctx, login, now, wantFresh)
+	ans, err := e.syncOnce(ctx, e.d.Clock.Now(), wantFresh)
 	if err == nil {
 		if wantFresh {
 			e.followUps, e.freshBase = FreshFollowUps, before
 		}
-		wait = clampNextSync(resp.NextSyncSeconds)
-		ordered := resp.FetchNow && resp.Role == "poller"
-		if ordered && !e.canFetch(login, e.d.Clock.Now()) {
-			// Not an error: no result goes back and the server hands over.
-			e.noteFetch("fetch order not followed (sign-in or local fetch limit)")
+		wait = clampNextSync(ans.next)
+		fetched := false
+		for _, l := range e.lanes {
+			r, ok := ans.lanes[l.id]
+			if !ok || !r.fetchNow || r.role != "poller" {
+				continue
+			}
+			if !e.canFetch(l, e.d.Clock.Now()) {
+				// Not an error: no result goes back and the server hands over.
+				e.noteFetch(l, "fetch order not followed (sign-in or local fetch limit)")
+				continue
+			}
+			e.fetch(ctx, l)
+			fetched = true
 		}
-		if ordered && e.canFetch(login, e.d.Clock.Now()) {
-			e.fetch(ctx, login)
-			if resp2, err2 := e.syncOnce(ctx, login, e.d.Clock.Now(), false); err2 == nil {
-				wait = clampNextSync(resp2.NextSyncSeconds)
+		if fetched {
+			if ans2, err2 := e.syncOnce(ctx, e.d.Clock.Now(), false); err2 == nil {
+				wait = clampNextSync(ans2.next)
 			} else {
-				wait = e.failed(err2, now, login)
+				wait = e.failed(err2, now)
 			}
 		}
 		e.freshWaiting = false
 		if e.followUps > 0 {
-			if e.latestAt() != e.freshBase {
+			if e.latestKey() != e.freshBase {
 				e.followUps = 0 // the new numbers are here
 			} else if e.lastSyncOK {
 				wait = min(wait, MinNextSync)
@@ -267,7 +372,7 @@ func (e *Engine) Step(ctx context.Context) time.Duration {
 			}
 		}
 	} else {
-		wait = e.failed(err, now, login)
+		wait = e.failed(err, now)
 		if e.mode == ModeStandalone {
 			e.followUps = 0 // no server: nothing will come of the request
 		} else if wantFresh {
@@ -275,14 +380,14 @@ func (e *Engine) Step(ctx context.Context) time.Duration {
 		}
 		e.freshWaiting = e.followUps > 0
 	}
-	e.publish(login, e.d.Clock.Now())
+	e.publish(e.d.Clock.Now())
 	return wait
 }
 
 // canFetch: a usable sign-in with a known account (a result without one is
-// dropped by the server) and room under the agent's own fetch limit.
-func (e *Engine) canFetch(login creds.Login, now time.Time) bool {
-	return login.State(now) == "ok" && login.Account != nil && login.Account.UUID != "" && e.limiter.Allowed(now)
+// dropped by the server) and room under the lane's own fetch limit.
+func (e *Engine) canFetch(l *lane, now time.Time) bool {
+	return l.login.State == "ok" && l.login.AccountKey != "" && l.limiter.Allowed(now)
 }
 
 func clampNextSync(s int) time.Duration {
@@ -297,7 +402,7 @@ func clampNextSync(s int) time.Duration {
 }
 
 // failed counts a sync failure and returns the wait before the next step.
-func (e *Engine) failed(err error, now time.Time, login creds.Login) time.Duration {
+func (e *Engine) failed(err error, now time.Time) time.Duration {
 	e.failures++
 	e.lastSyncOK = false
 	e.syncProblem = err.Error()
@@ -313,15 +418,20 @@ func (e *Engine) failed(err error, now time.Time, login creds.Login) time.Durati
 	}
 	if e.failures >= FailuresToStandalone && e.mode != ModeStandalone {
 		e.setMode(ModeStandalone)
-		e.nextStandalone = now.Add(time.Duration(e.d.Rand() * float64(StandaloneFirstMax)))
+		for _, l := range e.lanes {
+			l.nextStandalone = now.Add(time.Duration(e.d.Rand() * float64(StandaloneFirstMax)))
+		}
 	}
 	wait := RetryInterval
 	if e.mode == ModeStandalone {
-		due := e.nextStandalone
-		if na := e.limiter.NextAllowed(); na.After(due) {
-			due = na
-		}
-		if login.State(now) == "ok" {
+		for _, l := range e.lanes {
+			if l.login.State != "ok" {
+				continue
+			}
+			due := l.nextStandalone
+			if na := l.limiter.NextAllowed(); na.After(due) {
+				due = na
+			}
 			if d := due.Sub(e.d.Clock.Now()); d < wait {
 				wait = max(d, minWait)
 			}
@@ -338,8 +448,8 @@ func (e *Engine) setMode(m string) {
 }
 
 // syncOnce tries the candidate URLs in order; the first success wins.
-func (e *Engine) syncOnce(ctx context.Context, login creds.Login, now time.Time, wantFresh bool) (protocol.Response, error) {
-	req := e.request(login, now)
+func (e *Engine) syncOnce(ctx context.Context, now time.Time, wantFresh bool) (answer, error) {
+	req, sent := e.requestV1(now)
 	req.WantFresh = wantFresh
 	var lastErr, serverErr error
 	for _, base := range discover.Candidates(e.state.LastGoodURL, e.state.ServerURLs, e.d.Config.ServerURLs) {
@@ -354,11 +464,12 @@ func (e *Engine) syncOnce(ctx context.Context, login creds.Login, now time.Time,
 			}
 			continue
 		}
-		e.synced(base, resp, req.Results, e.d.Clock.Now())
-		return resp, nil
+		ans := answerV1(resp)
+		e.synced(base, ans, sent, e.d.Clock.Now())
+		return ans, nil
 	}
 	if serverErr != nil {
-		return protocol.Response{}, serverErr
+		return answer{}, serverErr
 	}
 	if lastErr == nil {
 		lastErr = errors.New("sync: no server address to try")
@@ -366,7 +477,16 @@ func (e *Engine) syncOnce(ctx context.Context, login creds.Login, now time.Time,
 			lastErr = ctx.Err()
 		}
 	}
-	return protocol.Response{}, lastErr
+	return answer{}, lastErr
+}
+
+// answerV1 is a schema 1 answer: it is about Claude only.
+func answerV1(resp protocol.Response) answer {
+	return answer{
+		lanes: map[provider.ID]reply{provider.Claude: {role: resp.Role, fetchNow: resp.FetchNow, latest: resp.Latest,
+			pcs: resp.Peers.Devices, poller: resp.Peers.PollerHostname}},
+		next: resp.NextSyncSeconds, serverURLs: resp.ServerURLs, clientLatest: resp.ClientLatestVersion,
+	}
 }
 
 // isServerError: the server (or something posing as it) answered.
@@ -376,7 +496,7 @@ func isServerError(err error) bool {
 		errors.Is(err, protocol.ErrBadResponse) || errors.As(err, &se)
 }
 
-func (e *Engine) synced(base string, resp protocol.Response, sent []protocol.Result, now time.Time) {
+func (e *Engine) synced(base string, ans answer, sent []backlog.Item, now time.Time) {
 	if err := e.d.Backlog.Remove(sent); err != nil {
 		e.d.Log.Printf("backlog: %v", err)
 	}
@@ -386,8 +506,26 @@ func (e *Engine) synced(base string, resp protocol.Response, sent []protocol.Res
 	e.failures = 0
 	e.setMode(ModeCoordinated)
 	e.lastSyncOK, e.lastSyncAt, e.syncProblem, e.serverURL = true, now, "", base
-	r := resp
-	e.lastResp = &r
+	e.clientLatest = ""
+	if ans.clientLatest != nil {
+		e.clientLatest = *ans.clientLatest
+	}
+	for _, l := range e.lanes {
+		r, ok := ans.lanes[l.id]
+		if !ok {
+			// not part of this answer (a schema 1 server knows Claude only)
+			l.role, l.fetchNow, l.pcs, l.poller, l.serverProblem = "", false, 0, "", ""
+			continue
+		}
+		l.role, l.fetchNow, l.pcs, l.serverProblem = r.role, r.fetchNow, r.pcs, r.problem
+		l.poller = ""
+		if r.poller != nil {
+			l.poller = *r.poller
+		}
+		if r.latest != nil && r.latest.FetchedAt != "" {
+			e.setLatest(l, *r.latest)
+		}
+	}
 
 	changed := false
 	if e.batchLimit != defaultBatch {
@@ -399,16 +537,13 @@ func (e *Engine) synced(base string, resp protocol.Response, sent []protocol.Res
 		e.state.LastGoodURL = base
 		changed = true
 	}
-	announced := normalizeAll(resp.ServerURLs)
+	announced := normalizeAll(ans.serverURLs)
 	if !equalStrings(announced, e.state.ServerURLs) {
 		e.state.ServerURLs = announced
 		changed = true
 	}
 	if changed {
 		e.saveState()
-	}
-	if resp.Latest != nil && resp.Latest.FetchedAt != "" {
-		e.setLatest(*resp.Latest)
 	}
 }
 
@@ -443,23 +578,23 @@ func (e *Engine) saveState() {
 	}
 }
 
-func (e *Engine) setLatest(l protocol.Latest) {
-	if e.latest != nil && newer(e.latest.FetchedAt, l.FetchedAt) {
+func (e *Engine) setLatest(l *lane, x protocol.Latest) {
+	if l.latest != nil && newer(l.latest.FetchedAt, x.FetchedAt) {
 		return // what is shown is newer (e.g. this device's own fetch)
 	}
-	e.latest = &l
-	if e.d.LatestPath == "" || e.latestSaved == l.FetchedAt {
+	l.latest = &x
+	if l.latestPath == "" || l.latestSaved == x.FetchedAt {
 		return
 	}
-	b, err := json.Marshal(l)
+	b, err := json.Marshal(x)
 	if err == nil {
-		err = atomicfile.Write(e.d.LatestPath, b, 0o600)
+		err = atomicfile.Write(l.latestPath, b, 0o600)
 	}
 	if err != nil {
 		e.d.Log.Printf("latest: %v", err)
 		return
 	}
-	e.latestSaved = l.FetchedAt
+	l.latestSaved = x.FetchedAt
 }
 
 // newer reports whether a is a later timestamp than b.
@@ -469,40 +604,58 @@ func newer(a, b string) bool {
 	return errA == nil && errB == nil && ta.After(tb)
 }
 
-func (e *Engine) fetch(ctx context.Context, login creds.Login) {
-	res, err := e.d.Fetcher.Fetch(ctx)
+func (e *Engine) fetch(ctx context.Context, l *lane) {
+	res, err := l.p.Fetch(ctx)
 	if err != nil {
-		e.noteFetch("fetch not attempted: " + err.Error())
+		e.noteFetch(l, "fetch not attempted: "+err.Error())
 		return
 	}
-	e.limiter.Record(res)
-	e.state.FetchLimit = e.limiter.Snapshot()
-	e.saveState()
+	l.limiter.Record(anthropic.Result{FetchedAt: res.FetchedAt, HTTPStatus: res.HTTPStatus, RetryAfter: res.RetryAfter})
+	e.saveLimit(l)
 	if ctx.Err() != nil {
 		return // shutting down: the attempt counts locally, but its "no response" is not a result
 	}
 	st := res.HTTPStatus
-	e.lastFetchAt, e.lastFetchStatus = res.FetchedAt, &st
+	l.lastFetchAt, l.lastFetchStatus = res.FetchedAt, &st
 	note := "fetch: HTTP " + strconv.Itoa(st)
 	if res.Problem != "" {
 		note += " (" + res.Problem + ")"
 	}
-	e.noteFetch(note)
-	r := protocol.Result{AccountUUID: login.Account.UUID, FetchedAt: protocol.Time{Time: res.FetchedAt}, HTTPStatus: st, Usage: res.Usage}
-	if err := e.d.Backlog.Add(r); err != nil {
+	e.noteFetch(l, note)
+	account := res.AccountKey
+	if account == "" {
+		account = l.login.AccountKey
+	}
+	item := backlog.Item{Provider: string(l.id), AccountKey: account, FetchedAt: protocol.Time{Time: res.FetchedAt}, HTTPStatus: st,
+		Usage: res.Usage, Source: res.Source, CLIVersion: res.CLIVersion, Detail: res.Detail}
+	if st == 429 && res.RetryAfter >= time.Second {
+		secs := int(res.RetryAfter / time.Second)
+		item.RetryAfterSeconds = &secs
+	}
+	if err := e.d.Backlog.Add(item); err != nil {
 		e.d.Log.Printf("backlog: %v", err)
 	}
-	// Like the extension: a 200 without a weekly number does not replace good numbers.
-	if st == 200 && res.Usage != nil && usage.ParseLimits(res.Usage, usage.ScopedModel).Weekly.Percent != nil {
-		e.setLatest(protocol.Latest{FetchedAt: protocol.Time{Time: res.FetchedAt}.UTC().Format("2006-01-02T15:04:05.000Z"), Usage: res.Usage})
+	// Like the extension: a 200 without the main number does not replace good numbers.
+	if st == 200 && res.Usage != nil {
+		parsed := l.p.Parse(res.Usage)
+		if r, ok := parsed.Row(parsed.MainKey); ok && r.Percent != nil {
+			e.setLatest(l, protocol.Latest{FetchedAt: protocol.Time{Time: res.FetchedAt}.UTC().Format("2006-01-02T15:04:05.000Z"),
+				Source: res.Source, Usage: res.Usage})
+		}
 	}
 }
 
-func (e *Engine) noteFetch(s string) {
-	if s != e.lastFetchNote {
-		e.d.Log.Print(s)
-		e.lastFetchNote = s
+// noteFetch logs a lane's fetch outcome when it changed. Claude's lines
+// keep their v0.8 wording; other providers' carry the provider's name.
+func (e *Engine) noteFetch(l *lane, s string) {
+	if s == l.lastFetchNote {
+		return
 	}
+	l.lastFetchNote = s
+	if l.id != provider.Claude {
+		s = string(l.id) + " " + s
+	}
+	e.d.Log.Print(s)
 }
 
 // Server-side length caps (characters).
@@ -521,75 +674,75 @@ func clip(s string, n int) string {
 
 func opt(s string, n int) protocol.Opt { return protocol.Opt(clip(s, n)) }
 
-func (e *Engine) request(login creds.Login, now time.Time) protocol.Request {
+// requestV1 is the schema 1 request, built from the Claude lane as v0.8
+// built it, and the backlog items it carries.
+func (e *Engine) requestV1(now time.Time) (protocol.Request, []backlog.Item) {
 	id := e.d.Identity
+	var login provider.Login
+	if l := e.lane(provider.Claude); l != nil {
+		login = l.login
+	}
+	state := login.State
+	if state == "" {
+		state = "not_signed_in"
+	}
+	items := e.d.Backlog.Pending(e.batchLimit, string(provider.Claude))
 	req := protocol.Request{
 		Schema: protocol.Schema,
 		Client: protocol.ClientInfo{Version: clip(id.Version, capShort), OS: clip(id.OS, capShort),
 			OSVersion: opt(id.OSVersion, capText), Arch: opt(id.Arch, capShort), Mode: opt(e.currentClientMode(), capShort)},
-		Device:  protocol.DeviceInfo{ID: clip(id.DeviceID, capShort), Hostname: opt(id.Hostname, capText), OSUser: opt(id.OSUser, capText)},
-		Auth:    protocol.AuthInfo{State: login.State(now)},
-		Results: e.d.Backlog.Pending(e.batchLimit),
+		Device: protocol.DeviceInfo{ID: clip(id.DeviceID, capShort), Hostname: opt(id.Hostname, capText), OSUser: opt(id.OSUser, capText)},
+		Auth:   protocol.AuthInfo{State: state},
+	}
+	for _, it := range items {
+		req.Results = append(req.Results, it.V1())
 	}
 	if !login.ExpiresAt.IsZero() {
 		req.Auth.TokenExpiresAt = &protocol.Time{Time: login.ExpiresAt}
 	}
-	if a := login.Account; a != nil && a.UUID != "" {
+	if login.AccountKey != "" {
 		req.Account = &protocol.AccountInfo{
-			UUID: clip(a.UUID, capShort), Email: opt(a.Email, capText), DisplayName: opt(a.DisplayName, capText),
-			OrganizationName: opt(a.OrganizationName, capText), OrganizationType: opt(a.OrganizationType, capShort),
-			SubscriptionType: opt(login.SubscriptionType, capShort), RateLimitTier: opt(login.RateLimitTier, capShort),
+			UUID: clip(login.AccountKey, capShort), Email: opt(login.Email, capText), DisplayName: opt(login.DisplayName, capText),
+			OrganizationName: opt(login.OrganizationName, capText), OrganizationType: opt(login.OrganizationType, capShort),
+			SubscriptionType: opt(login.Plan, capShort), RateLimitTier: opt(login.RateLimitTier, capShort),
 		}
 	}
-	return req
+	return req, items
 }
 
-func (e *Engine) publish(login creds.Login, now time.Time) {
+func (e *Engine) publish(now time.Time) {
 	s := status.Snapshot{
 		Version: e.d.Identity.Version, PID: os.Getpid(), UpdatedAt: now.UTC(), Mode: e.mode,
 		ServerURL: e.serverURL, LastSyncAt: e.lastSyncAt.UTC(), LastSyncOK: e.lastSyncOK,
-		SyncFailures: e.failures, SyncProblem: e.syncProblem,
-		LastFetchAt: e.lastFetchAt.UTC(), LastFetchStatus: e.lastFetchStatus,
-		AuthState: login.State(now), SignInProblem: login.Problem, Backlog: e.d.Backlog.Len(),
+		SyncFailures: e.failures, SyncProblem: e.syncProblem, Backlog: e.d.Backlog.Len(),
 		ClientMode: e.currentClientMode(), FreshPending: e.fresh.Load() || e.freshWaiting,
+		ClientLatestVersion: e.clientLatest, Providers: map[provider.ID]status.ProviderStatus{},
 	}
-	if e.mode == ModeStandalone {
-		s.NextStandaloneFetch = e.nextStandalone.UTC()
-	}
-	if !login.ExpiresAt.IsZero() {
-		s.TokenExpiresAt = login.ExpiresAt.UTC()
-	}
-	if login.Account != nil {
-		s.AccountEmail = login.Account.Email
-	}
-	if r := e.lastResp; r != nil {
-		s.Role = r.Role
-		s.PeersDevices = r.Peers.Devices
-		if r.Peers.PollerHostname != nil {
-			s.PollerHostname = *r.Peers.PollerHostname
+	for _, l := range e.lanes {
+		if e.mode == ModeStandalone && (s.NextStandaloneFetch.IsZero() || l.nextStandalone.Before(s.NextStandaloneFetch)) {
+			s.NextStandaloneFetch = l.nextStandalone.UTC()
 		}
-		if r.ClientLatestVersion != nil {
-			s.ClientLatestVersion = *r.ClientLatestVersion
+		ps := status.ProviderStatus{
+			State: l.login.State, Problem: l.login.Problem, AccountEmail: l.login.Email, Plan: l.login.Plan,
+			Role: l.role, PollerHostname: l.poller, PeersPCs: l.pcs, ServerProblem: l.serverProblem,
+			LastFetchAt: l.lastFetchAt.UTC(), LastFetchStatus: l.lastFetchStatus, FreshPending: s.FreshPending,
 		}
-	}
-	if l := e.latest; l != nil {
-		if t, err := time.Parse(time.RFC3339Nano, l.FetchedAt); err == nil {
-			s.LatestFetchedAt = t.UTC()
+		if !l.login.ExpiresAt.IsZero() {
+			ps.ExpiresAt = l.login.ExpiresAt.UTC()
 		}
-		lim := usage.ParseLimits(l.Usage, usage.ScopedModel)
-		s.WeeklyPercent, s.ScopedPercent = lim.Weekly.Percent, lim.Scoped.Percent
-		if lim.Weekly.ResetsAt != nil {
-			s.WeeklyResetsAt = lim.Weekly.ResetsAt.UTC()
+		var raw json.RawMessage
+		if x := l.latest; x != nil {
+			if t, err := time.Parse(time.RFC3339Nano, x.FetchedAt); err == nil {
+				ps.LatestFetchedAt = t.UTC()
+			}
+			ps.LatestSource, raw = x.Source, x.Usage
 		}
-		if lim.Weekly.Percent != nil {
-			s.WeeklySeverity = lim.Weekly.Severity
+		parsed := l.p.Parse(raw)
+		ps.Rows, ps.MainKey = parsed.Rows, parsed.MainKey
+		if raw != nil {
+			ps.ParseProblem = parsed.ParseProblem
 		}
-		if lim.Scoped.Percent != nil {
-			s.ScopedSeverity = lim.Scoped.Severity
-		}
-		if lim.Scoped.ResetsAt != nil {
-			s.ScopedResetsAt = lim.Scoped.ResetsAt.UTC()
-		}
+		s.Providers[l.id] = ps
 	}
 	e.d.Publish(s)
 }

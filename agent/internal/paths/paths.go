@@ -5,6 +5,8 @@ package paths
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 )
 
 // File names inside the data folder.
@@ -13,7 +15,7 @@ const (
 	DeviceIDFile     = "device-id"
 	StateFile        = "state.json"
 	BacklogFile      = "backlog.json"
-	LatestFile       = "latest.json"
+	LatestFile       = "latest.json" // v0.7/v0.8: Claude's; renamed to latest-claude.json at the first start
 	StatusFile       = "status.json"
 	LockFile         = "run.lock"
 	NotifyFile       = "notify-pending" // install writes it; the next tray run shows the notice once
@@ -21,6 +23,10 @@ const (
 	TrayIconsDir     = "tray-icons"     // the Windows tray's icon files
 	AutostartOffFile = "autostart-off"  // "Start at login" was turned off in the tray
 )
+
+// LatestFileFor is the file with the newest numbers of one provider:
+// latest-claude.json, latest-codex.json.
+func LatestFileFor(id provider.ID) string { return "latest-" + string(id) + ".json" }
 
 // Dirs are the agent's locations for the current OS user.
 type Dirs struct {

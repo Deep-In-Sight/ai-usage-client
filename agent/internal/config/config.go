@@ -140,7 +140,9 @@ type State struct {
 	LastGoodURL string     `json:"last_good_url,omitempty"`
 	ServerURLs  []string   `json:"server_urls,omitempty"`
 	BatchLimit  int        `json:"batch_limit,omitempty"`
-	FetchLimit  FetchLimit `json:"fetch_limit,omitzero"`
+	FetchLimit  FetchLimit `json:"fetch_limit,omitzero"` // Claude's (the v0.8 name)
+	// FetchLimits are the other providers' records, by provider.
+	FetchLimits map[string]FetchLimit `json:"fetch_limits,omitempty"`
 }
 
 // FetchLimit is the agent's own record of recent usage fetches, kept so that

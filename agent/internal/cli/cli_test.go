@@ -17,6 +17,7 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/winapp"
@@ -180,14 +181,20 @@ func mustParse(t *testing.T, s string) config.Config {
 	return c
 }
 
+func claudeSnap(c status.ProviderStatus) map[provider.ID]status.ProviderStatus {
+	return map[provider.ID]status.ProviderStatus{provider.Claude: c}
+}
+
 func TestStatusJSON(t *testing.T) {
 	te := newEnv(t)
 	eq(t, te.main("status"), 1) // no status file yet
 	pct := 5.0
-	snap := status.Snapshot{Version: "0.0.0-dev", PID: 1, Mode: "coordinated", Role: "poller", ServerURL: "http://ai-usage.local",
-		LastSyncAt: time.Date(2026, 1, 5, 8, 59, 0, 0, time.UTC), LastSyncOK: true, AuthState: "ok",
-		TokenExpiresAt: time.Date(2026, 1, 5, 17, 0, 0, 0, time.UTC), WeeklyPercent: &pct,
-		WeeklyResetsAt: time.Date(2026, 1, 9, 6, 0, 0, 0, time.UTC), LatestFetchedAt: time.Date(2026, 1, 5, 8, 58, 0, 0, time.UTC)}
+	resets := time.Date(2026, 1, 9, 6, 0, 0, 0, time.UTC)
+	snap := status.Snapshot{Version: "0.0.0-dev", PID: 1, Mode: "coordinated", ServerURL: "http://ai-usage.local",
+		LastSyncAt: time.Date(2026, 1, 5, 8, 59, 0, 0, time.UTC), LastSyncOK: true,
+		Providers: claudeSnap(status.ProviderStatus{State: "ok", Role: "poller", ExpiresAt: time.Date(2026, 1, 5, 17, 0, 0, 0, time.UTC),
+			Rows: []provider.Row{{Key: "weekly_all", Label: "Weekly", Percent: &pct, ResetsAt: &resets}}, MainKey: "weekly_all",
+			LatestFetchedAt: time.Date(2026, 1, 5, 8, 58, 0, 0, time.UTC)})}
 	must(t, status.Write(te.Dirs.File(paths.StatusFile), snap))
 	te.out.Reset()
 	eq(t, te.main("status", "--json"), 0)
@@ -198,6 +205,7 @@ func TestStatusJSON(t *testing.T) {
 	}
 	must(t, json.Unmarshal(te.out.Bytes(), &got))
 	eq(t, got.Snapshot.Mode, "coordinated")
+	eq(t, got.Snapshot.Providers[provider.Claude].Role, "poller")
 	eq(t, got.Running, false)
 	if got.Service == "" {
 		t.Fatal("no service state")
@@ -207,17 +215,86 @@ func TestStatusJSON(t *testing.T) {
 	eq(t, te.main("status"), 0)
 	out := te.out.String()
 	contains(t, out, "AI Usage agent 0.0.0-dev")
-	contains(t, out, "Mode:       coordinated, poller, server http://ai-usage.local")
-	contains(t, out, "Weekly:     5%  Resets ")
+	contains(t, out, "Mode:       coordinated, server http://ai-usage.local")
+	contains(t, out, "Claude:     signed in, expires ")
+	contains(t, out, " · poller\n")
+	contains(t, out, "            Weekly 5%  Resets ")
 	contains(t, out, "Backlog:    0")
 }
 
-func TestStatusShowsSignInProblem(t *testing.T) {
+// The status text in the layout of design 6.12, Claude part (golden).
+func TestStatusGolden(t *testing.T) {
+	old := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = old })
 	te := newEnv(t)
-	snap := status.Snapshot{Version: "0.0.0-dev", PID: 1, Mode: "coordinated", AuthState: "ok", SignInProblem: "account file larger than 32 MiB"}
+	at := func(h, m int) time.Time { return time.Date(2026, 1, 5, h, m, 0, 0, time.UTC) }
+	ptr := func(v time.Time) *time.Time { return &v }
+	st := 200
+	snap := status.Snapshot{Version: "0.0.0-dev", PID: 1, Mode: "coordinated", ServerURL: "http://ai-usage.local", ClientMode: "tray",
+		LastSyncAt: at(8, 59), LastSyncOK: true, Backlog: 2,
+		Providers: claudeSnap(status.ProviderStatus{State: "ok", Role: "standby", PollerHostname: "TEST-PC-03", ExpiresAt: at(17, 30),
+			LatestFetchedAt: at(8, 58), LastFetchAt: at(8, 40), LastFetchStatus: &st, MainKey: "weekly_all",
+			Rows: []provider.Row{
+				{Key: "five_hour", Label: "5-hour", Percent: pf(100), ResetsAt: ptr(at(14, 20))},
+				{Key: "weekly_all", Label: "Weekly", Percent: pf(30), ResetsAt: ptr(time.Date(2026, 1, 9, 6, 0, 0, 0, time.UTC))},
+				{Key: "weekly_scoped:Fable", Label: "Fable", Percent: pf(25)},
+			}})}
 	must(t, status.Write(te.Dirs.File(paths.StatusFile), snap))
 	eq(t, te.main("status"), 0)
-	contains(t, te.out.String(), "Sign-in:    ok (account file larger than 32 MiB)")
+	out := te.out.String()
+	_, after, _ := strings.Cut(out, "Mode:") // Service and Process depend on the host
+	want := `       coordinated, server http://ai-usage.local (tray)
+Last sync:  08:59 ok
+Claude:     signed in, expires 17:30 · standby (TEST-PC-03)
+            5-hour 100%  Resets Mon 14:20 · in 5h 20m
+            Weekly  30%  Resets Fri 06:00 · in 3d 21h
+            Fable   25%
+            Updated 08:58 · last fetch 08:40 HTTP 200
+Backlog:    2
+`
+	if !strings.HasPrefix(after, want) {
+		t.Fatalf("got\n%s\nwant\n%s", after, want)
+	}
+	// signed out, an expired sign-in with a problem, a reply that could not be read
+	set := func(c status.ProviderStatus) string {
+		snap.Providers = claudeSnap(c)
+		must(t, status.Write(te.Dirs.File(paths.StatusFile), snap))
+		te.out.Reset()
+		eq(t, te.main("status"), 0)
+		return te.out.String()
+	}
+	contains(t, set(status.ProviderStatus{State: "not_signed_in", Rows: []provider.Row{{Key: "weekly_all", Label: "Weekly"}}}),
+		"Claude:     not signed in\n            Weekly –%\nBacklog:")
+	contains(t, set(status.ProviderStatus{State: "expired", ExpiresAt: time.Date(2026, 1, 4, 23, 0, 0, 0, time.UTC), Problem: "x"}),
+		"Claude:     sign-in expired, expires Jan 4 23:00 (x)\n")
+	contains(t, set(status.ProviderStatus{State: "ok", ParseProblem: "no_weekly", Role: "poller"}),
+		"Claude:     signed in · poller\n            Usage reply could not be read\n")
+}
+
+func pf(v float64) *float64 { return &v }
+
+func TestStatusShowsSignInProblem(t *testing.T) {
+	te := newEnv(t)
+	snap := status.Snapshot{Version: "0.0.0-dev", PID: 1, Mode: "coordinated",
+		Providers: claudeSnap(status.ProviderStatus{State: "ok", Problem: "account file larger than 32 MiB"})}
+	must(t, status.Write(te.Dirs.File(paths.StatusFile), snap))
+	eq(t, te.main("status"), 0)
+	contains(t, te.out.String(), "Claude:     signed in (account file larger than 32 MiB)")
+}
+
+// The status file a v0.8.1 agent wrote shows its Claude numbers: status
+// run right after an upgrade, before the new agent's first step.
+func TestStatusReadsAV081File(t *testing.T) {
+	te := newEnv(t)
+	b, err := os.ReadFile("../testdata/v081/status.json")
+	must(t, err)
+	must(t, os.MkdirAll(te.Dirs.Data, 0o700))
+	must(t, os.WriteFile(te.Dirs.File(paths.StatusFile), b, 0o600))
+	eq(t, te.main("status"), 0)
+	contains(t, te.out.String(), "Claude:     signed in, expires ")
+	contains(t, te.out.String(), "            Weekly 30%  ")
+	contains(t, te.out.String(), "            Fable  76%  ")
 }
 
 func read(t *testing.T, p string) string {

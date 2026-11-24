@@ -8,6 +8,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/icon"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
 )
@@ -25,10 +26,43 @@ func eq[T any](t *testing.T, got, want T) {
 }
 
 func full() status.Snapshot {
-	return status.Snapshot{Mode: "coordinated", Role: "standby", AuthState: "ok", AccountEmail: "team-a@example.com",
-		PeersDevices: 3, PollerHostname: "TEST-PC-03", LatestFetchedAt: now.Add(-2 * time.Minute).UTC(),
-		WeeklyPercent: pf(71), WeeklyResetsAt: now.Add(30 * time.Hour).UTC(), WeeklySeverity: "normal",
-		ScopedPercent: pf(76), ScopedResetsAt: now.Add(30 * time.Hour).UTC(), ScopedSeverity: "warning"}
+	resets := now.Add(30 * time.Hour).UTC()
+	return status.Snapshot{Mode: "coordinated", Providers: map[provider.ID]status.ProviderStatus{provider.Claude: {
+		Role: "standby", State: "ok", AccountEmail: "team-a@example.com",
+		PeersPCs: 3, PollerHostname: "TEST-PC-03", LatestFetchedAt: now.Add(-2 * time.Minute).UTC(), MainKey: "weekly_all",
+		Rows: []provider.Row{
+			{Key: "weekly_all", Label: "Weekly", Percent: pf(71), ResetsAt: &resets, Level: usage.LevelNormal, WindowMins: 10080},
+			{Key: "weekly_scoped:Fable", Label: "Fable", Percent: pf(76), ResetsAt: &resets, Level: usage.LevelWarning, WindowMins: 10080},
+		}}}}
+}
+
+// set changes Claude's part of in's snapshot.
+func set(in *Inputs, f func(c *status.ProviderStatus)) {
+	c := in.Snap.Providers[provider.Claude]
+	f(&c)
+	m := map[provider.ID]status.ProviderStatus{}
+	for k, v := range in.Snap.Providers {
+		m[k] = v
+	}
+	m[provider.Claude] = c
+	in.Snap.Providers = m
+}
+
+// setWeekly sets Claude's weekly row as the engine computes it from a
+// percentage and the reply's severity ("" reads as normal).
+func setWeekly(in *Inputs, pct *float64, sev string) {
+	if sev == "" {
+		sev = "normal"
+	}
+	set(in, func(c *status.ProviderStatus) {
+		rows := append([]provider.Row(nil), c.Rows...)
+		for i := range rows {
+			if rows[i].Key == "weekly_all" {
+				rows[i].Percent, rows[i].Level = pct, usage.LevelOf(usage.Limit{Percent: pct, Severity: sev})
+			}
+		}
+		c.Rows = rows
+	})
 }
 
 func item(t *testing.T, v View, id ItemID) Item {
@@ -109,7 +143,7 @@ func TestViewFull(t *testing.T) {
 
 func TestViewNotSignedInShowsDash(t *testing.T) {
 	in := base()
-	in.Snap.AuthState = "not_signed_in"
+	set(&in, func(c *status.ProviderStatus) { c.State = "not_signed_in" })
 	v := Build(in)
 	eq(t, v.Title, "–%")
 	eq(t, v.Icon.Percent == nil, true)
@@ -123,7 +157,7 @@ func TestViewNotSignedInShowsDash(t *testing.T) {
 
 func TestViewExpiredKeepsNumbers(t *testing.T) {
 	in := base()
-	in.Snap.AuthState = "expired"
+	set(&in, func(c *status.ProviderStatus) { c.State = "expired" })
 	v := Build(in)
 	eq(t, v.Title, "71%")
 	eq(t, textOf(v, ItemSignIn), "Sign-in expired: open Claude Code to renew it")
@@ -133,11 +167,11 @@ func TestViewExpiredKeepsNumbers(t *testing.T) {
 
 func TestViewStale(t *testing.T) {
 	in := base()
-	in.Snap.LatestFetchedAt = now.Add(-16 * time.Minute)
+	set(&in, func(c *status.ProviderStatus) { c.LatestFetchedAt = now.Add(-16 * time.Minute) })
 	v := Build(in)
 	eq(t, v.Title, "71% ⚠")
 	eq(t, v.Icon.Stale, true)
-	in.Snap.LatestFetchedAt = now.Add(-14 * time.Minute)
+	set(&in, func(c *status.ProviderStatus) { c.LatestFetchedAt = now.Add(-14 * time.Minute) })
 	v = Build(in)
 	eq(t, v.Title, "71%")
 	eq(t, v.Icon.Stale, false)
@@ -145,11 +179,11 @@ func TestViewStale(t *testing.T) {
 
 func TestViewWarningFlag(t *testing.T) {
 	in := base()
-	in.Snap.WeeklyPercent, in.Snap.WeeklySeverity = pf(40), "warning"
+	setWeekly(&in, pf(40), "warning")
 	eq(t, Build(in).Icon.Level, usage.LevelWarning)
-	in.Snap.WeeklySeverity = "" // an old status file without severity reads as normal
+	setWeekly(&in, pf(40), "") // an old status file without severity reads as normal
 	eq(t, Build(in).Icon.Level, usage.LevelNormal)
-	in.Snap.WeeklyPercent = pf(92)
+	setWeekly(&in, pf(92), "normal")
 	eq(t, Build(in).Icon.Level, usage.LevelCritical)
 }
 
@@ -157,7 +191,7 @@ func TestViewStandaloneAndStarting(t *testing.T) {
 	in := base()
 	in.Snap.Mode = "standalone"
 	eq(t, textOf(Build(in), ItemServer), "Server not reachable  ·  this PC fetches every 30 min  ·  Updated 18:58")
-	in.Snap.LatestFetchedAt = time.Time{}
+	set(&in, func(c *status.ProviderStatus) { c.LatestFetchedAt = time.Time{} })
 	eq(t, textOf(Build(in), ItemServer), "Server not reachable  ·  this PC fetches every 30 min")
 	in.Snap.Mode = "starting"
 	eq(t, textOf(Build(in), ItemServer), "Connecting to the server…")
@@ -169,19 +203,19 @@ func TestViewStandaloneAndStarting(t *testing.T) {
 
 func TestViewPollerSelf(t *testing.T) {
 	in := base()
-	in.Snap.Role = "poller"
+	set(&in, func(c *status.ProviderStatus) { c.Role = "poller" })
 	eq(t, textOf(Build(in), ItemServer), "Server connected  ·  Updated 18:58  ·  this PC fetches")
-	in.Snap.Role, in.Snap.PollerHostname = "standby", ""
+	set(&in, func(c *status.ProviderStatus) { c.Role, c.PollerHostname = "standby", "" })
 	eq(t, textOf(Build(in), ItemServer), "Server connected  ·  Updated 18:58")
 }
 
 func TestViewAccount(t *testing.T) {
 	in := base()
-	in.Snap.PeersDevices = 1
+	set(&in, func(c *status.ProviderStatus) { c.PeersPCs = 1 })
 	eq(t, textOf(Build(in), ItemAccount), "Account team-a@…  ·  1 PC on this account")
-	in.Snap.PeersDevices = 0
+	set(&in, func(c *status.ProviderStatus) { c.PeersPCs = 0 })
 	eq(t, textOf(Build(in), ItemAccount), "Account team-a@…")
-	in.Snap.AccountEmail = ""
+	set(&in, func(c *status.ProviderStatus) { c.AccountEmail = "" })
 	eq(t, visible(Build(in), ItemAccount), false)
 }
 
@@ -221,9 +255,9 @@ func TestViewUsesNowLocation(t *testing.T) {
 func TestTooltipLimit(t *testing.T) {
 	in := base()
 	long := strings.Repeat("x", 300)
-	in.Snap.AccountEmail = long + "@example.com"
-	in.Snap.PollerHostname = long
-	in.Snap.AuthState = "expired"
+	set(&in, func(c *status.ProviderStatus) { c.AccountEmail = long + "@example.com" })
+	set(&in, func(c *status.ProviderStatus) { c.PollerHostname = long })
+	set(&in, func(c *status.ProviderStatus) { c.State = "expired" })
 	v := Build(in)
 	if n := len(utf16.Encode([]rune(v.Tooltip))); n > 127 {
 		t.Fatalf("tooltip is %d UTF-16 units", n)
@@ -270,16 +304,16 @@ func TestLinuxLabelText(t *testing.T) {
 	}
 	in := base()
 	eq(t, label(in), "71%")
-	in.Snap.WeeklyPercent = pf(99.6)
+	setWeekly(&in, pf(99.6), "normal")
 	eq(t, label(in), "100%")
 	in = base()
-	in.Snap.LatestFetchedAt = now.Add(-16 * time.Minute)
+	set(&in, func(c *status.ProviderStatus) { c.LatestFetchedAt = now.Add(-16 * time.Minute) })
 	eq(t, label(in), "71% ⚠")
 	in = base()
-	in.Snap.AuthState = "not_signed_in"
+	set(&in, func(c *status.ProviderStatus) { c.State = "not_signed_in" })
 	eq(t, label(in), "–%")
 	in = base()
-	in.Snap.WeeklyPercent = nil
+	setWeekly(&in, nil, "normal")
 	eq(t, label(in), "–%")
 	// the guide is at least as wide as any label
 	for _, s := range []string{"100%", "100% ⚠", "–% ⚠"} {
@@ -295,7 +329,7 @@ func TestLinuxLabelText(t *testing.T) {
 func TestViewProviderFollowsSignIn(t *testing.T) {
 	for state, want := range map[string]icon.Provider{"ok": icon.Claude, "expired": icon.Claude, "not_signed_in": "", "": ""} {
 		in := base()
-		in.Snap.AuthState = state
+		set(&in, func(c *status.ProviderStatus) { c.State = state })
 		if got := Build(in).Icon.Provider; got != want {
 			t.Fatalf("auth %q: provider %q, want %q", state, got, want)
 		}

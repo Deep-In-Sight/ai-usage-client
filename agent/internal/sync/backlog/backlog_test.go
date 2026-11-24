@@ -28,11 +28,11 @@ func must(t *testing.T, err error) {
 	}
 }
 
-func res(at time.Time) protocol.Result {
-	return protocol.Result{AccountUUID: "acc-1", FetchedAt: protocol.Time{Time: at}, HTTPStatus: 200, Usage: json.RawMessage(`{"seven_day":{"utilization":5}}`)}
+func res(at time.Time) Item {
+	return Item{Provider: "claude", AccountKey: "acc-1", FetchedAt: protocol.Time{Time: at}, HTTPStatus: 200, Usage: json.RawMessage(`{"seven_day":{"utilization":5}}`)}
 }
 
-func times(rs []protocol.Result) []time.Time {
+func times(rs []Item) []time.Time {
 	var out []time.Time
 	for _, r := range rs {
 		out = append(out, r.FetchedAt.Time)
@@ -68,7 +68,7 @@ func TestAddIgnoresDuplicate(t *testing.T) {
 	must(t, s.Add(res(now)))
 	eq(t, s.Len(), 1)
 	other := res(now)
-	other.AccountUUID = "acc-2"
+	other.AccountKey = "acc-2"
 	must(t, s.Add(other))
 	eq(t, s.Len(), 2)
 }
@@ -90,7 +90,7 @@ func TestRemoveOnlySent(t *testing.T) {
 // file, newest first, and opens it (1100 Adds would each rewrite the file).
 func seeded(t *testing.T, n int, gap time.Duration) (*Store, string) {
 	t.Helper()
-	var rs []protocol.Result
+	var rs []Item
 	for i := 0; i < n; i++ {
 		rs = append(rs, res(now.Add(-time.Duration(i)*gap)))
 	}
@@ -160,4 +160,73 @@ func TestCorruptFileStartsEmpty(t *testing.T) {
 	}
 	must(t, s.Add(res(now)))
 	eq(t, s.Len(), 1)
+}
+
+// A v0.8.1 backlog (testdata from the v0.8.1 code: items without a
+// provider) reads as Claude results, and is written back with one.
+func TestV081BacklogReadsAsClaude(t *testing.T) {
+	b, err := os.ReadFile("../../testdata/v081/backlog.json")
+	must(t, err)
+	p := filepath.Join(t.TempDir(), "backlog.json")
+	must(t, os.WriteFile(p, b, 0o600))
+	s, err := Open(p)
+	must(t, err)
+	items := s.Pending(10)
+	eq(t, len(items), 2)
+	for _, it := range items {
+		eq(t, it.Provider, "claude")
+		eq(t, it.AccountKey, "acc-1")
+	}
+	eq(t, items[0].HTTPStatus, 200)
+	eq(t, items[1].HTTPStatus, 429)
+	eq(t, items[1].Usage == nil, true)
+	eq(t, len(s.Pending(10, "claude")), 2)
+	eq(t, len(s.Pending(10, "codex")), 0)
+	later := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC) // after the fixture's items
+	must(t, s.Add(Item{Provider: "codex", AccountKey: "codex:a:b", FetchedAt: protocol.Time{Time: later}, HTTPStatus: 200, Source: "wham"}))
+	raw, err := os.ReadFile(p)
+	must(t, err)
+	var back []map[string]any
+	must(t, json.Unmarshal(raw, &back))
+	eq(t, back[0]["provider"], any("claude"))
+	eq(t, back[0]["account_uuid"], any("acc-1")) // the v0.8 name on disk
+	eq(t, back[2]["source"], any("wham"))
+}
+
+// Results are told apart by provider, account and time: a Claude and a
+// Codex result of the same millisecond are both kept, and each provider
+// keeps its own newest MaxItems.
+func TestProviderIsPartOfTheKey(t *testing.T) {
+	s, _ := open(t)
+	c := res(now)
+	x := res(now)
+	x.Provider = "codex"
+	must(t, s.Add(c))
+	must(t, s.Add(x))
+	must(t, s.Add(x))
+	eq(t, s.Len(), 2)
+	eq(t, len(s.Pending(10, "codex")), 1)
+	must(t, s.Remove(s.Pending(10, "codex")))
+	eq(t, s.Pending(10)[0].Provider, "claude")
+	eq(t, s.Len(), 1)
+}
+
+func TestPruneCapsEachProvider(t *testing.T) {
+	var rs []Item
+	for i := 0; i < 1100; i++ {
+		c := res(now.Add(-time.Duration(i) * time.Minute))
+		x := c
+		x.Provider = "codex"
+		rs = append(rs, c, x)
+	}
+	b, err := json.Marshal(rs)
+	must(t, err)
+	p := filepath.Join(t.TempDir(), "backlog.json")
+	must(t, os.WriteFile(p, b, 0o600))
+	s, err := Open(p)
+	must(t, err)
+	must(t, s.Prune(now))
+	eq(t, len(s.Pending(5000, "claude")), MaxItems)
+	eq(t, len(s.Pending(5000, "codex")), MaxItems)
+	eq(t, s.Pending(1, "codex")[0].FetchedAt.Time, now.Add(-999*time.Minute))
 }

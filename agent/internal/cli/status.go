@@ -4,16 +4,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/autostart"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/version"
 )
@@ -85,9 +89,6 @@ func statusCmd(env Env, args []string) int {
 		fmt.Fprintln(w, "Process:    not running")
 	}
 	mode := []string{snap.Mode}
-	if snap.Role != "" {
-		mode = append(mode, snap.Role)
-	}
 	if snap.ServerURL != "" {
 		mode = append(mode, "server "+snap.ServerURL)
 	}
@@ -107,36 +108,84 @@ func statusCmd(env Env, args []string) int {
 	if snap.Mode == "standalone" && !snap.NextStandaloneFetch.IsZero() {
 		fmt.Fprintf(w, "Next fetch: %s (stand-alone)\n", clockOf(snap.NextStandaloneFetch))
 	}
-	if snap.LastFetchStatus != nil {
-		fmt.Fprintf(w, "Last fetch: %s HTTP %d\n", clockOf(snap.LastFetchAt), *snap.LastFetchStatus)
-	}
-	signIn := snap.AuthState
-	if !snap.TokenExpiresAt.IsZero() {
-		signIn += ", expires " + clockOf(snap.TokenExpiresAt)
-	}
-	if snap.SignInProblem != "" {
-		signIn += " (" + snap.SignInProblem + ")"
-	}
-	fmt.Fprintf(w, "Sign-in:    %s\n", signIn)
-	stale := ""
-	if !snap.LatestFetchedAt.IsZero() && usage.Stale(snap.LatestFetchedAt, now) {
-		stale = " ⚠"
-	}
-	var resets *time.Time
-	if !snap.WeeklyResetsAt.IsZero() {
-		r := snap.WeeklyResetsAt
-		resets = &r
-	}
-	fmt.Fprintf(w, "Weekly:     %s  %s%s\n", usage.FormatPercent(snap.WeeklyPercent), usage.FormatReset(resets, now), stale)
-	if snap.ScopedPercent != nil {
-		fmt.Fprintf(w, "%-11s %s\n", usage.ScopedModel+":", usage.FormatPercent(snap.ScopedPercent))
-	}
-	if !snap.LatestFetchedAt.IsZero() {
-		fmt.Fprintf(w, "Numbers:    %s\n", usage.FormatUpdated(snap.LatestFetchedAt, now))
+	for _, id := range []provider.ID{provider.Claude, provider.Codex} {
+		if ps, ok := snap.Providers[id]; ok {
+			writeProvider(w, id, ps, now)
+		}
 	}
 	fmt.Fprintf(w, "Backlog:    %d\n", snap.Backlog)
 	fmt.Fprintf(w, "Log:        %s\n", displayPath(env, env.Dirs.File(paths.LogFile)))
 	return 0
+}
+
+// signInWords are the status text of the sign-in states.
+var signInWords = map[string]string{"ok": "signed in", "expired": "sign-in expired", "not_signed_in": "not signed in"}
+
+// writeProvider prints one provider's part (design 6.12): its sign-in and
+// role on the first line, then one line per limit, when the numbers were
+// fetched and the last fetch of this PC.
+func writeProvider(w io.Writer, id provider.ID, ps status.ProviderStatus, now time.Time) {
+	const indent = "            "
+	when := func(t time.Time) string {
+		t = t.In(now.Location())
+		if y, m, d := t.Date(); y == now.Year() && m == now.Month() && d == now.Day() {
+			return usage.FormatClock(t)
+		}
+		return t.Format("Jan 2 15:04")
+	}
+	head := signInWords[ps.State]
+	if head == "" {
+		head = ps.State
+	}
+	if !ps.ExpiresAt.IsZero() {
+		head += ", expires " + when(ps.ExpiresAt)
+	}
+	switch {
+	case ps.Role == "poller":
+		head += " · poller"
+	case ps.Role == "standby" && ps.PollerHostname != "":
+		head += " · standby (" + ps.PollerHostname + ")"
+	case ps.Role != "":
+		head += " · " + ps.Role
+	}
+	if ps.Problem != "" {
+		head += " (" + ps.Problem + ")"
+	}
+	fmt.Fprintf(w, "%-12s%s\n", id.Name()+":", head)
+	labelW, pctW := 0, 0
+	for _, r := range ps.Rows {
+		labelW = max(labelW, utf8.RuneCountInString(r.Label))
+		pctW = max(pctW, utf8.RuneCountInString(usage.FormatPercent(r.Percent)))
+	}
+	for _, r := range ps.Rows {
+		pct := usage.FormatPercent(r.Percent)
+		line := r.Label + strings.Repeat(" ", labelW-utf8.RuneCountInString(r.Label)+1) +
+			strings.Repeat(" ", pctW-utf8.RuneCountInString(pct)) + pct
+		if r.Blocked {
+			line += " blocked"
+		}
+		if r.ResetsAt != nil {
+			line += "  " + usage.FormatReset(r.ResetsAt, now)
+		}
+		fmt.Fprintln(w, indent+line)
+	}
+	if ps.ParseProblem != "" {
+		fmt.Fprintln(w, indent+text.ReplyUnreadable)
+	}
+	var numbers []string
+	if !ps.LatestFetchedAt.IsZero() {
+		u := usage.FormatUpdated(ps.LatestFetchedAt, now)
+		if usage.Stale(ps.LatestFetchedAt, now) {
+			u += " ⚠"
+		}
+		numbers = append(numbers, u)
+	}
+	if ps.LastFetchStatus != nil {
+		numbers = append(numbers, fmt.Sprintf("last fetch %s HTTP %d", when(ps.LastFetchAt), *ps.LastFetchStatus))
+	}
+	if len(numbers) > 0 {
+		fmt.Fprintln(w, indent+strings.Join(numbers, " · "))
+	}
 }
 
 // displayPath shows a path under the home folder as ~/... (not on Windows,

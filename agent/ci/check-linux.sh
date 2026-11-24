@@ -45,9 +45,10 @@ else fail sync.arrives "device=$device stats=$(stats | jget - devices "$device")
 # status.json
 "$exe" status --json > "$out/status.json" 2>&1
 st="$out/status.json"
-m=$(jget "$st" snapshot mode); r=$(jget "$st" snapshot role); w=$(jget "$st" snapshot weekly_percent); c=$(jget "$st" snapshot client_mode)
-if [ "$m" = coordinated ] && [ "$r" = standby ] && [ "$w" = 42 ] && [ "$c" = headless ]; then pass status.json "$m $r $w $c"
-else fail status.json "mode=$m role=$r weekly=$w client_mode=$c"; fi
+m=$(jget "$st" snapshot mode); r=$(jget "$st" snapshot providers claude role); c=$(jget "$st" snapshot client_mode)
+k=$(jget "$st" snapshot providers claude rows 0 key); w=$(jget "$st" snapshot providers claude rows 0 percent)
+if [ "$m" = coordinated ] && [ "$r" = standby ] && [ "$k" = weekly_all ] && [ "$w" = 42 ] && [ "$c" = headless ]; then pass status.json "$m $r $k $w $c"
+else fail status.json "mode=$m role=$r row=$k weekly=$w client_mode=$c"; fi
 
 # run.no_listen
 pid=$(main_pid)

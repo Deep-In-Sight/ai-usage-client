@@ -22,6 +22,8 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/osinfo"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/paths"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider/claude"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/backlog"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/discover"
@@ -31,17 +33,6 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/version"
 )
-
-// fetcher adapts the usage client to the engine: the reader hands the token
-// to the client inside the call and nowhere else.
-type fetcher struct {
-	client *anthropic.Client
-	src    anthropic.TokenSource
-}
-
-func (f fetcher) Fetch(ctx context.Context) (anthropic.Result, error) {
-	return f.client.Fetch(ctx, f.src)
-}
 
 func runCmd(env Env, args []string) int {
 	headlessFlag := false
@@ -153,14 +144,16 @@ func runCmd(env Env, args []string) int {
 		}
 	}
 	e := engine.New(engine.Deps{
-		Clock:      env.Clock,
-		Logins:     reader,
-		Fetcher:    fetcher{client: anthropic.New(anthropic.UsageURL, ua, env.Clock), src: reader},
-		Syncer:     newSyncer(cfg, ua),
-		Backlog:    bl,
-		Config:     cfg,
-		StatePath:  env.Dirs.File(paths.StateFile),
-		LatestPath: env.Dirs.File(paths.LatestFile),
+		Clock: env.Clock,
+		// Claude: the reader hands the token to the usage client inside the
+		// call and nowhere else.
+		Providers:        []provider.Provider{claude.New(reader, anthropic.New(anthropic.UsageURL, ua, env.Clock), env.Clock)},
+		Syncer:           newSyncer(cfg, ua),
+		Backlog:          bl,
+		Config:           cfg,
+		StatePath:        env.Dirs.File(paths.StateFile),
+		LatestPath:       func(id provider.ID) string { return env.Dirs.File(paths.LatestFileFor(id)) },
+		LegacyLatestPath: env.Dirs.File(paths.LatestFile),
 		Identity: engine.Identity{DeviceID: deviceID, Hostname: info.Hostname, OSUser: info.OSUser, OS: info.OS,
 			OSVersion: info.OSVersion, Arch: info.Arch, Version: version.Version, Mode: clientMode},
 		// 2: status file, the tray's snapshot and a wake-up for the tray.

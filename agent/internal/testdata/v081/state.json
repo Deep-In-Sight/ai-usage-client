@@ -1,0 +1,15 @@
+{
+  "last_good_url": "http://ai-usage.local",
+  "server_urls": [
+    "http://ai-usage.local",
+    "http://192.0.2.10:8700"
+  ],
+  "fetch_limit": {
+    "attempts": [
+      "2026-11-24T08:10:00Z",
+      "2026-11-24T08:40:00Z"
+    ],
+    "not_before": "2026-11-24T08:42:00Z",
+    "consecutive_429": 1
+  }
+}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/anthropic"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sync/protocol"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
 )
 
 func withLatest(r protocol.Response, fetchedAt string) protocol.Response {
@@ -117,11 +118,14 @@ func TestSnapshotSeverityAndScopedReset(t *testing.T) {
 	x.Latest = &protocol.Latest{FetchedAt: "2026-01-05T08:59:00.000Z", Usage: json.RawMessage(body)}
 	r := newRig(t, always(x, nil))
 	r.step()
-	s := r.snap()
-	eq(t, s.WeeklySeverity, "warning")
-	eq(t, s.ScopedSeverity, "critical")
-	eq(t, s.ScopedResetsAt, time.Date(2026, 1, 10, 7, 0, 0, 0, time.UTC))
-	eq(t, *s.ScopedPercent, 76.0)
+	// the severity reaches the rows as their level (as the tray computed it)
+	c := r.cl()
+	w, _ := c.Row("weekly_all")
+	f, _ := c.Row("weekly_scoped:Fable")
+	eq(t, w.Level, usage.LevelWarning)
+	eq(t, f.Level, usage.LevelWarning) // "critical" from the server at 76 %: flagged, below 90 %
+	eq(t, f.ResetsAt.UTC(), time.Date(2026, 1, 10, 7, 0, 0, 0, time.UTC))
+	eq(t, *f.Percent, 76.0)
 }
 
 func TestRequestFreshConcurrent(t *testing.T) {

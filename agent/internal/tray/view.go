@@ -9,6 +9,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/icon"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/usage"
@@ -113,22 +114,28 @@ const sep = text.Sep
 func Build(in Inputs) View {
 	s, now := in.Snap, in.Now
 	loc := now.Location()
-	signedOut := s.AuthState == "not_signed_in"
+	c := s.Provider(provider.Claude)
+	signedOut := c.State == "not_signed_in"
 
-	weekly, scoped := s.WeeklyPercent, s.ScopedPercent
+	weeklyRow, _ := c.Row("weekly_all")
+	scopedRow, _ := c.Row("weekly_scoped:" + usage.ScopedModel)
+	weekly, scoped := weeklyRow.Percent, scopedRow.Percent
 	if signedOut {
 		weekly, scoped = nil, nil
 	}
-	sev := s.WeeklySeverity
-	if sev == "" {
-		sev = "normal"
+	level := weeklyRow.Level
+	switch {
+	case weekly == nil:
+		level = usage.LevelNone
+	case level == "":
+		level = usage.LevelOf(usage.Limit{Percent: weekly, Severity: "normal"})
 	}
-	stale := !s.LatestFetchedAt.IsZero() && usage.Stale(s.LatestFetchedAt, now)
-	v := View{Icon: icon.Spec{Percent: weekly, Level: usage.LevelOf(usage.Limit{Percent: weekly, Severity: sev}), Stale: stale}}
+	stale := !c.LatestFetchedAt.IsZero() && usage.Stale(c.LatestFetchedAt, now)
+	v := View{Icon: icon.Spec{Percent: weekly, Level: level, Stale: stale}}
 	// The mascot stands for a detected Claude Code sign-in (an expired one
 	// too: the account is there). Before the first status, or signed out,
 	// the icon is the neutral ring.
-	if s.AuthState == "ok" || s.AuthState == "expired" {
+	if c.State == "ok" || c.State == "expired" {
 		v.Icon.Provider = icon.Claude
 	}
 	v.Title = usage.FormatPercent(weekly)
@@ -143,8 +150,8 @@ func Build(in Inputs) View {
 	info := func(id ItemID, text string, show bool) {
 		items[id] = Item{ID: id, Text: text, Visible: show}
 	}
-	resetOf := func(t time.Time) string {
-		if t.IsZero() {
+	resetOf := func(t *time.Time) string {
+		if t == nil || t.IsZero() {
 			return usage.FormatReset(nil, now)
 		}
 		r := t.In(loc)
@@ -157,18 +164,18 @@ func Build(in Inputs) View {
 	weeklyText := text.AllModels + "  " + usage.FormatPercent(weekly)
 	weeklyTip := text.AllModels + " " + usage.FormatPercent(weekly)
 	if weekly != nil {
-		weeklyText += "  " + resetOf(s.WeeklyResetsAt)
-		weeklyTip += " · " + resetOf(s.WeeklyResetsAt)
+		weeklyText += "  " + resetOf(weeklyRow.ResetsAt)
+		weeklyTip += " · " + resetOf(weeklyRow.ResetsAt)
 	}
 	info(ItemWeekly, weeklyText, true)
 	scopedText := ""
 	if scoped != nil {
-		scopedText = usage.ScopedModel + "  " + usage.FormatPercent(scoped) + "  " + resetOf(s.ScopedResetsAt)
+		scopedText = usage.ScopedModel + "  " + usage.FormatPercent(scoped) + "  " + resetOf(scopedRow.ResetsAt)
 	}
 	info(ItemScoped, scopedText, scoped != nil)
 
 	signIn := ""
-	switch s.AuthState {
+	switch c.State {
 	case "not_signed_in":
 		signIn = text.SignInNeeded
 	case "expired":
@@ -177,21 +184,21 @@ func Build(in Inputs) View {
 	info(ItemSignIn, signIn, signIn != "")
 
 	account := ""
-	if s.AccountEmail != "" {
-		local, _, _ := strings.Cut(s.AccountEmail, "@")
+	if c.AccountEmail != "" {
+		local, _, _ := strings.Cut(c.AccountEmail, "@")
 		account = text.Account + local + "@…"
 		switch {
-		case s.PeersDevices == 1:
+		case c.PeersPCs == 1:
 			account += sep + text.OnePC
-		case s.PeersDevices >= 2:
-			account += sep + strconv.Itoa(s.PeersDevices) + text.PCsSuffix
+		case c.PeersPCs >= 2:
+			account += sep + strconv.Itoa(c.PeersPCs) + text.PCsSuffix
 		}
 	}
 	info(ItemAccount, account, account != "")
 
 	updated := ""
-	if !s.LatestFetchedAt.IsZero() {
-		updated = usage.FormatUpdated(s.LatestFetchedAt, now)
+	if !c.LatestFetchedAt.IsZero() {
+		updated = usage.FormatUpdated(c.LatestFetchedAt, now)
 	}
 	var server string
 	switch s.Mode {
@@ -202,10 +209,10 @@ func Build(in Inputs) View {
 		} else {
 			server += text.NoUsageYet
 		}
-		if s.Role == "poller" {
+		if c.Role == "poller" {
 			server += sep + text.ThisPCFetches
-		} else if s.PollerHostname != "" {
-			server += sep + text.Poller + s.PollerHostname
+		} else if c.PollerHostname != "" {
+			server += sep + text.Poller + c.PollerHostname
 		}
 	case "standalone":
 		server = text.Unreachable

@@ -71,7 +71,7 @@ func TestLaunchdLogIsNotWrittenTwice(t *testing.T) {
 
 func TestStatusNamesTheLogFile(t *testing.T) {
 	te := newEnv(t)
-	must(t, status.Write(te.Dirs.File(paths.StatusFile), status.Snapshot{Mode: "coordinated", AuthState: "ok"}))
+	must(t, status.Write(te.Dirs.File(paths.StatusFile), status.Snapshot{Mode: "coordinated", Providers: claudeSnap(status.ProviderStatus{State: "ok"})}))
 	eq(t, te.main("status"), 0)
 	want := "Log:        " + te.Dirs.File(paths.LogFile)
 	if runtime.GOOS != "windows" {
