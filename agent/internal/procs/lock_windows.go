@@ -37,3 +37,6 @@ func Lock(path string) (unlock func(), err error) {
 		f.Close()
 	}, nil
 }
+
+// LockAs is Lock here: no run is taken over on Windows (see TakeOver).
+func LockAs(path string, _ Identity) (unlock func(), err error) { return Lock(path) }

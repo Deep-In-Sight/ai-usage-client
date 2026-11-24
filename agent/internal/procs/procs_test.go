@@ -12,10 +12,18 @@ import (
 	"time"
 )
 
+// helpers are more helper modes (by AI_USAGE_HELPER), added by OS-specific
+// test files.
+var helpers = map[string]func(){}
+
 // TestMain lets the test binary act as a long-running helper process.
 func TestMain(m *testing.M) {
 	if os.Getenv("AI_USAGE_HELPER") == "sleep" {
 		time.Sleep(60 * time.Second)
+		os.Exit(0)
+	}
+	if f := helpers[os.Getenv("AI_USAGE_HELPER")]; f != nil {
+		f()
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
