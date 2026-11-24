@@ -14,9 +14,10 @@ const busEnv = "DBUS_SESSION_BUS_ADDRESS"
 // SessionBusFallback decides whether this process should use the bus in
 // $XDG_RUNTIME_DIR instead of the address it was given: a run that keeps
 // an earlier session's environment (the restart in place after a lost
-// bus) has an address that died with that session, while on desktops
-// where each session gets a new bus address (dbus-launch) the user's bus
-// may still be there (review m4). It returns that address when the given
+// bus) can have an address that died with that session (desktops that
+// give each session its own bus address), while the user's bus is in the
+// runtime folder (review m4). The tray host wait asks only after the
+// address failed fallbackAfter times in a row. It returns that address when the given
 // one does not answer and the runtime folder's does; ok is false when
 // nothing should change. An empty address is left alone: the D-Bus library
 // looks in $XDG_RUNTIME_DIR by itself then.
@@ -61,9 +62,10 @@ func BusReachable(addr string) bool {
 	return false
 }
 
-// fallbackAfter is how many failed connects in a row move a process to
-// the runtime folder's bus.
-const fallbackAfter = 3
+// fallbackAfter is how many failed connects in a row (one every hostRetry,
+// so about two minutes) move a process to the runtime folder's bus. A bus
+// that restarts at its address is back long before.
+const fallbackAfter = 60
 
 // busSwitch counts failed session bus connects and, after fallbackAfter
 // in a row, points this process (and so the tray library too) at the

@@ -368,26 +368,14 @@ func restartsFrom(getenv func(string) string) int {
 }
 
 // restartEnviron is the environment of the restarted run: environ with
-// restartsEnv set to n, and the session bus address moved to the runtime
-// folder's bus when the old one no longer answers and that one does (a
-// desktop that gives each session its own bus address; review m4).
-func restartEnviron(environ []string, n int, reachable func(addr string) bool) []string {
-	get := func(k string) string {
-		for _, kv := range environ {
-			if v, ok := strings.CutPrefix(kv, k+"="); ok {
-				return v
-			}
-		}
-		return ""
-	}
-	bus, moved := tray.SessionBusFallback(get, reachable)
+// restartsEnv set to n. The session bus address stays as it is, even if
+// nothing answers there right now: a bus that restarts comes back at the
+// same address. The wait for a tray host moves to the runtime folder's bus
+// when the address stays dead (tray.SessionBusFallback, review m4).
+func restartEnviron(environ []string, n int) []string {
 	out := make([]string, 0, len(environ)+1)
 	for _, kv := range environ {
-		switch {
-		case strings.HasPrefix(kv, restartsEnv+"="):
-		case moved && strings.HasPrefix(kv, "DBUS_SESSION_BUS_ADDRESS="):
-			out = append(out, "DBUS_SESSION_BUS_ADDRESS="+bus)
-		default:
+		if !strings.HasPrefix(kv, restartsEnv+"=") {
 			out = append(out, kv)
 		}
 	}
