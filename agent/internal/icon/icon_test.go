@@ -171,15 +171,15 @@ func TestICO256WidthByteIsZero(t *testing.T) {
 }
 
 func TestTrayImageSizes(t *testing.T) {
-	for goos, size := range map[string]int{"linux": 48, "darwin": 36} {
+	for _, goos := range []string{"linux", "darwin"} {
 		img, err := png.Decode(bytes.NewReader(TrayImage(goos, Spec{Percent: p(42), Level: usage.LevelNormal})))
 		must(t, err)
-		eq(t, img.Bounds().Dx(), size)
+		eq(t, img.Bounds().Dx(), 32)
 	}
 	// macOS shows the number as text next to the icon, so the icon has none
 	img, _ := png.Decode(bytes.NewReader(TrayImage("darwin", Spec{Percent: p(42), Level: usage.LevelNormal, Number: true})))
-	for y := 0; y < 36; y++ {
-		for x := 0; x < 36; x++ {
+	for y := 0; y < 32; y++ {
+		for x := 0; x < 32; x++ {
 			if r, g, b, a := img.At(x, y).RGBA(); a == 0xffff && r == 0xffff && g == 0xffff && b == 0xffff {
 				t.Fatalf("white digit pixel at %d,%d", x, y)
 			}
@@ -229,18 +229,24 @@ func TestClawdRejectsCurves(t *testing.T) {
 	}
 }
 
-func TestLinuxTrayImageHasTheNumber(t *testing.T) {
-	img, err := png.Decode(bytes.NewReader(TrayImage("linux", Spec{Percent: p(42), Level: usage.LevelNormal})))
-	must(t, err)
-	white := 0
-	for y := 0; y < 48; y++ {
-		for x := 0; x < 48; x++ {
-			if r, g, b, a := img.At(x, y).RGBA(); a == 0xffff && r == 0xffff && g == 0xffff && b == 0xffff {
-				white++
+// Linux draws the number in the icon only when asked to (desktops that
+// ignore the label); without a provider that is the white ring digits.
+func TestLinuxTrayImageNumberOnRequest(t *testing.T) {
+	white := func(number bool) int {
+		img, err := png.Decode(bytes.NewReader(TrayImage("linux", Spec{Percent: p(42), Level: usage.LevelNormal, Number: number})))
+		must(t, err)
+		n := 0
+		for y := 0; y < 32; y++ {
+			for x := 0; x < 32; x++ {
+				if r, g, b, a := img.At(x, y).RGBA(); a == 0xffff && r == 0xffff && g == 0xffff && b == 0xffff {
+					n++
+				}
 			}
 		}
+		return n
 	}
-	if white == 0 {
-		t.Fatal("no digits drawn in the Ubuntu icon")
+	if white(true) == 0 {
+		t.Fatal("no digits drawn when asked for")
 	}
+	eq(t, white(false), 0)
 }

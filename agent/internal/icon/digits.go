@@ -28,7 +28,11 @@ func drawText(img *image.NRGBA, text string, ink color.NRGBA, scale int) {
 	n := len(text)
 	w := (n*3 + n - 1) * scale
 	h := 5 * scale
-	x0, y0 := (size-w)/2, (size-h)/2
+	drawTextAt(img, text, ink, scale, (size-w)/2, (size-h)/2)
+}
+
+// drawTextAt is drawText with the top left corner of the ink at x0, y0.
+func drawTextAt(img *image.NRGBA, text string, ink color.NRGBA, scale, x0, y0 int) {
 	inkAt := map[image.Point]bool{}
 	for i, ch := range text {
 		g := glyphs[ch]

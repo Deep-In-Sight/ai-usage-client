@@ -1,6 +1,7 @@
-// Package icon draws the tray's ring gauge (with the percentage inside it
-// on Windows and Linux), encodes PNG and ICO files, and rasterises the Clawd
-// application icon. It uses only the standard library.
+// Package icon draws the tray icon (the signed-in provider's artwork with
+// a gauge or the number, or the neutral ring gauge without a sign-in),
+// encodes PNG and ICO files, and rasterises the Clawd application icon. It
+// uses only the standard library.
 package icon
 
 import (
@@ -27,10 +28,11 @@ const staleAlpha = 0x80
 
 // Spec is what one icon shows.
 type Spec struct {
-	Percent *float64
-	Level   usage.Level
-	Stale   bool
-	Number  bool // draw the rounded percentage in the middle
+	Provider Provider // whose account is signed in; "" for none (see Tray)
+	Percent  *float64
+	Level    usage.Level
+	Stale    bool
+	Number   bool // draw the rounded percentage (Ring: in the middle; Tray: under the artwork)
 }
 
 func levelColour(l usage.Level) (color.NRGBA, bool) {

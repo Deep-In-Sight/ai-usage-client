@@ -289,19 +289,50 @@ func TestLinuxLabelText(t *testing.T) {
 	}
 }
 
-// A desktop that ignores the label (KDE) must still show the number: the
-// Linux icon keeps it in the ring whether or not a label is shown.
-func TestLinuxIconKeepsNumberWithLabel(t *testing.T) {
+// The mascot stands for a detected sign-in: Clawd with a Claude Code
+// sign-in (also an expired one: the account is there), the neutral ring
+// without one or before the first status.
+func TestViewProviderFollowsSignIn(t *testing.T) {
+	for state, want := range map[string]icon.Provider{"ok": icon.Claude, "expired": icon.Claude, "not_signed_in": "", "": ""} {
+		in := base()
+		in.Snap.AuthState = state
+		if got := Build(in).Icon.Provider; got != want {
+			t.Fatalf("auth %q: provider %q, want %q", state, got, want)
+		}
+	}
+}
+
+func TestNumberInIcon(t *testing.T) {
+	for _, c := range []struct {
+		goos, desktop string
+		want          bool
+	}{
+		{"windows", "", true},
+		{"darwin", "", false},
+		{"linux", "ubuntu:GNOME", false},
+		{"linux", "GNOME", false},
+		{"linux", "Unity", false},
+		{"linux", "KDE", true},
+		{"linux", "XFCE", true},
+		{"linux", "", true}, // unknown: keep the number visible
+	} {
+		if got := NumberInIcon(c.goos, c.desktop); got != c.want {
+			t.Fatalf("%s %q: %v, want %v", c.goos, c.desktop, got, c.want)
+		}
+	}
+}
+
+// Ubuntu shows the number in the label, so its icon has none; a desktop
+// that ignores the label (KDE) keeps the number inside the icon.
+func TestLinuxIconNumberFollowsTheDesktop(t *testing.T) {
 	v := Build(base())
 	if _, show := NextToIcon("linux", v); !show {
 		t.Fatal("no label on linux")
 	}
-	withNumber := v.Icon
-	withNumber.Number = true
-	eq(t, icon.TrayImage("linux", v.Icon), icon.PNG(icon.Ring(withNumber, 48)))
-	without := v.Icon
-	without.Number = false
-	if reflect.DeepEqual(icon.TrayImage("linux", v.Icon), icon.PNG(icon.Ring(without, 48))) {
-		t.Fatal("linux icon has no number")
-	}
+	without, with := v.Icon, v.Icon
+	without.Number, with.Number = false, true
+	eq(t, IconImage("linux", "ubuntu:GNOME", v), icon.PNG(icon.Tray(without, 32)))
+	eq(t, IconImage("linux", "KDE", v), icon.PNG(icon.Tray(with, 32)))
+	eq(t, IconImage("windows", "", v), icon.TrayImage("windows", v.Icon))
+	eq(t, IconImage("darwin", "", v), icon.TrayImage("darwin", v.Icon))
 }

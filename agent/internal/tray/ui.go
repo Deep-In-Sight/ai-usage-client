@@ -6,12 +6,12 @@ import (
 	"bytes"
 	"context"
 	"log"
+	"os"
 	"runtime"
 	"time"
 
 	"fyne.io/systray"
 
-	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/icon"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/notify"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/version"
@@ -129,7 +129,7 @@ func openLogged(u string) {
 
 // apply changes only what differs from what is shown.
 func apply(menu []*systray.MenuItem, last *shown, v View, iconDir string) {
-	img := icon.TrayImage(runtime.GOOS, v.Icon)
+	img := IconImage(runtime.GOOS, os.Getenv("XDG_CURRENT_DESKTOP"), v)
 	if !bytes.Equal(img, last.icon) {
 		setIcon(img, iconDir)
 		last.icon = img

@@ -44,22 +44,22 @@ func ICO(imgs ...*image.NRGBA) []byte {
 	return b.Bytes()
 }
 
-// TrayImage is the tray icon file for goos: an ICO with the number for
-// Windows, a 48 px PNG with the number for Linux, and a 36 px PNG without it
-// for macOS (which shows the number as text next to the icon).
+// TrayImage is the tray icon file for goos (see Tray): an ICO of 16 to
+// 48 px with the number for Windows, which shows no text next to the icon;
+// a 32 px PNG without the number for macOS (16 pt at 2x; the menu bar
+// title shows it); a 32 px PNG for Linux, with the number only when
+// s.Number says so (the caller knows whether the desktop shows the label).
 func TrayImage(goos string, s Spec) []byte {
 	switch goos {
 	case "windows":
 		s.Number = true
 		var imgs []*image.NRGBA
 		for _, n := range []int{16, 20, 24, 32, 48} {
-			imgs = append(imgs, Ring(s, n))
+			imgs = append(imgs, Tray(s, n))
 		}
 		return ICO(imgs...)
 	case "darwin":
 		s.Number = false
-		return PNG(Ring(s, 36))
 	}
-	s.Number = true
-	return PNG(Ring(s, 48))
+	return PNG(Tray(s, 32))
 }

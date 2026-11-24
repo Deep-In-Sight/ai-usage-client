@@ -65,14 +65,42 @@ const LabelGuide = "100%" + text.StaleMark
 
 // NextToIcon is the text shown next to the tray icon on goos, and whether
 // that OS shows one: the menu bar title on macOS, the label in Ubuntu's top
-// bar (AppIndicator) on Linux. Windows shows none. The Linux icon keeps the
-// number in its ring too (icon.TrayImage), for hosts that ignore the label.
+// bar (AppIndicator) on Linux. Windows shows none. The label is set on
+// every Linux desktop; those that ignore it get the number in the icon
+// (NumberInIcon).
 func NextToIcon(goos string, v View) (string, bool) {
 	switch goos {
 	case "darwin", "linux":
 		return v.Title, true
 	}
 	return "", false
+}
+
+// NumberInIcon reports whether the tray icon must carry the number itself:
+// on Windows (no text next to tray icons) and on Linux desktops other than
+// GNOME and Unity, whose AppIndicator hosts show the label. desktop is
+// $XDG_CURRENT_DESKTOP (a colon-separated list); when it is unknown the
+// number stays in the icon.
+func NumberInIcon(goos, desktop string) bool {
+	switch goos {
+	case "windows":
+		return true
+	case "linux":
+		for _, d := range strings.Split(desktop, ":") {
+			if strings.EqualFold(d, "GNOME") || strings.EqualFold(d, "Unity") {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// IconImage is the tray icon file for v on goos and Linux desktop.
+func IconImage(goos, desktop string, v View) []byte {
+	s := v.Icon
+	s.Number = NumberInIcon(goos, desktop)
+	return icon.TrayImage(goos, s)
 }
 
 // tooltipMax is in UTF-16 units (Windows NOTIFYICONDATA szTip holds 128
@@ -97,6 +125,12 @@ func Build(in Inputs) View {
 	}
 	stale := !s.LatestFetchedAt.IsZero() && usage.Stale(s.LatestFetchedAt, now)
 	v := View{Icon: icon.Spec{Percent: weekly, Level: usage.LevelOf(usage.Limit{Percent: weekly, Severity: sev}), Stale: stale}}
+	// The mascot stands for a detected Claude Code sign-in (an expired one
+	// too: the account is there). Before the first status, or signed out,
+	// the icon is the neutral ring.
+	if s.AuthState == "ok" || s.AuthState == "expired" {
+		v.Icon.Provider = icon.Claude
+	}
 	v.Title = usage.FormatPercent(weekly)
 	if stale {
 		v.Title += text.StaleMark
