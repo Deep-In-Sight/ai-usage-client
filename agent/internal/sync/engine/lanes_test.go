@@ -218,3 +218,30 @@ func TestBacklogWithoutALaneTakesNoSlot(t *testing.T) {
 	eq(t, len(r.backlog.Pending(10, "claude")), 0)
 	eq(t, len(r.backlog.Pending(10, "codex")), 3) // kept for a build that has the lane
 }
+
+// A reply without the weekly value sets parse_problem; once the shown
+// numbers are replaced by readable ones from the server, the PC stops
+// sending it (review m-S).
+func TestParseProblemEndsWithReadableNumbers(t *testing.T) {
+	n := 0
+	later := t0.Add(5 * time.Minute).Format("2006-01-02T15:04:05.000Z")
+	r := newRig(t, func(int, string, protocol.Request) (protocol.Response, error) {
+		n++
+		if n == 1 {
+			return resp("poller", true, 60), nil
+		}
+		a := resp("standby", false, 60)
+		if n >= 3 {
+			a.Latest = &protocol.Latest{FetchedAt: later, Usage: json.RawMessage(usageBody)}
+		}
+		return a, nil
+	})
+	r.fetcher.body = `{"limits":[]}`
+	r.step() // sync, fetch (no weekly), sync
+	eq(t, string(r.syncer.calls[1].v2.Providers[0].ParseProblem), "no_weekly")
+	r.clk.Set(t0.Add(10 * time.Minute))
+	r.step() // the server's numbers arrive
+	r.step()
+	last := r.syncer.calls[len(r.syncer.calls)-1].v2
+	eq(t, string(last.Providers[0].ParseProblem), "")
+}

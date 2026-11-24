@@ -685,6 +685,11 @@ func (e *Engine) setLatest(l *lane, x protocol.Latest) {
 		return // what is shown is newer (e.g. this device's own fetch)
 	}
 	l.latest = &x
+	if l.p.Parse(x.Usage).ParseProblem == "" {
+		// readable numbers are shown: an older own reply's problem is no
+		// longer this PC's to report (review m-S)
+		l.parseProblem = ""
+	}
 	if l.latestPath == "" || l.latestSaved == x.FetchedAt {
 		return
 	}
