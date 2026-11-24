@@ -45,7 +45,7 @@ var Modules = []Module{
 		Note:  "modified: the copy in agent/third_party/systray of the source repository; PATCHED.md there lists the changes",
 		Files: []string{"LICENSE"}},
 	{Path: "github.com/godbus/dbus/v5", Licence: "BSD 2-Clause", Files: []string{"LICENSE"}},
-	{Path: "github.com/miekg/dns", Licence: "BSD 3-Clause", Files: []string{"LICENSE"}},
+	{Path: "github.com/miekg/dns", Licence: "BSD 3-Clause", Files: []string{"AUTHORS", "COPYRIGHT", "LICENSE"}},
 	{Path: "golang.org/x/net", Licence: "BSD 3-Clause", Files: []string{"LICENSE", "PATENTS"}},
 	{Path: "golang.org/x/sys", Licence: "BSD 3-Clause", Files: []string{"LICENSE", "PATENTS"}},
 }

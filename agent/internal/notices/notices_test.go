@@ -77,7 +77,8 @@ func TestNoticesAreTheModulesFiles(t *testing.T) {
 		for _, e := range entries {
 			n := strings.ToUpper(e.Name())
 			if !e.IsDir() && (strings.HasPrefix(n, "LICENSE") || strings.HasPrefix(n, "LICENCE") ||
-				strings.HasPrefix(n, "COPYING") || strings.HasPrefix(n, "NOTICE") || strings.HasPrefix(n, "PATENTS")) {
+				strings.HasPrefix(n, "COPYING") || strings.HasPrefix(n, "COPYRIGHT") || strings.HasPrefix(n, "AUTHORS") ||
+				strings.HasPrefix(n, "NOTICE") || strings.HasPrefix(n, "PATENTS")) {
 				want = append(want, e.Name())
 			}
 		}
