@@ -86,7 +86,6 @@ func (f *fakeHelpers) spawn(p provider.ID, uid uint32, token string) (supervisor
 				h.mu.Lock()
 				h.views = append(h.views, m)
 				h.mu.Unlock()
-				h.gotView <- struct{}{}
 				if !said {
 					said = true
 					if why == "" {
@@ -103,6 +102,9 @@ func (f *fakeHelpers) spawn(p provider.ID, uid uint32, token string) (supervisor
 						h.say(trayproto.Msg{Type: trayproto.TypeWaiting, Why: why})
 					}
 				}
+				// after its first answer (review n-4): a test that says
+				// "ready" once it saw the view comes after "waiting"
+				h.gotView <- struct{}{}
 			}
 		}
 	}()
