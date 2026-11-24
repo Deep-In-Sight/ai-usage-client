@@ -147,9 +147,12 @@ func TestNumberDigits(t *testing.T) {
 
 func TestICOHeader(t *testing.T) {
 	b := TrayImage("windows", Spec{Percent: p(42), Level: usage.LevelNormal})
-	eq(t, string(b[:6]), "\x00\x00\x01\x00\x05\x00")
-	sizes := []int{16, 20, 24, 32, 48}
-	for i := 0; i < 5; i++ {
+	// the notification area's icon size at 100 % to 400 % display scale
+	// (SM_CXSMICON at 96, 120, 144, 168, 192, 216, 240, 288, 336, 384 DPI):
+	// the tray loads the entry of exactly that size
+	sizes := []int{16, 20, 24, 28, 32, 36, 40, 48, 56, 64}
+	eq(t, string(b[:6]), "\x00\x00\x01\x00"+string(rune(len(sizes)))+"\x00")
+	for i := range sizes {
 		e := b[6+16*i:]
 		eq(t, int(e[0]), sizes[i])
 		eq(t, int(e[1]), sizes[i])

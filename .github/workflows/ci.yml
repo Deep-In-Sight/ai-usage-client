@@ -56,6 +56,21 @@ jobs:
             echo "::notice title=systray::no dbus-run-session; only the patch tests run"
             go test -count=1 -run 'TestPropSpec|TestIntrospection' ./...
           fi
+      - name: patched systray copy (tray icon size)
+        # The tray must load the ICO entry of the notification area's size
+        # (third_party/systray/internal/trayicon). Upstream's own Windows
+        # test does not compile, so only this package runs here.
+        if: runner.os == 'Windows'
+        shell: bash
+        working-directory: agent/third_party/systray
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/trayicon/ 2>&1 | tee "$RUNNER_TEMP/trayicon.log" || {
+            grep -E -- '^[[:space:]]*(--- FAIL|panic:)|_test\.go:[0-9]+:' "$RUNNER_TEMP/trayicon.log" |
+              head -10 | sed -E 's/^[[:space:]]*/::error title=trayicon::/'
+            exit 1
+          }
+          grep -E 'Size [0-9]+x[0-9]+' "$RUNNER_TEMP/trayicon.log" | head -1 | sed -E 's/^[[:space:]]*/::notice title=trayicon::/'
       - name: keychain integration
         if: runner.os == 'macOS' && hashFiles('agent/internal/creds/keychain_darwin_test.go') != ''
         env:

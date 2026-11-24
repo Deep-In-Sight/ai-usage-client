@@ -14,10 +14,11 @@ fails unless this folder is upstream plus exactly that patch.
 
 ## Changes
 
-Added files: this `PATCHED.md` and `systray_patch_test.go` (tests of the
-changes below; Linux and BSD).
+Added files: this `PATCHED.md`, `systray_patch_test.go` (tests of the
+Linux and BSD changes) and `internal/trayicon/` (`trayicon_windows.go` and
+its test, see Windows below).
 
-Only `systray_unix.go` (Linux and BSD) is changed:
+### `systray_unix.go` (Linux and BSD)
 
 - New function `SetLabel(label, guide string)`.
 - The StatusNotifierItem object exports the read-only properties
@@ -43,7 +44,28 @@ Upstream's `SetTitle` sets only `Title`, which that extension uses as the
 accessible name. Hosts that do not know the Ayatana label (KDE) ignore the
 extra properties.
 
-Windows and macOS code is untouched. To update the library, copy the new
+### `systray_windows.go` (Windows)
+
+- `loadIconFrom` loads the icon at the size the notification area draws it:
+  `LoadImage(path, IMAGE_ICON, cx, cy, LR_LOADFROMFILE)` with `cx`, `cy`
+  from `trayicon.Size()`, the small-icon size (`SM_CXSMICON`) at the
+  effective DPI of the primary monitor (`GetDpiForMonitor` +
+  `GetSystemMetricsForDpi`, falling back to `GetSystemMetrics`). Upstream
+  passes 0, 0 and `LR_DEFAULTSIZE`, which loads the large-icon size
+  (`SM_CXICON`, 32 px at 100 %), so the shell scaled every tray icon down
+  and an ICO's small entries were never shown. The loaded handles are
+  cached per file and size (upstream: per file). The `LoadImage` call and
+  the size are in the new package `internal/trayicon`, whose test
+  (`trayicon_windows_test.go`) loads an ICO with one entry per size and
+  checks that the entry of exactly the small-icon size comes back
+  unscaled. Upstream's own `systray_windows_test.go` does not compile at
+  v1.12.2, so a test inside package `systray` could not run on Windows.
+- Menu item icons go through the same function, so they too are loaded
+  at the small-icon size (they are drawn at that size anyway).
+
+### Everything else
+
+The macOS code is untouched. To update the library, copy the new
 upstream release over this folder, re-apply the changes, and record the
 new diff with `tools/systray-patch.sh --write` (after changing the version
 and hash in that script).

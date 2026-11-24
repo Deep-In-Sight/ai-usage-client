@@ -18,6 +18,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"fyne.io/systray/internal/trayicon" // added, see PATCHED.md
 )
 
 // Helpful sources: https://github.com/golang/exp/blob/master/shiny/driver/internal/win32
@@ -797,38 +799,31 @@ func (t *winTray) getVisibleItemIndex(parent, val uint32) int {
 
 // Loads an image from file to be shown in tray or menu item.
 // LoadImage: https://msdn.microsoft.com/en-us/library/windows/desktop/ms648045(v=vs.85).aspx
+// (Patched, see PATCHED.md: through trayicon, at the small-icon size.)
 func (t *winTray) loadIconFrom(src string) (windows.Handle, error) {
 	if !wt.isReady() {
 		return 0, ErrTrayNotReadyYet
 	}
 
-	const IMAGE_ICON = 1               // Loads an icon
-	const LR_LOADFROMFILE = 0x00000010 // Loads the stand-alone image from the file
-	const LR_DEFAULTSIZE = 0x00000040  // Loads default-size icon for windows(SM_CXICON x SM_CYICON) if cx, cy are set to zero
+	// Patched (see PATCHED.md): load the icon at the size the notification
+	// area draws it (the small-icon size), so LoadImage takes that ICO entry
+	// as it is; LR_DEFAULTSIZE loaded the large-icon size, which the shell
+	// then scaled down. Handles are cached per file and size.
+	cx, cy := trayicon.Size()
+	key := fmt.Sprintf("%s|%dx%d", src, cx, cy)
 
 	// Save and reuse handles of loaded images
 	t.muLoadedImages.RLock()
-	h, ok := t.loadedImages[src]
+	h, ok := t.loadedImages[key]
 	t.muLoadedImages.RUnlock()
 	if !ok {
-		srcPtr, err := windows.UTF16PtrFromString(src)
+		var err error
+		h, err = trayicon.Load(src, cx, cy)
 		if err != nil {
 			return 0, err
 		}
-		res, _, err := pLoadImage.Call(
-			0,
-			uintptr(unsafe.Pointer(srcPtr)),
-			IMAGE_ICON,
-			0,
-			0,
-			LR_LOADFROMFILE|LR_DEFAULTSIZE,
-		)
-		if res == 0 {
-			return 0, err
-		}
-		h = windows.Handle(res)
 		t.muLoadedImages.Lock()
-		t.loadedImages[src] = h
+		t.loadedImages[key] = h
 		t.muLoadedImages.Unlock()
 	}
 	return h, nil

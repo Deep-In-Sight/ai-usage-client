@@ -129,6 +129,8 @@ func findArtAnyScale(img *image.NRGBA, a Art) (image.Point, int, bool) {
 	return image.Point{}, 0, false
 }
 
+var windowsSizes = []int{16, 20, 24, 28, 32, 36, 40, 48, 56, 64}
+
 func clawdSpec(pct *float64, l usage.Level) Spec {
 	return Spec{Provider: Claude, Percent: pct, Level: l}
 }
@@ -309,7 +311,7 @@ func readNumber(t *testing.T, img *image.NRGBA, ink color.NRGBA, below int) (str
 // The number layout (Windows, Linux desktops without the label): the
 // mascot over the level-coloured number, readable at every tray size.
 func TestTrayNumberReadableAtEverySize(t *testing.T) {
-	for _, n := range []int{16, 20, 24, 32, 48} {
+	for _, n := range windowsSizes {
 		for _, c := range []struct {
 			pct  float64
 			want string
@@ -387,7 +389,7 @@ func TestTrayImagePerOS(t *testing.T) {
 	s := clawdSpec(p(42), usage.LevelNormal)
 	// Windows: every ICO entry is the number layout, whatever s.Number says
 	b := TrayImage("windows", s)
-	for i, n := range []int{16, 20, 24, 32, 48} {
+	for i, n := range windowsSizes {
 		e := b[6+16*i:]
 		size, off := binary.LittleEndian.Uint32(e[8:]), binary.LittleEndian.Uint32(e[12:])
 		withNumber := s
