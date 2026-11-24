@@ -25,6 +25,11 @@ type Config struct {
 	IngestKey       string   `json:"ingest_key"`
 	ClaudeConfigDir string   `json:"claude_config_dir,omitempty"`
 	KeychainService string   `json:"keychain_service,omitempty"`
+	// CodexHome is CODEX_HOME of the shell that installed (design 6.12);
+	// CodexPath the codex executable that shell found, as the real binary
+	// (design D15). Both absolute; "" when not known.
+	CodexHome string `json:"codex_home,omitempty"`
+	CodexPath string `json:"codex_path,omitempty"`
 }
 
 const (
@@ -85,6 +90,12 @@ func (c Config) Validate() error {
 	}
 	if c.ClaudeConfigDir != "" && !filepath.IsAbs(c.ClaudeConfigDir) {
 		return errors.New("config: claude_config_dir must be an absolute path")
+	}
+	if c.CodexHome != "" && !filepath.IsAbs(c.CodexHome) {
+		return errors.New("config: codex_home must be an absolute path")
+	}
+	if c.CodexPath != "" && !filepath.IsAbs(c.CodexPath) {
+		return errors.New("config: codex_path must be an absolute path")
 	}
 	return nil
 }

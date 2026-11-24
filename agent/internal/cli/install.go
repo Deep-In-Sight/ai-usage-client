@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/autostart"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/codex"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/config"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/creds"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/osinfo"
@@ -82,18 +83,40 @@ func install(env Env, args []string) (int, string) {
 	if err != nil {
 		return fail(err.Error())
 	}
-	cfg.ClaudeConfigDir = ""
-	keptDir := false
+	cfg.ClaudeConfigDir, cfg.CodexHome, cfg.CodexPath = "", "", ""
+	old, oldErr := config.Load(env.Dirs.File(paths.ConfigFile))
+	keptDir, keptCodexHome := false, false
 	if d := env.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
 		abs, err := filepath.Abs(d)
 		if err != nil {
 			return fail("CLAUDE_CONFIG_DIR: " + err.Error())
 		}
 		cfg.ClaudeConfigDir = abs
-	} else if old, err := config.Load(env.Dirs.File(paths.ConfigFile)); err == nil && old.ClaudeConfigDir != "" {
+	} else if oldErr == nil && old.ClaudeConfigDir != "" {
 		// An upgrade from a shell without the variable keeps the folder the
 		// agent was installed with.
 		cfg.ClaudeConfigDir, keptDir = old.ClaudeConfigDir, true
+	}
+	// Codex's folder and executable, as the installing shell has them (the
+	// autostart environment has neither; design 6.12, D15). The agent only
+	// reads the folder; the executable is for the fallback (never run here).
+	if d := env.Getenv("CODEX_HOME"); d != "" {
+		abs, err := filepath.Abs(d)
+		if err != nil {
+			return fail("CODEX_HOME: " + err.Error())
+		}
+		cfg.CodexHome = abs
+	} else if oldErr == nil && old.CodexHome != "" {
+		cfg.CodexHome, keptCodexHome = old.CodexHome, true
+	}
+	if p := codex.LookPath(goos, env.Getenv); p != "" {
+		if abs, err := filepath.Abs(p); err == nil {
+			cfg.CodexPath = abs
+		}
+	} else if oldErr == nil && old.CodexPath != "" {
+		if st, err := os.Stat(old.CodexPath); err == nil && st.Mode().IsRegular() {
+			cfg.CodexPath = old.CodexPath // found before, from another shell, and still there
+		}
 	}
 	if err := cfg.Validate(); err != nil {
 		return fail(err.Error())
@@ -280,6 +303,28 @@ func install(env Env, args []string) (int, string) {
 			line += " " + text.KeptClaudeDir
 		}
 		fmt.Fprintln(env.Stdout, line)
+	}
+	if cfg.CodexHome != "" {
+		line := "Codex folder: " + cfg.CodexHome
+		if keptCodexHome {
+			line += " " + text.KeptCodexHome
+		}
+		fmt.Fprintln(env.Stdout, line)
+	}
+	if cfg.CodexPath != "" {
+		fmt.Fprintln(env.Stdout, "Codex CLI: "+cfg.CodexPath)
+	}
+	// only when there is a Codex sign-in of some kind: a PC without Codex
+	// sees the install output of v0.8
+	switch codex.NewReader(codex.Home(cfg, env.Dirs.Home), env.Clock).Login(ctx).State {
+	case "ok":
+		fmt.Fprintln(env.Stdout, "Codex sign-in: "+text.SignInFound)
+	case "expired":
+		fmt.Fprintln(env.Stdout, "Codex sign-in: "+text.CodexSignInExpired)
+	case "unsupported_store":
+		fmt.Fprintln(env.Stdout, "Codex sign-in: "+text.CodexSignInKeychain)
+	case "api_key":
+		fmt.Fprintln(env.Stdout, "Codex sign-in: "+text.CodexSignInAPIKey)
 	}
 	if line := text.Installed(goos, headless); line != "" {
 		fmt.Fprintln(env.Stdout, line)

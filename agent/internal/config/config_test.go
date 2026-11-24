@@ -129,3 +129,24 @@ func TestStateMissingOrCorruptIsZero(t *testing.T) {
 	must(t, SaveState(p, s))
 	eq(t, LoadState(p), s)
 }
+
+// codex_home and codex_path (recorded at install) round-trip and must be
+// absolute.
+func TestCodexPaths(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.json")
+	home, cli := t.TempDir(), filepath.Join(t.TempDir(), "codex")
+	c := Config{ServerURLs: []string{"http://ai-usage.local"}, IngestKey: "k-123", CodexHome: home, CodexPath: cli}
+	must(t, Save(p, c))
+	got, err := Load(p)
+	must(t, err)
+	eq(t, got, c)
+	for _, bad := range []string{`"codex_home":"rel/codex"`, `"codex_path":"codex"`} {
+		if _, err := Parse([]byte(`{"server_urls":["http://ai-usage.local"],"ingest_key":"k",` + bad + `}`)); err == nil {
+			t.Fatalf("%s accepted", bad)
+		}
+	}
+	// an older config without them reads as before
+	got, err = Parse([]byte(`{"server_urls":["http://ai-usage.local"],"ingest_key":"k"}`))
+	must(t, err)
+	eq(t, got.CodexHome+got.CodexPath, "")
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -319,4 +320,90 @@ func TestInstallFailureAfterStopRestartsOldAgent(t *testing.T) {
 	if stopped < 0 || restarted < stopped {
 		t.Fatalf("old agent not started again: %v", te.runner.calls)
 	}
+}
+
+// install records the Codex folder of the installing shell (CODEX_HOME)
+// and the codex it finds there, resolved to the real binary (design 6.12,
+// D15); an upgrade from a shell without them keeps both.
+func TestInstallRecordsCodexPaths(t *testing.T) {
+	te := newEnv(t)
+	te.runner.reply = systemdOK("yes", nil)
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	te.vars["CODEX_HOME"] = codexHome
+	real := filepath.Join(t.TempDir(), "codex-0.172.0")
+	must(t, os.WriteFile(real, []byte("\x7fELF fake"), 0o755))
+	bin := t.TempDir()
+	must(t, os.Symlink(real, filepath.Join(bin, "codex")))
+	te.vars["PATH"] = filepath.Join(t.TempDir(), "empty") + string(os.PathListSeparator) + bin
+	cfgPath := writeCfg(t, validConfig)
+	eq(t, te.main("install", "--config", cfgPath, "--headless"), 0)
+	c, err := config.Load(te.Dirs.File(paths.ConfigFile))
+	must(t, err)
+	eq(t, c.CodexHome, codexHome)
+	eq(t, c.CodexPath, real)
+	out := te.out.String()
+	contains(t, out, "Codex folder: "+codexHome+"\n")
+	contains(t, out, "Codex CLI: "+real+"\n")
+	if strings.Contains(out, "Codex sign-in:") {
+		t.Fatal("a Codex sign-in line without a sign-in")
+	}
+
+	// upgraded from a shell without CODEX_HOME and without codex on PATH
+	delete(te.vars, "CODEX_HOME")
+	te.vars["PATH"] = filepath.Join(t.TempDir(), "empty")
+	writeFile(t, filepath.Join(codexHome, "auth.json"), `{"auth_mode":"apikey","OPENAI_API_KEY":"sk-fake-0123456789abcdef"}`)
+	te.out.Reset()
+	eq(t, te.main("install", "--config", cfgPath, "--headless"), 0)
+	c, err = config.Load(te.Dirs.File(paths.ConfigFile))
+	must(t, err)
+	eq(t, c.CodexHome, codexHome)
+	eq(t, c.CodexPath, real)
+	out = te.out.String()
+	contains(t, out, "Codex folder: "+codexHome+" (kept from the previous install; set CODEX_HOME to change it)")
+	contains(t, out, "Codex sign-in: an API key (no plan limits)")
+	if strings.Contains(out, "sk-fake") {
+		t.Fatal("the key was printed")
+	}
+
+	// a recorded codex that is gone is dropped; a fresh install without
+	// either records neither
+	must(t, os.Remove(real))
+	eq(t, te.main("install", "--config", cfgPath, "--headless"), 0)
+	c, _ = config.Load(te.Dirs.File(paths.ConfigFile))
+	eq(t, c.CodexPath, "")
+	te2 := newEnv(t)
+	te2.runner.reply = systemdOK("yes", nil)
+	eq(t, te2.main("install", "--config", writeCfg(t, validConfig), "--headless"), 0)
+	c, _ = config.Load(te2.Dirs.File(paths.ConfigFile))
+	eq(t, c.CodexHome+c.CodexPath, "")
+	if strings.Contains(te2.out.String(), "\nCodex ") {
+		t.Fatalf("Codex lines without Codex:\n%s", te2.out.String())
+	}
+}
+
+// An npm-installed codex is recorded as the binary it runs, never the
+// node launcher.
+func TestInstallRecordsTheBinaryBehindAnNpmShim(t *testing.T) {
+	te := newEnv(t)
+	te.runner.reply = systemdOK("yes", nil)
+	prefix := t.TempDir()
+	pkg := filepath.Join(prefix, "lib", "node_modules", "@openai", "codex")
+	writeFile(t, filepath.Join(pkg, "bin", "codex.js"), "#!/usr/bin/env node\n")
+	triple := map[string]string{"amd64": "x86_64-unknown-linux-musl", "arm64": "aarch64-unknown-linux-musl"}[runtime.GOARCH]
+	native := filepath.Join(pkg, "vendor", triple, "bin", "codex")
+	writeFile(t, native, "\x7fELF fake")
+	must(t, os.Chmod(native, 0o755))
+	must(t, os.MkdirAll(filepath.Join(prefix, "bin"), 0o700))
+	must(t, os.Symlink(filepath.Join("..", "lib", "node_modules", "@openai", "codex", "bin", "codex.js"), filepath.Join(prefix, "bin", "codex")))
+	te.vars["PATH"] = filepath.Join(prefix, "bin")
+	eq(t, te.main("install", "--config", writeCfg(t, validConfig), "--headless"), 0)
+	c, err := config.Load(te.Dirs.File(paths.ConfigFile))
+	must(t, err)
+	eq(t, c.CodexPath, native)
+}
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	must(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	must(t, os.WriteFile(path, []byte(body), 0o600))
 }

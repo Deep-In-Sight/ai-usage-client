@@ -68,6 +68,14 @@ var BorrowedCode = []Borrowed{
 			"model names matched in part, each value falling back to the older reply shape on its own " +
 			"(agent/internal/usage)"},
 		File: "borrowed/ccstatusline/LICENSE"},
+	{Project: "steipete/CodexBar", URL: "https://github.com/steipete/CodexBar", Commit: "a26ca57", Licence: "MIT",
+		What: []string{"reading the Codex sign-in without writing it: a missing or partly written auth.json read again " +
+			"twice, 50 ms apart, and when it needs renewing (the access token's expiry with a 5-minute window, else " +
+			"last_refresh plus 8 days) (agent/internal/codex)",
+			"reading chatgpt_base_url from Codex's config.toml line by line (agent/internal/codex)",
+			"finding the codex executable: the native binary an npm install ships, and the desktop apps' copies on macOS " +
+				"(agent/internal/codex)"},
+		File: "borrowed/CodexBar/LICENSE"},
 }
 
 // GoPath stands for the Go standard library and runtime.

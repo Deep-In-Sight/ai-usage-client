@@ -407,3 +407,9 @@ licence:
   (MIT), commit `0c94df7`: how Claude usage replies are read (the 5-hour
   "session" entry, placeholder entries, model names matched in part, and
   each value falling back to the older reply shape on its own).
+- [steipete/CodexBar](https://github.com/steipete/CodexBar) (MIT), commit
+  `a26ca57`: how the Codex sign-in is read without ever writing it (a
+  missing or partly written `auth.json` read again twice, 50 ms apart; when
+  it needs renewing), how `chatgpt_base_url` is read from Codex's
+  `config.toml`, and where the codex executable is found (the native
+  binary of an npm install, the desktop apps' copies on macOS).
