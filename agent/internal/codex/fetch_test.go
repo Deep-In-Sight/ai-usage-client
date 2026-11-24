@@ -145,6 +145,9 @@ func TestBaseURLOutsideAllowListSendsNothing(t *testing.T) {
 		"https://chatgpt.com/":                   "https://chatgpt.com/backend-api/wham/usage",
 		" https://chat.openai.com/backend-api/ ": "https://chat.openai.com/backend-api/wham/usage",
 		"HTTPS://ChatGPT.com/backend-api":        "https://chatgpt.com/backend-api/wham/usage",
+		// review N-2: the scheme and host in any case get the same path
+		"HTTPS://CHATGPT.COM":      "https://chatgpt.com/backend-api/wham/usage",
+		"Https://Chat.OpenAI.com/": "https://chat.openai.com/backend-api/wham/usage",
 	} {
 		got, err := UsageURL(base)
 		if err != nil || got != want {

@@ -44,6 +44,15 @@ func UsageURL(base string) (string, error) {
 	for strings.HasSuffix(b, "/") {
 		b = strings.TrimSuffix(b, "/")
 	}
+	// the scheme and host in lower case before they are compared (review
+	// N-2: HTTPS://CHATGPT.COM got the path of a foreign host)
+	if i := strings.Index(b, "://"); i > 0 {
+		end := len(b)
+		if j := strings.IndexAny(b[i+3:], "/?#"); j >= 0 {
+			end = i + 3 + j
+		}
+		b = strings.ToLower(b[:end]) + b[end:]
+	}
 	if (strings.HasPrefix(b, "https://chatgpt.com") || strings.HasPrefix(b, "https://chat.openai.com")) && !strings.Contains(b, "/backend-api") {
 		b += "/backend-api"
 	}
