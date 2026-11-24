@@ -1,0 +1,95 @@
+name: release-check
+
+# The check of the files about to be published (release.yml, on a tag)
+# and its rehearsal on every push (ci.yml): the same steps on files built
+# by tools/build.sh with the same flags, so a broken check shows up
+# before a tag exists. Each file must report exactly the version, and a
+# run of it with every CI test switch set must honour none of them
+# (tools/check-release.sh on Linux, tools/check-release.ps1 on Windows).
+# A rehearsal uses a version that can never be released and also checks
+# that the CI build (0.0.0-ci) fails the same check.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: the version the files must report, without the leading v
+        type: string
+        required: true
+      artifact:
+        description: the artefact holding ai-usage-linux-amd64 and ai-usage-windows-amd64.exe
+        type: string
+        required: true
+      rehearsal:
+        description: true in ordinary CI (a version that can never be released)
+        type: boolean
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.artifact }}
+          path: dist
+      - name: release check (Linux file)
+        env:
+          VERSION: ${{ inputs.version }}
+          REHEARSAL: ${{ inputs.rehearsal }}
+        run: |
+          chmod +x dist/ai-usage-linux-amd64
+          if [ "$REHEARSAL" = true ]; then
+            agent/tools/check-release.sh --rehearsal dist/ai-usage-linux-amd64 "$VERSION"
+          else
+            agent/tools/check-release.sh dist/ai-usage-linux-amd64 "$VERSION"
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.rehearsal
+        with:
+          name: release-files
+          path: ci-dist
+      - name: the CI build fails it (rehearsal only)
+        if: inputs.rehearsal
+        run: |
+          chmod +x ci-dist/ai-usage-linux-amd64
+          if agent/tools/check-release.sh --rehearsal ci-dist/ai-usage-linux-amd64 0.0.0-ci; then
+            echo "::error title=release check::the CI build passed"; exit 1
+          fi
+
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.artifact }}
+          path: dist
+      - name: release check (Windows file)
+        env:
+          VERSION: ${{ inputs.version }}
+          REHEARSAL: ${{ inputs.rehearsal }}
+        run: ./agent/tools/check-release.ps1 -File (Resolve-Path dist/ai-usage-windows-amd64.exe).Path -Version $env:VERSION -Rehearsal:($env:REHEARSAL -eq 'true')
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.rehearsal
+        with:
+          name: release-files
+          path: ci-dist
+      - name: the CI build fails it (rehearsal only)
+        if: inputs.rehearsal
+        run: |
+          & ./agent/tools/check-release.ps1 -File (Resolve-Path ci-dist/ai-usage-windows-amd64.exe).Path -Version '0.0.0-ci' -Rehearsal
+          if ($LASTEXITCODE -eq 0) { Write-Output '::error title=release check::the CI build passed'; exit 1 }
+          exit 0

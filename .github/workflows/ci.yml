@@ -84,13 +84,17 @@ jobs:
     with:
       version: 0.0.0-ci
 
-  # A release-style build (any version but 0.0.0-ci behaves as a release:
-  # no test switch, nothing refused) for the checks that a released agent
-  # never starts the Codex CLI (release.no_codex_cli, Linux and Windows).
-  # 0.0.0-relcheck can never be released (tools/version.sh).
+  # A release-style build: tools/build.sh, as a release builds, under a
+  # release-like version (any version but 0.0.0-ci behaves as a release:
+  # no test switch, nothing refused) that can never be released (its
+  # "relcheck" part; tools/version.sh). For the release check's rehearsal
+  # and for the checks that a released agent never starts the Codex CLI
+  # (release.no_codex_cli, Linux and Windows).
   build-relcheck:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    outputs:
+      version: ${{ steps.v.outputs.version }}
     defaults:
       run:
         working-directory: agent
@@ -100,10 +104,15 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version-file: agent/go.mod
-          cache-dependency-path: agent/go.sum
+          # the compiler and cache setting of build.yml (a release build)
+          go-version: "1.27.4"
+          cache: false
+      - id: v
+        run: echo "version=0.8.99-relcheck" >> "$GITHUB_OUTPUT"
       - name: build
-        run: tools/build.sh 0.0.0-relcheck
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: tools/build.sh "$VERSION"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: relcheck-files
@@ -113,6 +122,16 @@ jobs:
             agent/dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
+
+  # The release workflow's check, on the release-style files (and the CI
+  # build must fail it), so a broken check shows up before a tag exists.
+  release-check:
+    needs: [build, build-relcheck]
+    uses: ./.github/workflows/release-check.yml
+    with:
+      version: ${{ needs.build-relcheck.outputs.version }}
+      artifact: relcheck-files
+      rehearsal: true
 
   # Install, run, upgrade and uninstall on each runner against a fake team
   # server, with the files the build made. Results are annotations.
@@ -151,6 +170,7 @@ jobs:
         env:
           CI_DIST: ${{ github.workspace }}/dist
           CI_REL: ${{ github.workspace }}/relcheck
+          CI_REL_VERSION: ${{ needs.build-relcheck.outputs.version }}
           CI_BIN: ${{ runner.temp }}/bin
           CI_SCRIPTS: ${{ github.workspace }}/agent/ci
           RUNNER_LABEL: ${{ matrix.os }}
@@ -243,6 +263,7 @@ jobs:
         env:
           CI_DIST: ${{ github.workspace }}\dist
           CI_REL: ${{ github.workspace }}\relcheck
+          CI_REL_VERSION: ${{ needs.build-relcheck.outputs.version }}
           CI_BIN: ${{ runner.temp }}\bin
           CI_SCRIPTS: ${{ github.workspace }}\agent\ci
           CI_DESKTOP: ${{ matrix.desktop }}

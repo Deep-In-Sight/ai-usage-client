@@ -459,7 +459,8 @@ schema1_check() {
 }
 schema1_check
 
-# release.no_codex_cli: a release-style build (version 0.0.0-relcheck: no
+# release.no_codex_cli: a release-style build (CI_REL_VERSION, such as
+# 0.8.99-relcheck: no
 # CI-build switch, no refusing transport) never starts the Codex CLI
 # (ruling F1). Every Anthropic and OpenAI host name is mapped to this
 # runner first and answered by fakevendor, whose made-up CA the system
@@ -514,7 +515,7 @@ release_codex_check() {
     problems="$problems results=[$results]"
   [ "$(jget "$data/config.json" codex_path)" = "$relbin/codex" ] || problems="$problems codex_path=[$(jget "$data/config.json" codex_path)]"
   v=$(s2 | jget - devices "$dev2" last_version)
-  [ "$v" = 0.0.0-relcheck ] || problems="$problems version=$v"
+  [ -n "$v" ] && [ "$v" = "${CI_REL_VERSION:-}" ] || problems="$problems version=$v want=${CI_REL_VERSION:-}"
   ! grep -q 'CI build' "$data/agent.log" 2>/dev/null || problems="$problems behaves_as_ci_build"
   [ "$(s2 | jget - token_leaks)" = 0 ] || problems="$problems token_leaks=$(s2 | jget - token_leaks)"
   curl -fsS --max-time 10 "$admin/stats" > "$out/fakevendor-stats.json" 2>&1

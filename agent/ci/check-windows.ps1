@@ -367,7 +367,7 @@ Check 'uninstall.via_entry' {
     if ($problems.Count -eq 0) { Pass 'uninstall.via_entry' 'everything removed' } else { Fail 'uninstall.via_entry' ($problems -join ' ') }
 }
 
-# A release-style build (version 0.0.0-relcheck: no CI-build switch, no
+# A release-style build (CI_REL_VERSION, such as 0.8.99-relcheck: no CI-build switch, no
 # refusing transport) never starts the Codex CLI (ruling F1). Every
 # Anthropic and OpenAI host name is mapped to this runner first and
 # answered by fakevendor, whose made-up CA the machine trusts, so nothing
@@ -457,7 +457,7 @@ if ($Desktop) {
         $cfg = $null; try { $cfg = Get-Content -Raw -LiteralPath (Join-Path $data 'config.json') | ConvertFrom-Json } catch { }
         if (-not $cfg -or "$($cfg.codex_path)" -ine $fake) { $problems += "codex_path=[$($cfg.codex_path)]" }
         $d2 = (S2).devices.(DeviceId)
-        if ($d2.last_version -ne '0.0.0-relcheck') { $problems += "version=$($d2.last_version)" }
+        if (-not $env:CI_REL_VERSION -or $d2.last_version -ne $env:CI_REL_VERSION) { $problems += "version=$($d2.last_version) want=$($env:CI_REL_VERSION)" }
         $log = ReadShared (Join-Path $data 'agent.log')
         if ($log.Contains('CI build')) { $problems += 'behaves_as_ci_build' }
         if ((S2).token_leaks -ne 0) { $problems += "token_leaks=$((S2).token_leaks)" }
@@ -468,7 +468,7 @@ if ($Desktop) {
         $null = WaitFor 15 { (AllProcs).Count -eq 0 }
         if ((AllProcs).Count -ne 0) { $problems += "processes=$((AllProcs).Count)" }
         ReleaseCleanup
-        if ($problems.Count -eq 0) { Pass 'release.no_codex_cli' "0.0.0-relcheck: Codex results $(ConvertTo-Json -Compress -InputObject $res), all direct; fakecodex (PATH, codex_path, switch) never run" }
+        if ($problems.Count -eq 0) { Pass 'release.no_codex_cli' "$($env:CI_REL_VERSION): Codex results $(ConvertTo-Json -Compress -InputObject $res), all direct; fakecodex (PATH, codex_path, switch) never run" }
         else { Fail 'release.no_codex_cli' ($problems -join ' ') }
     }
     ReleaseCleanup

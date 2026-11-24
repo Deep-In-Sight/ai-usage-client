@@ -270,9 +270,62 @@ func TestCheckRelease(t *testing.T) {
 			t.Fatalf("the CI build passed as %s: %s", want, out)
 		}
 	}
+	// re-review R-1 / N-b: the version is compared whole, and a rehearsal
+	// (ordinary CI) takes only a version that can never be released
+	pre := buildAgent(t, "1.2.3-relcheck", "")
+	if out, code := script(t, "check-release.sh", nil, pre, "1.2.3"); code == 0 || !strings.Contains(out, "not 1.2.3") {
+		t.Fatalf("1.2.3-relcheck passed as 1.2.3: %d %s", code, out)
+	}
+	if out, code := script(t, "check-release.sh", nil, pre, "1.2.3-relcheck"); code == 0 {
+		t.Fatalf("a never-released version passed a real check: %s", out)
+	}
+	if out, code := script(t, "check-release.sh", nil, "--rehearsal", pre, "1.2.3-relcheck"); code != 0 {
+		t.Fatalf("the rehearsal failed: %d %s", code, out)
+	}
+	if out, code := script(t, "check-release.sh", nil, "--rehearsal", rel, "1.2.3"); code == 0 || !strings.Contains(out, "can never be released") {
+		t.Fatalf("a rehearsal took a release version: %d %s", code, out)
+	}
+	if out, code := script(t, "check-release.sh", nil, "--rehearsal", ci, "0.0.0-ci"); code == 0 || !strings.Contains(out, "behaves as a CI build") {
+		t.Fatalf("the CI build passed the rehearsal: %d %s", code, out)
+	}
 	bad := buildAgent(t, "1.2.3", "1.2.3") // a release's version, a CI build's behaviour
 	out, code := script(t, "check-release.sh", nil, bad, "1.2.3")
 	if code == 0 || !strings.Contains(out, "behaves as a CI build") || !strings.Contains(out, "AI_USAGE_TEST_CODEX_FALLBACK") {
 		t.Fatalf("a build that honours the test switches passed: %d %s", code, out)
+	}
+}
+
+// Re-review R-1: the release workflow's check is the reusable
+// release-check.yml, which ordinary CI also runs on every push (a
+// rehearsal on files built by tools/build.sh), and it reads no build
+// settings (with -trimpath, Go records no -ldflags).
+func TestReleaseCheckRunsInOrdinaryCI(t *testing.T) {
+	read := func(p string) string {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	rel, ci, chk := read("../../.github/workflows/release.yml"), read("../../.github/workflows/ci.yml"), read("../../.github/workflows/release-check.yml")
+	for _, want := range []string{"uses: ./.github/workflows/release-check.yml", "artifact: release-files", "rehearsal: false"} {
+		if !strings.Contains(rel, want) {
+			t.Errorf("release.yml lacks %q", want)
+		}
+	}
+	for _, want := range []string{"uses: ./.github/workflows/release-check.yml", "artifact: relcheck-files", "rehearsal: true", `tools/build.sh "$VERSION"`} {
+		if !strings.Contains(ci, want) {
+			t.Errorf("ci.yml lacks %q", want)
+		}
+	}
+	for _, want := range []string{"agent/tools/check-release.sh --rehearsal", "agent/tools/check-release.sh dist/ai-usage-linux-amd64", "check-release.ps1", "windows-2025"} {
+		if !strings.Contains(chk, want) {
+			t.Errorf("release-check.yml lacks %q", want)
+		}
+	}
+	for name, s := range map[string]string{"release.yml": rel, "release-check.yml": chk} {
+		if strings.Contains(s, "go version -m") {
+			t.Errorf("%s reads build settings, which -trimpath leaves without -ldflags", name)
+		}
 	}
 }
