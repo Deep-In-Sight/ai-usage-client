@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/anthropic"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/clock"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/config"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/creds"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/status"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/sync/backlog"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/sync/protocol"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/anthropic"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/clock"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/config"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/creds"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/sync/backlog"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/sync/protocol"
 )
 
 const (

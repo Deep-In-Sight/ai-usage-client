@@ -10,17 +10,17 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/autostart"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/clock"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/config"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/creds"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/osinfo"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/paths"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/procs"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/sync/engine"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/tray"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/version"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/winapp"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/autostart"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/clock"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/config"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/creds"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/osinfo"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/paths"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/sync/engine"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/tray"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/version"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/winapp"
 )
 
 // Env is everything the commands touch outside the process, so tests can

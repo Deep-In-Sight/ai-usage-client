@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/clock"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/osinfo"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/clock"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/osinfo"
 )
 
 // WatcherWait is how long Linux waits for a StatusNotifierWatcher (the

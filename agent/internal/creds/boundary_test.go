@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/creds"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/creds"
 )
 
-const module = "github.com/Deep-In-Sight/claude-usage-tray-indicator/agent"
+const module = "github.com/Deep-In-Sight/claude-usage-client/agent"
 
 // agentRoot is the agent/ folder (this test runs in agent/internal/creds).
 func agentRoot(t *testing.T) string {

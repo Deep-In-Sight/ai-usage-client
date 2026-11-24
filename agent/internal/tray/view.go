@@ -8,11 +8,11 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/icon"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/status"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/text"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/usage"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/version"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/icon"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/text"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/usage"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/version"
 )
 
 // ItemID names a menu item; the values are in display order.

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/config"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/config"
 )
 
 const (

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/sync/protocol"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/sync/protocol"
 )
 
 var now = time.Date(2026, 1, 12, 9, 0, 0, 0, time.UTC)

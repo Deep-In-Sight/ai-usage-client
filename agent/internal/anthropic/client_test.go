@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/clock"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/creds"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/version"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/clock"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/creds"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/version"
 )
 
 const fakeToken = "fake-access-token-0123456789"

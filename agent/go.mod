@@ -1,4 +1,4 @@
-module github.com/Deep-In-Sight/claude-usage-tray-indicator/agent
+module github.com/Deep-In-Sight/claude-usage-client/agent
 
 go 1.27
 

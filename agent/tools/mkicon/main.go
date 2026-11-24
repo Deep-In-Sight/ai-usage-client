@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/icon"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/icon"
 )
 
 func run(svgPath, outPath string) error {

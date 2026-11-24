@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/config"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/osinfo"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/paths"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/config"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/osinfo"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/paths"
 )
 
 func (te *testEnv) unitPath() string {

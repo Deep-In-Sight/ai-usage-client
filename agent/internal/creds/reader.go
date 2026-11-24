@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/clock"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/clock"
 )
 
 // Options say where the sign-in lives.

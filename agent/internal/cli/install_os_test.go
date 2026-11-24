@@ -10,13 +10,13 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/autostart"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/config"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/paths"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/procs"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/status"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/version"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/winapp"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/autostart"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/config"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/paths"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/status"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/version"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/winapp"
 )
 
 // recorder is one ordered list of what the fakes were asked to do.

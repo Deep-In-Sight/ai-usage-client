@@ -10,15 +10,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/autostart"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/config"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/creds"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/osinfo"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/paths"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/procs"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/text"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/version"
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/winapp"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/autostart"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/config"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/creds"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/osinfo"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/paths"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/procs"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/text"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/version"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/winapp"
 )
 
 // Exit codes of install (shared with the server's install scripts).

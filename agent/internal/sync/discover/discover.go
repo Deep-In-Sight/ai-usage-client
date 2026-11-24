@@ -3,7 +3,7 @@
 // not go through the OS's mDNS resolver.
 package discover
 
-import "github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/config"
+import "github.com/Deep-In-Sight/claude-usage-client/agent/internal/config"
 
 // Name is the mDNS name the server announces.
 const Name = "claude-usage.local"

@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/cli"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/cli"
 )
 
 func main() { os.Exit(cli.Main(cli.DefaultEnv())) }

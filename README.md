@@ -197,8 +197,8 @@ Nothing else needs installing: the libraries it uses ship with GNOME Shell.
 ### Install
 
 ```sh
-git clone https://github.com/Deep-In-Sight/claude-usage-tray-indicator.git
-cd claude-usage-tray-indicator
+git clone https://github.com/Deep-In-Sight/claude-usage-client.git
+cd claude-usage-client
 ./install.sh
 ```
 

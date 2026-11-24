@@ -28,7 +28,7 @@ func EntryFor(exe, ver string, sizeBytes int64, now time.Time) Entry {
 		QuietUninstallString: q + " uninstall",
 		InstallLocation:      filepath.Dir(exe),
 		InstallDate:          now.Format("20060102"),
-		URLInfoAbout:         "https://github.com/Deep-In-Sight/claude-usage-tray-indicator",
+		URLInfoAbout:         "https://github.com/Deep-In-Sight/claude-usage-client",
 		EstimatedSizeKB:      uint32((sizeBytes + 1023) / 1024),
 		NoModify:             1,
 		NoRepair:             1,

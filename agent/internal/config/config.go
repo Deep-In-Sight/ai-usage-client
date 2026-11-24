@@ -16,7 +16,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/Deep-In-Sight/claude-usage-tray-indicator/agent/internal/atomicfile"
+	"github.com/Deep-In-Sight/claude-usage-client/agent/internal/atomicfile"
 )
 
 // Config is config.json. Unknown keys are ignored.
