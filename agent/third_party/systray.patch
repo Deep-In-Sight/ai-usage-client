@@ -1,7 +1,7 @@
-diff -ruN a/PATCHED.md b/PATCHED.md
+diff -aruN a/PATCHED.md b/PATCHED.md
 --- a/PATCHED.md
 +++ b/PATCHED.md
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,73 @@
 +# fyne.io/systray, patched copy
 +
 +This folder is a copy of [fyne.io/systray](https://github.com/fyne-io/systray)
@@ -14,7 +14,9 @@ diff -ruN a/PATCHED.md b/PATCHED.md
 +`agent/third_party/systray.patch`. CI (`agent/tools/systray-patch.sh`)
 +downloads v1.12.2 through the Go module proxy, checks its hash against the
 +checksum database's (`h1:Y8DZxgLHsVQt6rY9Zrkkg+j67S7vv/1F2viOWKPpVeA=`) and
-+fails unless this folder is upstream plus exactly that patch.
++fails unless this folder is upstream plus exactly that patch (compared as
++text, binary files included) and every file in it is a plain file (git
++mode 100644, nothing executable).
 +
 +## Changes
 +
@@ -73,7 +75,7 @@ diff -ruN a/PATCHED.md b/PATCHED.md
 +upstream release over this folder, re-apply the changes, and record the
 +new diff with `tools/systray-patch.sh --write` (after changing the version
 +and hash in that script).
-diff -ruN a/internal/trayicon/trayicon_windows.go b/internal/trayicon/trayicon_windows.go
+diff -aruN a/internal/trayicon/trayicon_windows.go b/internal/trayicon/trayicon_windows.go
 --- a/internal/trayicon/trayicon_windows.go
 +++ b/internal/trayicon/trayicon_windows.go
 @@ -0,0 +1,71 @@
@@ -148,7 +150,7 @@ diff -ruN a/internal/trayicon/trayicon_windows.go b/internal/trayicon/trayicon_w
 +	}
 +	return windows.Handle(res), nil
 +}
-diff -ruN a/internal/trayicon/trayicon_windows_test.go b/internal/trayicon/trayicon_windows_test.go
+diff -aruN a/internal/trayicon/trayicon_windows_test.go b/internal/trayicon/trayicon_windows_test.go
 --- a/internal/trayicon/trayicon_windows_test.go
 +++ b/internal/trayicon/trayicon_windows_test.go
 @@ -0,0 +1,149 @@
@@ -301,7 +303,7 @@ diff -ruN a/internal/trayicon/trayicon_windows_test.go b/internal/trayicon/trayi
 +		}
 +	}
 +}
-diff -ruN a/systray_patch_test.go b/systray_patch_test.go
+diff -aruN a/systray_patch_test.go b/systray_patch_test.go
 --- a/systray_patch_test.go
 +++ b/systray_patch_test.go
 @@ -0,0 +1,136 @@
@@ -441,7 +443,7 @@ diff -ruN a/systray_patch_test.go b/systray_patch_test.go
 +	}
 +	t.Fatal("nativeStart does not export and store the properties under one hold of instance.lock")
 +}
-diff -ruN a/systray_unix.go b/systray_unix.go
+diff -aruN a/systray_unix.go b/systray_unix.go
 --- a/systray_unix.go
 +++ b/systray_unix.go
 @@ -1,5 +1,10 @@
@@ -573,7 +575,7 @@ diff -ruN a/systray_unix.go b/systray_unix.go
  // PX is picture pix map structure with width and high
  type PX struct {
  	W, H int
-diff -ruN a/systray_windows.go b/systray_windows.go
+diff -aruN a/systray_windows.go b/systray_windows.go
 --- a/systray_windows.go
 +++ b/systray_windows.go
 @@ -18,6 +18,8 @@

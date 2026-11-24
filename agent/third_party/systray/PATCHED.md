@@ -10,7 +10,9 @@ The exact difference from upstream is recorded in
 `agent/third_party/systray.patch`. CI (`agent/tools/systray-patch.sh`)
 downloads v1.12.2 through the Go module proxy, checks its hash against the
 checksum database's (`h1:Y8DZxgLHsVQt6rY9Zrkkg+j67S7vv/1F2viOWKPpVeA=`) and
-fails unless this folder is upstream plus exactly that patch.
+fails unless this folder is upstream plus exactly that patch (compared as
+text, binary files included) and every file in it is a plain file (git
+mode 100644, nothing executable).
 
 ## Changes
 

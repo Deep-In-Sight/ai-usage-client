@@ -33,8 +33,21 @@ cp -R "$dir" "$tmp/a"
 chmod -R u+w "$tmp/a"
 rm -rf "$tmp/a/example" "$tmp/a/Makefile" "$tmp/a/.gitignore"
 cp -R third_party/systray "$tmp/b"
-# a diff with stable headers (no dates), in a fixed file order
-(cd "$tmp" && LC_ALL=C diff -ruN a b) | sed -E 's/^((---|\+\+\+) [^\t]*)\t.*$/\1/' > "$tmp/now.patch" || true
+# a diff with stable headers (no dates), in a fixed file order; -a: a
+# binary file's bytes are compared too, not only "Binary files differ"
+(cd "$tmp" && LC_ALL=C diff -aruN a b) | sed -E 's/^((---|\+\+\+) [^\t]*)\t.*$/\1/' > "$tmp/now.patch" || true
+
+# File modes: upstream's module zip records none, and the copy's files are
+# all plain (git mode 100644): nothing in it may be executable.
+modes=""
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  modes=$(git ls-files -s -- third_party/systray | awk '$1 != "100644" { print "git mode " $1 ": " $4 }')
+fi
+modes="$modes$(find third_party/systray -type f -perm /111 -printf '\nexecutable: %p')"
+if [ -n "$modes" ]; then
+  echo "third_party/systray has files that are not plain (mode 100644):$modes" >&2
+  exit 1
+fi
 
 if [ "${1:-}" = --write ]; then
   cp "$tmp/now.patch" "$recorded"
