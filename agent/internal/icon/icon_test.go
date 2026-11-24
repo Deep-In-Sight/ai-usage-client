@@ -190,44 +190,15 @@ func TestTrayImageSizes(t *testing.T) {
 	}
 }
 
-func TestClawdRaster(t *testing.T) {
-	svg := mustRead(t, "../../../claude-usage@localhost/clawd.svg")
-	img, err := Clawd(svg, 256)
-	must(t, err)
-	eq(t, img.Bounds().Dx(), 256)
-	eq(t, img.Bounds().Dy(), 256)
-	clawd := color.NRGBA{0xd9, 0x77, 0x57, 0xff}
-	left, right, filled := 256, 256, 0
-	for y := 0; y < 256; y++ {
-		for x := 0; x < 256; x++ {
-			c := img.NRGBAAt(x, y)
-			switch {
-			case c == clawd:
-				filled++
-				left = min(left, x)
-				right = min(right, 255-x)
-			case c.A != 0:
-				t.Fatalf("pixel %d,%d is %v", x, y, c)
-			}
-		}
-	}
-	if filled < 256*256/4 {
-		t.Fatalf("only %d pixels filled", filled)
-	}
-	if d := left - right; d > 1 || d < -1 {
-		t.Fatalf("margins %d and %d", left, right)
-	}
-}
-
 func TestClawdRejectsCurves(t *testing.T) {
 	for _, d := range []string{"M0 0C1 1 2 2 3 3Z", "m0 0h1v1h-1z", "M0 0L1 1Z"} {
 		svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><path d="` + d + `" fill="#D97757"/></svg>`)
-		if _, err := Clawd(svg, 64); err == nil {
+		if _, _, err := svgRects(svg); err == nil {
 			t.Fatalf("%q accepted", d)
 		}
 	}
 	two := []byte(`<svg><path d="M0 0V1H1V0Z" fill="#000"/><path d="M0 0V1H1V0Z" fill="#000"/></svg>`)
-	if _, err := Clawd(two, 64); err == nil {
+	if _, _, err := svgRects(two); err == nil {
 		t.Fatal("two paths accepted")
 	}
 }

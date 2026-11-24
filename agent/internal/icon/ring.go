@@ -1,7 +1,7 @@
 // Package icon draws the tray icon (the signed-in provider's artwork with
-// a gauge or the number, or the neutral ring gauge without a sign-in),
-// encodes PNG and ICO files, and rasterises the Clawd application icon. It
-// uses only the standard library.
+// a gauge or the number, or the neutral ring gauge without a sign-in) and
+// the program icon (program.go), and encodes PNG and ICO files. It uses
+// only the standard library.
 package icon
 
 import (

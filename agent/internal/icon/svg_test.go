@@ -5,7 +5,6 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"image"
 	"image/color"
 	"io"
 	"math"
@@ -15,48 +14,21 @@ import (
 
 type rect struct{ x0, y0, x1, y1 float64 }
 
-// Clawd rasterises an SVG made of one <path> whose d uses only M, V, H and
-// Z (absolute) to draw rectangles: the rectangles' union is scaled to fit a
-// size×size square, keeping its aspect and centred. A pixel is filled when
-// its centre is inside a rectangle; there is no anti-aliasing.
-func Clawd(svg []byte, size int) (*image.NRGBA, error) {
+// svgRects reads an SVG made of one <path> whose d uses only M, V, H and
+// Z (absolute) to draw rectangles: its rectangles and fill colour. The
+// tests compare the tray's Clawd grid with the GNOME extension's clawd.svg
+// this way (TestClawdArtIsTheSVGGrid).
+func svgRects(svg []byte) ([]rect, color.NRGBA, error) {
 	d, fill, err := onePath(svg)
 	if err != nil {
-		return nil, err
+		return nil, color.NRGBA{}, err
 	}
 	ink, err := parseHex(fill)
 	if err != nil {
-		return nil, err
+		return nil, color.NRGBA{}, err
 	}
 	rects, err := parseRects(d)
-	if err != nil {
-		return nil, err
-	}
-	bb := rects[0]
-	for _, r := range rects[1:] {
-		bb = rect{math.Min(bb.x0, r.x0), math.Min(bb.y0, r.y0), math.Max(bb.x1, r.x1), math.Max(bb.y1, r.y1)}
-	}
-	w, h := bb.x1-bb.x0, bb.y1-bb.y0
-	if w <= 0 || h <= 0 {
-		return nil, errors.New("clawd: empty drawing")
-	}
-	scale := float64(size) / math.Max(w, h)
-	offX := (float64(size) - w*scale) / 2
-	offY := (float64(size) - h*scale) / 2
-	img := image.NewNRGBA(image.Rect(0, 0, size, size))
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			ux := (float64(x)+0.5-offX)/scale + bb.x0
-			uy := (float64(y)+0.5-offY)/scale + bb.y0
-			for _, r := range rects {
-				if ux >= r.x0 && ux < r.x1 && uy >= r.y0 && uy < r.y1 {
-					img.SetNRGBA(x, y, ink)
-					break
-				}
-			}
-		}
-	}
-	return img, nil
+	return rects, ink, err
 }
 
 func onePath(svg []byte) (d, fill string, err error) {

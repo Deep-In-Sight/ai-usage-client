@@ -17,11 +17,7 @@ import (
 // grid laid over the drawing's bounding box.
 func gridOf(t *testing.T, svg []byte, cols, rows int) ([]string, color.NRGBA) {
 	t.Helper()
-	d, fill, err := onePath(svg)
-	must(t, err)
-	ink, err := parseHex(fill)
-	must(t, err)
-	rects, err := parseRects(d)
+	rects, ink, err := svgRects(svg)
 	must(t, err)
 	bb := rects[0]
 	for _, r := range rects[1:] {
