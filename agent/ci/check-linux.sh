@@ -218,6 +218,103 @@ tray_label_check() {
 }
 tray_label_check
 
+# tray.menu_reset: a fresh install with nobody signed in whose first status
+# comes after the 5 s the tray waits for it (the server takes the sync and
+# does not answer): the neutral helper's menu is built without a section,
+# then rebuilt (systray ResetMenu) when "Sign in to Claude Code" comes. The
+# menu is read as a tray host reads it (dbusmenu GetLayout) before and
+# after, and a click on the rebuilt menu reaches the agent.
+layout_of() { # layout_of FILE: the visible items as "label" lines, "-" for separators; first line the revision
+  python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("no_layout"); sys.exit()
+rev, root = d["data"][0], d["data"][1]
+print(rev)
+for k in root[2]:
+    i, props, _ = k["data"]
+    p = {n: v["data"] for n, v in props.items()}
+    if not p.get("visible", True):
+        continue
+    print("-" if p.get("type") == "separator" else "%d %s" % (i, p.get("label", "")))
+' "$1"
+}
+menu_reset_check() {
+  local bus_addr="" bus_pid="" wpid="" svc="" problems="" r1 r2 got1 got2 rid device5 fresh0
+  mkdir -p "$out/signin-aside"
+  mv "$HOME/.claude.json" "$HOME/.claude/.credentials.json" "$out/signin-aside/" 2>/dev/null
+  curl -fsS --max-time 10 -X POST "$BASE/hold?seconds=40" || problems="$problems hold_failed"
+  : > "$out/bus-reset.addr"; : > "$out/bus-reset.pid"
+  if ! dbus-daemon --session --fork --print-address=5 --print-pid=6 5>"$out/bus-reset.addr" 6>"$out/bus-reset.pid"; then
+    fail tray.menu_reset "dbus-daemon did not start"; return
+  fi
+  rbus_ready() { bus_addr=$(head -n 1 "$out/bus-reset.addr") && [ -n "$bus_addr" ] && bus_pid=$(head -n 1 "$out/bus-reset.pid") && [ -n "$bus_pid" ]; }
+  wait_for 10 rbus_ready || { fail tray.menu_reset "no bus address"; return; }
+  DBUS_SESSION_BUS_ADDRESS="$bus_addr" "$CI_BIN/fakewatcher" watch > "$out/watcher-reset.log" 2> "$out/watcher-reset.err" &
+  wpid=$!
+  rwatcher_ready() { grep -q '^ready$' "$out/watcher-reset.log"; }
+  getlayout() {
+    timeout 15 busctl --address="$bus_addr" --timeout=10 --json=short -- \
+      call "$svc" /StatusNotifierItem/menu com.canonical.dbusmenu GetLayout iias 0 -1 0 > "$1" 2>&1
+  }
+  if wait_for 10 rwatcher_ready; then
+    XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS="$bus_addr" oneliner > "$out/install-reset.log" 2>&1 || problems="$problems install_rc=$?"
+    rregistered() { svc=$(awk '$1 == "registered" { s = $2 } END { print s }' "$out/watcher-reset.log") && [ -n "$svc" ]; }
+    if wait_for 30 rregistered; then
+      getlayout "$out/menu-reset-1.json"
+      layout_of "$out/menu-reset-1.json" > "$out/menu-reset-1.txt"
+      r1=$(head -n 1 "$out/menu-reset-1.txt")
+      got1=$(tail -n +2 "$out/menu-reset-1.txt" | sed 's/^[0-9]* //' | tr '\n' '|')
+      # before the first status: the server line and the actions, no section
+      case "$got1" in "Connecting to the server…|-|Open dashboard|Refresh now|Start at login|Remove AI Usage|Quit|") ;;
+        *) problems="$problems first_menu=[$got1]" ;; esac
+      signin() { getlayout "$out/menu-reset-2.json" && layout_of "$out/menu-reset-2.json" > "$out/menu-reset-2.txt" && grep -q ' Sign in to Claude Code$' "$out/menu-reset-2.txt"; }
+      if wait_for 60 signin; then
+        r2=$(head -n 1 "$out/menu-reset-2.txt")
+        got2=$(tail -n +2 "$out/menu-reset-2.txt" | sed 's/^[0-9]* //' | tr '\n' '|')
+        # rebuilt: the prompt in its section, a separator, the server line,
+        # a separator, each action once
+        case "$got2" in "Sign in to Claude Code|-|"*"|-|Open dashboard|Refresh now|Start at login|Remove AI Usage|Quit|") ;;
+          *) problems="$problems rebuilt_menu=[$got2]" ;; esac
+        [ "$r2" -gt "$r1" ] 2>/dev/null || problems="$problems revision=$r1->$r2"
+        # a click on the rebuilt menu reaches the agent: Refresh now asks
+        # the server (answering again) for fresh numbers at once
+        curl -fsS --max-time 10 -X POST "$BASE/hold?seconds=0" || problems="$problems release_failed"
+        device5=$(cat "$data/device-id" 2>/dev/null)
+        fresh0=$(dev "$device5" want_fresh)
+        rid=$(awk '$2 == "Refresh" && $3 == "now" { print $1 }' "$out/menu-reset-2.txt")
+        if [ -n "$rid" ]; then
+          busctl --address="$bus_addr" --timeout=10 -- call "$svc" /StatusNotifierItem/menu com.canonical.dbusmenu \
+            Event isvu "$rid" clicked s "" 0 > "$out/menu-reset-click.txt" 2>&1 || problems="$problems click_failed"
+          fresh() { [ "$(dev "$device5" want_fresh)" -gt "${fresh0:-0}" ] 2>/dev/null; }
+          wait_for 90 fresh || problems="$problems click_not_heard(want_fresh=$(dev "$device5" want_fresh))"
+        else
+          problems="$problems no_refresh_item"
+        fi
+      else
+        problems="$problems no_signin_prompt=[$(tail -n +2 "$out/menu-reset-2.txt" 2>/dev/null | tr '\n' '|')]"
+      fi
+    else
+      problems="$problems not_registered"
+    fi
+    "$exe" uninstall > "$out/uninstall-reset.log" 2>&1 || problems="$problems uninstall_rc=$?"
+    sleep 2
+    [ "$(agent_count)" -eq 0 ] || problems="$problems processes_after_uninstall=$(agent_count)"
+  else
+    problems="$problems watcher_not_ready"
+  fi
+  curl -fsS --max-time 10 -X POST "$BASE/hold?seconds=0" > /dev/null 2>&1
+  mv "$out/signin-aside/.claude.json" "$HOME/" 2>/dev/null
+  mv "$out/signin-aside/.credentials.json" "$HOME/.claude/" 2>/dev/null
+  kill "$wpid" 2>/dev/null
+  kill "$bus_pid" 2>/dev/null
+  if [ -z "$problems" ]; then pass tray.menu_reset "revision $r1 -> $r2: [$got1] -> [$got2], a click on the rebuilt menu heard"
+  else fail tray.menu_reset "$problems"; fi
+}
+menu_reset_check
+
 # The session lifecycle across a logout and login (lifecycle-linux.sh):
 # tray.bus_restart, tray.relogin, tray.late_host and agent.log.
 # shellcheck source=lifecycle-linux.sh

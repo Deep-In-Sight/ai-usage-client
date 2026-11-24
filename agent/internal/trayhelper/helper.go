@@ -406,7 +406,12 @@ func (h *helper) build(shape []string, byID map[string]trayproto.Item) {
 	}
 }
 
-// apply shows a view, changing only what differs from what is shown.
+// apply shows a view, changing only what differs from what is shown. When
+// the set of sections shown changes, the menu is rebuilt (Reset): already
+// in a Claude-only build when the first status comes after the 5 s the
+// agent waits for it and nobody is signed in ("Sign in to Claude Code"
+// joins a menu built without a section; CI tray.menu_reset), and when a
+// provider appears or goes.
 func (h *helper) apply(v trayproto.Msg) {
 	h.view = &v
 	byID := map[string]trayproto.Item{}

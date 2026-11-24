@@ -4,7 +4,9 @@
 // never asks Anthropic),
 // serves the release files and the CI install scripts, and counts what it
 // saw. /stats shows counts and fake values only, never a key or a token.
-// POST /weekly?percent=N changes the weekly percentage it answers with.
+// POST /weekly?percent=N changes the weekly percentage it answers with;
+// POST /hold?seconds=N makes syncs wait that long before the answer (a
+// server that takes a sync and does not answer in time; 0 ends it).
 package main
 
 import (
@@ -54,6 +56,7 @@ type server struct {
 	tokenLeaks int
 	devices    map[string]*device
 	weekly     int // the weekly_all percentage syncs are answered with
+	hold       time.Duration
 }
 
 func newServer(cfg Config) http.Handler {
@@ -64,6 +67,7 @@ func newServer(cfg Config) http.Handler {
 	mux.HandleFunc("GET /files/{name}", s.file)
 	mux.HandleFunc("GET /stats", s.stats)
 	mux.HandleFunc("POST /weekly", s.setWeekly)
+	mux.HandleFunc("POST /hold", s.setHold)
 	return s.leakCheck(mux)
 }
 
@@ -105,6 +109,16 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		writeJSON(w, 401, map[string]string{"error": "bad_ingest_key"})
 		return
+	}
+	s.mu.Lock()
+	hold := s.hold
+	s.mu.Unlock()
+	if hold > 0 {
+		select {
+		case <-time.After(hold):
+		case <-r.Context().Done(): // the client gave up
+			return
+		}
 	}
 	var req struct {
 		Schema int `json:"schema"`
@@ -249,6 +263,20 @@ func (s *server) setWeekly(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	s.weekly = v
+	s.mu.Unlock()
+	w.WriteHeader(204)
+}
+
+// setHold makes later syncs wait before they are answered (POST
+// /hold?seconds=0..600; 0: answer at once again).
+func (s *server) setHold(w http.ResponseWriter, r *http.Request) {
+	v, err := strconv.Atoi(r.URL.Query().Get("seconds"))
+	if err != nil || v < 0 || v > 600 {
+		writeJSON(w, 400, map[string]string{"error": "seconds must be 0..600"})
+		return
+	}
+	s.mu.Lock()
+	s.hold = time.Duration(v) * time.Second
 	s.mu.Unlock()
 	w.WriteHeader(204)
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -271,5 +273,51 @@ func TestSchema1Only(t *testing.T) {
 	code, _ = post(t, srv, "Bearer "+key, `{"schema":1,"client":{"version":"0.0.0-ci","mode":"headless"},"device":{"id":"dev-1"},"auth":{"state":"ok"},"results":[],"want_fresh":false}`)
 	if code != 200 {
 		t.Fatalf("schema 1: %d", code)
+	}
+}
+
+// POST /hold?seconds=N makes syncs wait N seconds before they are answered
+// (a server that takes a sync and does not answer in time), 0 ends it.
+func TestSyncCanBeHeld(t *testing.T) {
+	srv, _ := newTest(t)
+	hold := func(v string) int {
+		t.Helper()
+		res, err := http.Post(srv.URL+"/hold?seconds="+v, "text/plain", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	if code := hold("1"); code != 204 {
+		t.Fatalf("hold: %d", code)
+	}
+	start := time.Now()
+	if code, _ := post(t, srv, "Bearer "+key, syncBody("d1", "tray", false)); code != 200 {
+		t.Fatalf("held sync: %d", code)
+	}
+	if d := time.Since(start); d < time.Second {
+		t.Fatalf("answered after %v", d)
+	}
+	// a client that gives up ends the wait
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "POST", srv.URL+"/api/v1/sync", strings.NewReader(syncBody("d1", "tray", false)))
+	req.Header.Set("Authorization", "Bearer "+key)
+	if _, err := http.DefaultClient.Do(req); err == nil {
+		t.Fatal("answered within the hold")
+	}
+	if code := hold("0"); code != 204 {
+		t.Fatalf("release: %d", code)
+	}
+	start = time.Now()
+	post(t, srv, "Bearer "+key, syncBody("d1", "tray", false))
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Fatalf("still held: %v", d)
+	}
+	for _, bad := range []string{"", "x", "-1", "601"} {
+		if code := hold(bad); code != 400 {
+			t.Fatalf("%q: %d", bad, code)
+		}
 	}
 }
