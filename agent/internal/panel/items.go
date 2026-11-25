@@ -5,7 +5,7 @@ import "github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
 // Item is what a helper draws for one menu item of the panel: a section's
 // header (with its problem line, drawn under it) or one of its rows.
 type Item struct {
-	Kind string `json:"kind"` // "header" | "row" | "more"
+	Kind string `json:"kind"` // "header" | "row" | "more" | "action" | "info"
 
 	// header
 	Provider string `json:"provider"` // also on rows
@@ -22,6 +22,15 @@ type Item struct {
 	Percent     *float64 `json:"percent"`
 
 	Stale bool `json:"stale"` // the section's numbers are old: drawn at StaleOpacity
+
+	// text items, which only Windows draws itself ("action": newversion
+	// and the actions, behind a check-mark column; "info": the server
+	// line and the sign-in prompt)
+	Text     string `json:"text"`
+	Enabled  bool   `json:"enabled"`
+	Checkbox bool   `json:"checkbox"`
+	Checked  bool   `json:"checked"`
+	Dim      bool   `json:"dim"` // an info line in the dim colour (the server line)
 }
 
 // Items are the panel's drawn items by menu item id: "h.<provider>" for

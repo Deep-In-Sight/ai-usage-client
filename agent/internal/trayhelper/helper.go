@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"reflect"
 	"runtime"
 	"slices"
 	"sync"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/icon"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/notify"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/panel"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
@@ -106,7 +108,9 @@ type helper struct {
 	endOnce  sync.Once
 
 	// what is shown
-	shape      []string // the sections the menu was built with
+	shape      []string              // the sections the menu was built with
+	drawing    bool                  // the menu is the drawn usage panel
+	drawn      map[string]panel.Item // what each drawn item was last given
 	items      map[string]uiItem
 	shown      map[string]trayproto.Item
 	clicks     chan string
@@ -413,9 +417,11 @@ func sectionsShown(items []trayproto.Item) []string {
 }
 
 // build creates the menu for these sections: each shown section and the
-// server line are followed by a separator. The items are set by apply.
-func (h *helper) build(shape []string, byID map[string]trayproto.Item) {
-	h.shape, h.items, h.shown = shape, map[string]uiItem{}, map[string]trayproto.Item{}
+// server line are followed by a separator. The drawn panel (drawing) has
+// separators the ui draws, and none after the server line: its actions
+// follow it at once (the approved mock). The items are set by apply.
+func (h *helper) build(shape []string, byID map[string]trayproto.Item, drawing bool) {
+	h.shape, h.drawing, h.items, h.shown, h.drawn = shape, drawing, map[string]uiItem{}, map[string]trayproto.Item{}, map[string]panel.Item{}
 	for _, id := range trayproto.ItemIDs {
 		sec := trayproto.Section(id)
 		if sec != "" && !slices.Contains(shape, sec) {
@@ -428,8 +434,8 @@ func (h *helper) build(shape []string, byID map[string]trayproto.Item) {
 				h.clicks <- id
 			}
 		}(id, it.Clicked())
-		if (sec != "" && id == "p."+sec) || id == "server" {
-			h.d.ui.AddSeparator()
+		if (sec != "" && id == "p."+sec) || (id == "server" && !drawing) {
+			h.d.ui.AddSeparator(drawing)
 		}
 	}
 }
@@ -440,17 +446,32 @@ func (h *helper) build(shape []string, byID map[string]trayproto.Item) {
 // agent waits for it and nobody is signed in ("Sign in to Claude Code"
 // joins a menu built without a section; CI tray.menu_reset), and when a
 // provider appears or goes.
+//
+// A ui that draws (Windows) gets the usage panel when the view carries
+// one (design 6.2): every visible item is drawn from drawnItems, a
+// section's problem line under its header (its own item hidden), the
+// server line with the panel's text. Otherwise the menu is today's text
+// menu exactly.
 func (h *helper) apply(v trayproto.Msg) {
 	h.view = &v
 	byID := map[string]trayproto.Item{}
 	for _, it := range v.Items {
 		byID[it.ID] = it
 	}
-	if shape := sectionsShown(v.Items); h.items == nil || !slices.Equal(shape, h.shape) {
+	var drawn map[string]panel.Item
+	if v.Panel != nil && h.d.ui.Draws() {
+		drawn = drawnItems(*v.Panel, byID)
+		if s, ok := byID["server"]; ok {
+			s.Text = v.Panel.Server
+			byID["server"] = s
+		}
+	}
+	drawing := drawn != nil
+	if shape := sectionsShown(v.Items); h.items == nil || !slices.Equal(shape, h.shape) || drawing != h.drawing {
 		if h.items != nil {
 			h.d.ui.Reset()
 		}
-		h.build(shape, byID)
+		h.build(shape, byID, drawing)
 	}
 	for _, id := range trayproto.ItemIDs {
 		m, ok := h.items[id]
@@ -459,10 +480,14 @@ func (h *helper) apply(v trayproto.Msg) {
 		}
 		it, old := byID[id], h.shown[id]
 		_, seen := h.shown[id]
-		if !seen || it.Text != old.Text {
+		if drawing && hiddenUnderHeader(id, drawn) {
+			it.Visible = false
+		}
+		titled := !seen || it.Text != old.Text
+		if titled {
 			m.SetTitle(it.Text)
 		}
-		if !seen || it.Image != old.Image {
+		if !drawing && (!seen || it.Image != old.Image) { // a drawn header draws its picture itself
 			if img := menuImage(h.d.goos, it.Image); img != nil || seen {
 				m.SetImage(img)
 			}
@@ -473,7 +498,15 @@ func (h *helper) apply(v trayproto.Msg) {
 		if it.Checkbox && (!seen || it.Checked != old.Checked) {
 			m.SetChecked(it.Checked)
 		}
-		if !seen || it.Visible != old.Visible {
+		if d, ok := drawn[id]; ok {
+			if last, set := h.drawn[id]; !set || !reflect.DeepEqual(last, d) {
+				m.SetDrawn(&d)
+				h.drawn[id] = d
+			}
+		}
+		// Windows' tray library shows a hidden item again when its title
+		// is set: hide it again then
+		if !seen || it.Visible != old.Visible || (titled && !it.Visible) {
 			m.SetVisible(it.Visible)
 		}
 		h.shown[id] = it

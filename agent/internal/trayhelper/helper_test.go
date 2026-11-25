@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/icon"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/panel"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
 )
 
@@ -44,6 +45,7 @@ type fakeUI struct {
 	lost     chan struct{}
 	shown    atomic.Bool
 	size     atomic.Int32
+	draws    bool // the ui draws the panel's items itself (Windows)
 }
 
 type fakeItem struct {
@@ -55,6 +57,10 @@ type fakeItem struct {
 	enabled, visible, checked bool
 	image                     []byte
 	clicked                   chan struct{}
+	drawn                     *panel.Item // what SetDrawn last gave (nil: a text item)
+	drawnSets                 int
+	// sets: the calls in order ("title", "visible=false", "drawn", ...)
+	sets []string
 }
 
 func newFakeUI() *fakeUI {
@@ -98,11 +104,16 @@ func (u *fakeUI) AddItem(id string, checkbox bool) uiItem {
 	u.items[id] = it
 	return it
 }
-func (u *fakeUI) AddSeparator() {
+func (u *fakeUI) AddSeparator(drawn bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if drawn {
+		u.layout = append(u.layout, "=")
+		return
+	}
 	u.layout = append(u.layout, "-")
 }
+func (u *fakeUI) Draws() bool { return u.draws }
 func (u *fakeUI) Reset() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -137,7 +148,8 @@ func (u *fakeUI) snapshot() (layout []string, items map[string]fakeItem, icons, 
 	items = map[string]fakeItem{}
 	for k, v := range u.items {
 		v.mu.Lock()
-		items[k] = fakeItem{id: v.id, checkbox: v.checkbox, title: v.title, titles: v.titles, enabled: v.enabled, visible: v.visible, checked: v.checked, image: v.image}
+		items[k] = fakeItem{id: v.id, checkbox: v.checkbox, title: v.title, titles: v.titles, enabled: v.enabled, visible: v.visible, checked: v.checked, image: v.image,
+			drawn: v.drawn, drawnSets: v.drawnSets, sets: append([]string(nil), v.sets...)}
 		v.mu.Unlock()
 	}
 	return append([]string(nil), u.layout...), items, len(u.icons), len(u.titles), len(u.tooltips), u.resets
@@ -148,9 +160,28 @@ func (i *fakeItem) SetTitle(s string) {
 	defer i.mu.Unlock()
 	i.title = s
 	i.titles++
+	i.sets = append(i.sets, "title")
 }
 func (i *fakeItem) SetEnabled(b bool) { i.mu.Lock(); i.enabled = b; i.mu.Unlock() }
-func (i *fakeItem) SetVisible(b bool) { i.mu.Lock(); i.visible = b; i.mu.Unlock() }
+func (i *fakeItem) SetVisible(b bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.visible = b
+	if !b {
+		i.sets = append(i.sets, "visible=false")
+	}
+}
+func (i *fakeItem) SetDrawn(it *panel.Item) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if it != nil {
+		c := *it
+		it = &c
+	}
+	i.drawn = it
+	i.drawnSets++
+	i.sets = append(i.sets, "drawn")
+}
 func (i *fakeItem) SetChecked(b bool) { i.mu.Lock(); i.checked = b; i.mu.Unlock() }
 func (i *fakeItem) SetImage(b []byte) { i.mu.Lock(); i.image = b; i.mu.Unlock() }
 func (i *fakeItem) Clicked() <-chan struct{} {

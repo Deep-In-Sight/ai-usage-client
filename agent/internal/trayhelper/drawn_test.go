@@ -1,0 +1,231 @@
+package trayhelper
+
+import (
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/panel"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray/panelfixture"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
+)
+
+// fixtureView is the view the tray loop sends for in: the menu's items
+// and the panel.
+func fixtureView(in tray.MenuInputs) trayproto.Msg {
+	p := tray.BuildPanel(in)
+	pct := 42.0
+	return trayproto.Msg{Type: trayproto.TypeView, Items: tray.BuildMenu(in), Panel: &p,
+		Icon: &trayproto.Icon{Provider: "claude", Percent: &pct, Level: "normal"}, Tooltip: "AI Usage"}
+}
+
+func drawnRun(t *testing.T, draws bool, goos string) *run {
+	t.Helper()
+	ui := newFakeUI()
+	ui.draws = draws
+	r := startRun(t, runOpts{goos: goos, ui: ui})
+	r.hello()
+	return r
+}
+
+// Plan Task 8, pre-flight F8: a ui that draws (Windows; macOS from Task 9)
+// gets every item of the panel to draw, the header carrying its problem
+// line; one that does not (Linux) gets today's menu, unchanged.
+func TestPanelItemsAreDrawnOnWindowsAndMac(t *testing.T) {
+	v := fixtureView(panelfixture.States())
+	want := panel.Items(*v.Panel)
+
+	r := drawnRun(t, true, "windows")
+	r.send(v)
+	eq(t, r.next().Type, trayproto.TypeReady)
+	layout, items, _, _, _, _ := r.ui.snapshot()
+	eq(t, strings.Join(layout, " "), "newversion h.claude r.claude.0 r.claude.1 r.claude.2 r.claude.3 r.claude.4 p.claude = "+
+		"h.codex r.codex.0 r.codex.1 r.codex.2 r.codex.3 r.codex.4 p.codex = server dashboard refresh autostart remove quit")
+	for _, id := range []string{"h.claude", "r.claude.0", "r.claude.1", "r.claude.2", "h.codex", "r.codex.0", "r.codex.1"} {
+		if items[id].drawn == nil || !items[id].visible {
+			t.Fatalf("%s: drawn %v visible %v", id, items[id].drawn, items[id].visible)
+		}
+		eq(t, *items[id].drawn, want[id])
+	}
+	eq(t, items["h.codex"].drawn.Problem, text.CodexExpired)
+	eq(t, items["p.codex"].visible, false) // drawn under the header instead
+	eq(t, items["p.codex"].drawn == nil, true)
+	eq(t, items["h.claude"].image == nil, true) // the header's picture is drawn
+	eq(t, items["server"].title, v.Panel.Server)
+	eq(t, *items["server"].drawn, panel.Item{Kind: "info", Text: v.Panel.Server, Dim: true})
+	eq(t, *items["refresh"].drawn, panel.Item{Kind: "action", Text: "Refresh now", Enabled: true})
+	eq(t, *items["autostart"].drawn, panel.Item{Kind: "action", Text: "Start at login", Enabled: true, Checkbox: true, Checked: true})
+	eq(t, items["r.claude.3"].visible, false)
+	eq(t, items["r.claude.3"].drawn == nil, true)
+	eq(t, items["newversion"].drawn == nil, true) // hidden
+	if strings.Contains(v.Panel.Server, "Updated") {
+		t.Fatalf("server line %q", v.Panel.Server)
+	}
+
+	// a ui that does not draw: the text menu of today
+	r = drawnRun(t, false, "linux")
+	r.send(v)
+	eq(t, r.next().Type, trayproto.TypeReady)
+	layout, items, _, _, _, _ = r.ui.snapshot()
+	eq(t, strings.Join(layout, " "), "newversion h.claude r.claude.0 r.claude.1 r.claude.2 r.claude.3 r.claude.4 p.claude - "+
+		"h.codex r.codex.0 r.codex.1 r.codex.2 r.codex.3 r.codex.4 p.codex - server - dashboard refresh autostart remove quit")
+	for id := range items {
+		if items[id].drawnSets != 0 {
+			t.Fatalf("%s drawn on a ui that does not draw", id)
+		}
+	}
+	eq(t, items["p.codex"].visible, true)
+	eq(t, items["p.codex"].title, text.CodexExpired)
+	if !strings.Contains(items["server"].title, "Updated 18:30") {
+		t.Fatalf("server %q", items["server"].title)
+	}
+
+	// a ui that draws, without a panel in the view: today's menu too
+	r = drawnRun(t, true, "windows")
+	nv := v
+	nv.Panel = nil
+	r.send(nv)
+	eq(t, r.next().Type, trayproto.TypeReady)
+	layout, items, _, _, _, _ = r.ui.snapshot()
+	if strings.Contains(strings.Join(layout, " "), "=") || items["h.codex"].drawnSets != 0 || !items["p.codex"].visible {
+		t.Fatalf("drawn without a panel: %v", layout)
+	}
+}
+
+// A view without Codex rebuilds the drawn menu; one with fewer Claude
+// rows hides the row that went; a changed row is drawn anew, an unchanged
+// one is not set again.
+func TestDrawnItemsFollowTheView(t *testing.T) {
+	r := drawnRun(t, true, "windows")
+	in := panelfixture.Combined()
+	r.send(fixtureView(in))
+	eq(t, r.next().Type, trayproto.TypeReady)
+	_, items, _, _, _, _ := r.ui.snapshot()
+	sets := items["r.claude.1"].drawnSets
+
+	noCodex := panelfixture.Combined()
+	delete(noCodex.Snap.Providers, provider.Codex)
+	r.send(fixtureView(noCodex))
+	waitFor(t, "the rebuild", func() bool {
+		layout, _, _, _, _, resets := r.ui.snapshot()
+		return resets == 1 && !strings.Contains(strings.Join(layout, " "), "h.codex") && layout[len(layout)-1] == "quit"
+	})
+	layout, items, _, _, _, _ := r.ui.snapshot()
+	eq(t, strings.Join(layout, " "), "newversion h.claude r.claude.0 r.claude.1 r.claude.2 r.claude.3 r.claude.4 p.claude = "+
+		"server dashboard refresh autostart remove quit")
+	if items["h.claude"].drawn == nil || items["r.claude.2"].drawn == nil || !items["r.claude.2"].visible {
+		t.Fatal("the rebuilt menu is not drawn")
+	}
+
+	fewer := panelfixture.Combined()
+	delete(fewer.Snap.Providers, provider.Codex)
+	c := fewer.Snap.Providers[provider.Claude]
+	c.Rows = c.Rows[:2] // no Fable
+	c.Rows[0].Percent = new(float64)
+	*c.Rows[0].Percent = 57
+	fewer.Snap.Providers[provider.Claude] = c
+	r.send(fixtureView(fewer))
+	waitFor(t, "Fable to go", func() bool {
+		_, items, _, _, _, _ := r.ui.snapshot()
+		return !items["r.claude.2"].visible
+	})
+	_, items, _, _, _, resets := r.ui.snapshot()
+	eq(t, resets, 1)
+	eq(t, items["r.claude.0"].drawn.PercentText, "57%")
+	eq(t, items["r.claude.1"].drawnSets, sets) // the same as before the rebuild: set once since
+}
+
+// A hidden item whose text changes stays hidden: the Windows tray library
+// shows an item again when its title is set (upstream), so the helper hides
+// it again (the problem line under a drawn header changes its text when
+// the problem does).
+func TestHiddenItemStaysHiddenWhenItsTextChanges(t *testing.T) {
+	r := drawnRun(t, true, "windows")
+	st := panelfixture.States()
+	r.send(fixtureView(st))
+	eq(t, r.next().Type, trayproto.TypeReady)
+	other := panelfixture.States()
+	x := other.Snap.Providers[provider.Codex]
+	x.State = "unsupported_store"
+	other.Snap.Providers[provider.Codex] = x
+	v := fixtureView(other)
+	r.send(v)
+	waitFor(t, "the new problem", func() bool {
+		_, items, _, _, _, _ := r.ui.snapshot()
+		return items["h.codex"].drawn != nil && items["h.codex"].drawn.Problem != text.CodexExpired
+	})
+	_, items, _, _, _, _ := r.ui.snapshot()
+	sets := items["p.codex"].sets
+	eq(t, items["p.codex"].visible, false)
+	if n := len(sets); n < 2 || sets[n-1] != "visible=false" {
+		t.Fatalf("p.codex calls %v: not hidden after its title", sets)
+	}
+}
+
+// RF4: the drawing data of an item is swapped whole while it is read.
+func TestDrawStoreWhileViewChanges(t *testing.T) {
+	var s drawStore
+	a := panel.Items(tray.BuildPanel(panelfixture.Combined()))
+	b := panel.Items(tray.BuildPanel(panelfixture.States()))
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := range 1000 {
+			src := a
+			if i%2 == 1 {
+				src = b
+			}
+			for _, id := range []string{"h.codex", "r.codex.0", "r.codex.1"} {
+				it := src[id]
+				s.Set(uint32(len(id)), &it)
+			}
+			if i%10 == 9 {
+				s.Set(9, nil)
+			}
+		}
+	}()
+	m := panel.MetricsAt(96)
+	for range 1000 {
+		for _, id := range []uint32{7, 9} {
+			it, ok := s.Get(id)
+			if !ok {
+				continue
+			}
+			w, h := panel.Size(it, m, testMeasurer{})
+			_ = panel.Layout(it, m, testMeasurer{}, w, h, panel.LightPalette, true)
+		}
+	}
+	wg.Wait()
+}
+
+type testMeasurer struct{}
+
+func (testMeasurer) TextWidth(_ panel.Font, s string) int { return 7 * len([]rune(s)) }
+func (testMeasurer) LineHeight(panel.Font) int            { return 16 }
+
+// One switch pins the panel to light: off, no mode is read and nothing is
+// dark; on, apps in dark mode get the dark panel, anything unclear the
+// light one, and high contrast the system's colours (light).
+func TestDarkOnlyWhenAppsAreDark(t *testing.T) {
+	reads := 0
+	read := func(v uint32, err error) func() (uint32, error) {
+		return func() (uint32, error) { reads++; return v, err }
+	}
+	no := func() bool { return false }
+	eq(t, themeFor(false, read(0, nil), no), menuTheme{})
+	eq(t, reads, 0)
+	eq(t, themeFor(true, read(0, nil), no), menuTheme{Dark: true})
+	eq(t, themeFor(true, read(1, nil), no), menuTheme{})
+	eq(t, themeFor(true, read(0, errors.New("no such value")), no), menuTheme{})
+	eq(t, themeFor(true, read(0, nil), func() bool { return true }), menuTheme{})
+	eq(t, menuTheme{Dark: true}.palette(panel.LightPalette), panel.DarkPalette)
+	light := panel.LightPalette
+	light.Background.R = 0xee // the system's own
+	eq(t, menuTheme{}.palette(light), light)
+	eq(t, followDarkMode, true)
+}

@@ -1,5 +1,7 @@
 package trayhelper
 
+import "github.com/Deep-In-Sight/ai-usage-client/agent/internal/panel"
+
 // ui is the tray library as a helper uses it (the real one is fyne's
 // systray copy in third_party/systray; tests use a fake).
 type ui interface {
@@ -9,7 +11,13 @@ type ui interface {
 	Run(onReady, onExit func())
 	Quit()
 	AddItem(id string, checkbox bool) uiItem
-	AddSeparator()
+	// AddSeparator adds a separator; drawn: one the ui draws itself (in a
+	// menu whose items it draws).
+	AddSeparator(drawn bool)
+	// Draws reports whether this ui draws the usage panel's items itself
+	// (Windows; macOS once its views come, plan Task 9). Otherwise the
+	// menu is text items (pre-flight F8: asked, not decided by the OS).
+	Draws() bool
 	// Reset removes every item (their Clicked channels close).
 	Reset()
 	SetIcon(img []byte)
@@ -34,4 +42,13 @@ type uiItem interface {
 	SetChecked(bool)
 	SetImage([]byte)
 	Clicked() <-chan struct{}
+	// SetDrawn has the ui draw the item from it (nil: a text item again);
+	// nothing on a ui that does not draw.
+	SetDrawn(it *panel.Item)
+}
+
+// itemDrawer keeps what each drawn item draws, by its menu id (Windows'
+// drawer; nil where the ui does not draw).
+type itemDrawer interface {
+	Set(id uint32, it *panel.Item)
 }

@@ -244,19 +244,19 @@ func TestItemsCarryThePanel(t *testing.T) {
 		names = append(names, k)
 	}
 	slices.Sort(names)
-	eq(t, names, []string{"account", "detail", "kind", "label", "level", "name", "percent", "percent_text", "problem", "provider", "stale", "updated"})
+	eq(t, names, []string{"account", "checkbox", "checked", "detail", "dim", "enabled", "kind", "label", "level", "name", "percent", "percent_text", "problem", "provider", "stale", "text", "updated"})
 }
 
 func TestMetricsScale(t *testing.T) {
 	for dpi, want := range map[int]Metrics{
-		96:  {Width: 320, Header: 32, Problem: 28, Row: 64, Pad: 12, Bar: 8},
-		120: {Width: 400, Header: 40, Problem: 35, Row: 80, Pad: 15, Bar: 10},
-		144: {Width: 480, Header: 48, Problem: 42, Row: 96, Pad: 18, Bar: 12},
-		192: {Width: 640, Header: 64, Problem: 56, Row: 128, Pad: 24, Bar: 16},
+		96:  {Width: 320, Header: 32, Problem: 28, Row: 64, Pad: 16, Bar: 8, Item: 30, Separator: 13, Picture: 18, Check: 22},
+		120: {Width: 400, Header: 40, Problem: 35, Row: 80, Pad: 20, Bar: 10, Item: 38, Separator: 16, Picture: 23, Check: 28},
+		144: {Width: 480, Header: 48, Problem: 42, Row: 96, Pad: 24, Bar: 12, Item: 45, Separator: 20, Picture: 27, Check: 33},
+		192: {Width: 640, Header: 64, Problem: 56, Row: 128, Pad: 32, Bar: 16, Item: 60, Separator: 26, Picture: 36, Check: 44},
 		// DPIs that do not scale every value exactly: halves round up,
 		// the rest to the nearest (review m4)
-		108: {Width: 360, Header: 36, Problem: 32, Row: 72, Pad: 14, Bar: 9}, // 31.5, 13.5
-		100: {Width: 333, Header: 33, Problem: 29, Row: 67, Pad: 13, Bar: 8}, // 333.3, 29.2, 66.7, 12.5, 8.3
+		108: {Width: 360, Header: 36, Problem: 32, Row: 72, Pad: 18, Bar: 9, Item: 34, Separator: 15, Picture: 20, Check: 25},
+		100: {Width: 333, Header: 33, Problem: 29, Row: 67, Pad: 17, Bar: 8, Item: 31, Separator: 14, Picture: 19, Check: 23},
 	} {
 		if got := MetricsAt(dpi); got != want {
 			t.Fatalf("MetricsAt(%d) = %+v, want %+v", dpi, got, want)

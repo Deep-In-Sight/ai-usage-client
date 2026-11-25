@@ -7,22 +7,27 @@ import (
 	"runtime"
 
 	"fyne.io/systray"
+
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/panel"
 )
 
 // Compiled is true: this build has a tray.
 const Compiled = true
 
 // systrayUI is the patched fyne systray copy (third_party/systray).
-type systrayUI struct{ iconDir string }
+type systrayUI struct {
+	iconDir string
+	drawer  itemDrawer // nil: this OS's menu is text items
+}
 
 func newUI(o Options) ui {
 	setTrayID(o.UID)
-	return systrayUI{iconDir: o.IconDir}
+	return systrayUI{iconDir: o.IconDir, drawer: newItemDrawer()}
 }
 
 func (systrayUI) Run(onReady, onExit func()) { systray.Run(onReady, onExit) }
 func (systrayUI) Quit()                      { systray.Quit() }
-func (systrayUI) AddSeparator()              { systray.AddSeparator() }
+func (u systrayUI) Draws() bool              { return u.drawer != nil }
 func (systrayUI) Reset()                     { systray.ResetMenu() }
 func (systrayUI) SetNextToIcon(s string)     { setNextToIcon(s) }
 func (systrayUI) SetTooltip(s string)        { systray.SetTooltip(s) }
@@ -32,9 +37,17 @@ func (systrayUI) IconSize() int              { return trayIconSize() }
 
 func (u systrayUI) AddItem(_ string, checkbox bool) uiItem {
 	if checkbox {
-		return systrayItem{systray.AddMenuItemCheckbox("", "", false), u.iconDir}
+		return systrayItem{systray.AddMenuItemCheckbox("", "", false), u.iconDir, u.drawer}
 	}
-	return systrayItem{systray.AddMenuItem("", ""), u.iconDir}
+	return systrayItem{systray.AddMenuItem("", ""), u.iconDir, u.drawer}
+}
+
+func (u systrayUI) AddSeparator(drawn bool) {
+	if drawn && u.drawer != nil {
+		systray.AddOwnerDrawnSeparator()
+		return
+	}
+	systray.AddSeparator()
 }
 
 // SetIcon shows img. On Windows the library needs a file: it gets one of
@@ -57,6 +70,17 @@ func (u systrayUI) SetIcon(img []byte) {
 type systrayItem struct {
 	m       *systray.MenuItem
 	iconDir string
+	drawer  itemDrawer
+}
+
+// SetDrawn: the drawer gets the item's data first, then the menu item
+// becomes owner-drawn (or a text item again).
+func (i systrayItem) SetDrawn(it *panel.Item) {
+	if i.drawer == nil {
+		return
+	}
+	i.drawer.Set(i.m.ID(), it)
+	i.m.SetOwnerDrawn(it != nil)
 }
 
 func (i systrayItem) SetTitle(s string) { i.m.SetTitle(s) }
