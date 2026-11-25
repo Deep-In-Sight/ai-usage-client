@@ -22,6 +22,10 @@ import (
 // removal (plan PR-14).
 const panelBusTimeout = 2 * time.Second
 
+// writePanel writes the extension's folder (gnomeext.Write; tests make it
+// fail).
+var writePanel = gnomeext.Write
+
 // shellBus connects to the session bus at the address the helpers use
 // (gnomeext.DialSession: never one that would start a bus, plan RF3),
 // giving up when ctx ends.
@@ -51,10 +55,14 @@ func shellBus(ctx context.Context, getenv func(string) string) (*dbus.Conn, erro
 // installPanelExtension writes the extension for the GNOME Shell of the
 // installing session when that shell answers on the session bus within
 // panelBusTimeout and is one the panel supports; first reports that the
-// extension's folder was not there before (install then says the panel
-// comes after the next login). Anything else (no bus: SSH, "su -", before
-// the first GNOME login; another desktop; a failure) writes nothing and
-// says nothing: the bridge writes it at the next GNOME login (design 6.4).
+// extension's folder was not there before and was written, and that the
+// shell loads extensions from users' folders (UserExtensionsEnabled true:
+// review A-M4), so install says the panel comes after the next login.
+// Anything else (no bus: SSH, "su -", before the first GNOME login;
+// another desktop; a failure) writes nothing and says nothing: the bridge
+// writes it at the next GNOME login (design 6.4). With user extensions
+// switched off the folder is written all the same (it is ready if they
+// are switched on), without the promise.
 func installPanelExtension(env Env) (first bool) {
 	dir, err := gnomeext.Dir(env.Getenv, env.Dirs.Home)
 	if err != nil {
@@ -66,19 +74,21 @@ func installPanelExtension(env Env) (first bool) {
 	if err != nil {
 		return false
 	}
+	defer conn.Close()
 	major, _, err := gnomeext.ShellMajor(ctx, conn)
-	conn.Close()
 	if err != nil {
 		return false
 	}
 	if _, ok := gnomeext.FormFor(major); !ok {
 		return false
 	}
+	userOn, err := gnomeext.UserExtensionsEnabled(ctx, conn)
+	loads := err == nil && userOn
 	_, statErr := os.Lstat(dir)
-	if _, err := gnomeext.Write(dir, major); err != nil { // never leaves a half-written folder
+	if _, err := writePanel(dir, major); err != nil { // never leaves a half-written folder
 		return false
 	}
-	return errors.Is(statErr, os.ErrNotExist)
+	return errors.Is(statErr, os.ErrNotExist) && loads
 }
 
 // removePanelExtension is the removal step remove-gnome-extension: with a

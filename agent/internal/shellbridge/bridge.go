@@ -6,9 +6,10 @@
 // whether the extension is attached and passes clicks back. It writes the
 // extension's files for the running shell (gnomeext.Write) and, once,
 // turns the extension on. Like an icon helper it ends with 75 when the
-// session bus goes away; with 78 when the session has no GNOME Shell the
-// panel supports. Everything it does on the bus lives in Linux-only files:
-// on other systems Run only ends with 78.
+// session bus goes away; with 78 when the session's GNOME Shell is of a
+// version the panel does not support (a bus without a shell yet is waited
+// on: the shell may come later). Everything it does on the bus lives in
+// Linux-only files: on other systems Run only ends with 78.
 package shellbridge
 
 import (

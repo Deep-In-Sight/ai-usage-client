@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -229,5 +230,86 @@ func TestRemoveWithoutBusDeletesTheFolder(t *testing.T) {
 	}
 	if !slices.Contains(removalSteps("linux", false), "remove-gnome-extension") {
 		t.Fatal("no step")
+	}
+}
+
+// Review A-M4: a shell with user extensions switched off (the user, or an
+// administrator: disable-user-extensions) loads no extension from the
+// user's folder: install writes the folder all the same (ready if they are
+// switched on) but promises no panel; nor when the shell does not say.
+func TestInstallPromisesNoPanelWhereUserExtensionsAreOff(t *testing.T) {
+	for _, o := range []fakeshell.Options{{Version: "46.0", UserExtensionsOff: true}, {Version: "50.1", NoUserExtensions: true}} {
+		bus := fakeshell.NewBus(t, "")
+		fakeshell.Start(t, bus.Addr, o)
+		te := gnomeEnv(t, bus.Addr)
+		eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
+		if !isCurrent(t, te.panelDir(), "gnome46") {
+			t.Fatalf("%+v: not written", o)
+		}
+		if strings.Contains(te.out.String(), text.PanelAfterRelogin) {
+			t.Fatalf("%+v: %s", o, te.out.String())
+		}
+	}
+}
+
+// Review A-M3: a shell that answers nothing (stuck) holds install and
+// removal up for panelBusTimeout only: install writes nothing and promises
+// nothing; uninstall reports the failed Disable and removes the folder.
+func TestAStuckShellDoesNotHoldInstallOrRemovalUp(t *testing.T) {
+	bus := fakeshell.NewBus(t, "")
+	sh := fakeshell.Start(t, bus.Addr, fakeshell.Options{Hang: true})
+	te := gnomeEnv(t, bus.Addr)
+	start := time.Now()
+	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
+	if d := time.Since(start); d < panelBusTimeout || d > panelBusTimeout+3*time.Second {
+		t.Fatalf("install took %v with a stuck shell", d)
+	}
+	absent(t, filepath.Join(te.home, ".local", "share", "gnome-shell"))
+	if strings.Contains(te.out.String(), text.PanelAfterRelogin) {
+		t.Fatal(te.out.String())
+	}
+	_, err := gnomeext.Write(te.panelDir(), 46)
+	must(t, err)
+	te.err.Reset()
+	start = time.Now()
+	eq(t, te.main("uninstall"), 0)
+	if d := time.Since(start); d > panelBusTimeout+3*time.Second {
+		t.Fatalf("uninstall took %v with a stuck shell", d)
+	}
+	eq(t, sh.Calls(), []string{"DisableExtension " + gnomeext.UUID})
+	absent(t, te.panelDir())
+	eq(t, strings.Count(te.err.String(), "turning the panel extension off"), 1)
+}
+
+// Review A-M3: uninstall on a session bus without GNOME Shell (another
+// desktop) removes the folder and says nothing of turning it off.
+func TestRemoveOnAnotherDesktopSaysNothing(t *testing.T) {
+	bus := fakeshell.NewBus(t, "")
+	te := gnomeEnv(t, bus.Addr)
+	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
+	_, err := gnomeext.Write(te.panelDir(), 46)
+	must(t, err)
+	te.err.Reset()
+	eq(t, te.main("uninstall"), 0)
+	absent(t, te.panelDir())
+	if strings.Contains(te.err.String(), "panel extension") {
+		t.Fatalf("stderr %q", te.err.String())
+	}
+}
+
+// Review A-M3: a write that fails (a full disk, a folder it may not
+// write) promises no panel, and the install goes on.
+func TestInstallWhoseWriteFailedPromisesNothing(t *testing.T) {
+	bus := fakeshell.NewBus(t, "")
+	fakeshell.Start(t, bus.Addr, fakeshell.Options{Version: "46.0"})
+	old := writePanel
+	t.Cleanup(func() { writePanel = old })
+	wrote := 0
+	writePanel = func(string, int) (bool, error) { wrote++; return false, errors.New("no space left on device") }
+	te := gnomeEnv(t, bus.Addr)
+	eq(t, te.main("install", "--config", writeCfg(t, validConfig)), 0)
+	eq(t, wrote, 1)
+	if strings.Contains(te.out.String(), text.PanelAfterRelogin) {
+		t.Fatal(te.out.String())
 	}
 }

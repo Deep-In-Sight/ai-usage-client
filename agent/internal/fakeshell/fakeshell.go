@@ -6,7 +6,7 @@
 // the screen shield on 46 and 50, the headless 42 there has none):
 // the name org.gnome.Shell with, at /org/gnome/Shell, its ShellVersion and
 // the org.gnome.Shell.Extensions interface that records EnableExtension and
-// DisableExtension; the name org.gnome.Shell.ScreenShield with the
+// DisableExtension and has the property UserExtensionsEnabled; the name org.gnome.Shell.ScreenShield with the
 // org.gnome.ScreenSaver interface at /org/gnome/ScreenSaver; and
 // org.freedesktop.Notifications that records Notify. The well-known names
 // org.gnome.Shell.Extensions and org.gnome.ScreenSaver are not the shell's:
@@ -191,6 +191,8 @@ type Shell struct {
 	locked    bool
 	notices   []string
 	gate      *ActiveGate // GetActive waits on it (nil: answers at once)
+	enGate    *ActiveGate // EnableExtension waits on it (nil: answers at once)
+	enableEr  bool        // EnableExtension answers an error
 	failing   int         // GetActive calls still to answer with an error
 	actives   int         // GetActive calls answered
 	onCall    func(call string)
@@ -211,6 +213,19 @@ type Options struct {
 	// DisableFails: DisableExtension answers an error, as GNOME 46 once
 	// did although it had turned the extension off (stage 0, Z3).
 	DisableFails bool
+	// EnableFails: EnableExtension answers an error (it may have taken
+	// effect all the same, as Disable once did); EnableGate, when set, holds
+	// its answer until opened (a shell that does not answer in time).
+	EnableFails bool
+	EnableGate  *ActiveGate
+	// UserExtensionsOff: UserExtensionsEnabled is false (the user or an
+	// administrator switched user extensions off); NoUserExtensions: the
+	// property is missing.
+	UserExtensionsOff, NoUserExtensions bool
+	// Hang: the shell owns its names but answers nothing at /org/gnome/Shell
+	// (its properties, EnableExtension, DisableExtension) until the test
+	// ends: a shell that is stuck.
+	Hang bool
 }
 
 // Start connects a shell to the bus at addr; it leaves the bus when the
@@ -222,17 +237,29 @@ func Start(t testing.TB, addr string, o Options) *Shell {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	s := &Shell{Conn: conn, enableOK: o.EnableOK, disableOK: o.DisableOK, locked: o.Locked, onCall: o.OnCall, disableEr: o.DisableFails}
+	s := &Shell{Conn: conn, enableOK: o.EnableOK, disableOK: o.DisableOK, locked: o.Locked, onCall: o.OnCall, disableEr: o.DisableFails,
+		enableEr: o.EnableFails, enGate: o.EnableGate}
 	must := func(err error) {
 		t.Helper()
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
+	if o.Hang {
+		g := NewGate(t)
+		g.hangs = true
+		s.enGate = g
+		must(conn.Export(hangingProps{g}, "/org/gnome/Shell", "org.freedesktop.DBus.Properties"))
+	}
+	props := prop.Map{}
 	if o.Version != "" {
-		_, err := prop.Export(conn, "/org/gnome/Shell", prop.Map{ShellName: {
-			"ShellVersion": {Value: o.Version, Writable: false, Emit: prop.EmitFalse},
-		}})
+		props[ShellName] = map[string]*prop.Prop{"ShellVersion": {Value: o.Version, Writable: false, Emit: prop.EmitFalse}}
+	}
+	if !o.NoUserExtensions {
+		props[ExtensionsIface] = map[string]*prop.Prop{"UserExtensionsEnabled": {Value: !o.UserExtensionsOff, Writable: false, Emit: prop.EmitFalse}}
+	}
+	if len(props) > 0 && !o.Hang {
+		_, err := prop.Export(conn, "/org/gnome/Shell", props)
 		must(err)
 	}
 	must(conn.Export(extensions{s}, "/org/gnome/Shell", ExtensionsIface))
@@ -297,13 +324,23 @@ func (s *Shell) Release(t testing.TB, name string) {
 	}
 }
 
-// ActiveGate holds GetActive's answers back: each call takes the answer of
-// the moment it came and waits until Open.
+// ActiveGate holds the answers of GetActive (HoldGetActive) or of
+// EnableExtension (Options.EnableGate) back: each call takes the answer of the
+// moment it came and waits until Open.
 type ActiveGate struct {
 	mu      sync.Mutex
 	pending int
 	open    chan struct{}
 	once    sync.Once
+	hangs   bool // Options.Hang's: DisableExtension waits on it too
+}
+
+// hangingProps is the stuck shell's properties: no Get is answered.
+type hangingProps struct{ g *ActiveGate }
+
+func (h hangingProps) Get(iface, name string) (dbus.Variant, *dbus.Error) {
+	h.g.wait()
+	return dbus.Variant{}, dbus.NewError("org.freedesktop.DBus.Error.Failed", []any{"the shell ended"})
 }
 
 // HoldGetActive makes GetActive wait until the gate it returns is opened
@@ -327,17 +364,48 @@ func (g *ActiveGate) Pending() int {
 // Open lets every waiting GetActive answer (and later ones answer at once).
 func (g *ActiveGate) Open() { g.once.Do(func() { close(g.open) }) }
 
+// wait counts a call as pending and waits until the gate is open.
+func (g *ActiveGate) wait() {
+	g.mu.Lock()
+	g.pending++
+	g.mu.Unlock()
+	<-g.open
+}
+
+// NewGate is a closed gate (Options.EnableGate), opened at the latest
+// when the test ends.
+func NewGate(t testing.TB) *ActiveGate {
+	g := &ActiveGate{open: make(chan struct{})}
+	t.Cleanup(g.Open)
+	return g
+}
+
 type extensions struct{ s *Shell }
 
 func (e extensions) EnableExtension(uuid string) (bool, *dbus.Error) {
 	e.s.call("EnableExtension " + uuid)
 	e.s.mu.Lock()
+	g := e.s.enGate
+	e.s.mu.Unlock()
+	if g != nil {
+		g.wait()
+	}
+	e.s.mu.Lock()
 	defer e.s.mu.Unlock()
+	if e.s.enableEr {
+		return false, dbus.NewError("org.freedesktop.DBus.Error.NoReply", []any{"Message recipient disconnected from message bus without replying"})
+	}
 	return e.s.enableOK, nil
 }
 
 func (e extensions) DisableExtension(uuid string) (bool, *dbus.Error) {
 	e.s.call("DisableExtension " + uuid)
+	e.s.mu.Lock()
+	g := e.s.enGate
+	e.s.mu.Unlock()
+	if g != nil && g.hangs {
+		g.wait()
+	}
 	e.s.mu.Lock()
 	defer e.s.mu.Unlock()
 	if e.s.disableEr {
@@ -378,10 +446,7 @@ func (x screenSaver) GetActive() (bool, *dbus.Error) {
 	locked, g := x.s.locked, x.s.gate
 	x.s.mu.Unlock()
 	if g != nil {
-		g.mu.Lock()
-		g.pending++
-		g.mu.Unlock()
-		<-g.open
+		g.wait()
 	}
 	x.s.mu.Lock()
 	defer x.s.mu.Unlock()

@@ -345,13 +345,15 @@ func (l *trayLoop) mode() string {
 
 // bridgeEvent follows the bridge (design 6.4, 6.7; plan PR-11): attached,
 // the icons go; gone after a Ping lapse, or the bridge stopped after
-// repeated failures or found no supported shell, they come at once; gone
-// otherwise (a Detach, the shell's owner left, the bridge ended), they
-// come after detachGrace unless it attaches again; the bridge ending with
-// a lost session bus while the marker is there holds them anew for
-// attachWait (a logout: the next login's panel), once: the bridge started
-// again on a bus that is not back ends with 75 again and again (review
-// I1).
+// repeated failures or found no supported shell (yet: it waits on for a
+// shell that comes later, and says supported:true then; review A-M1), they
+// come at once; gone otherwise (a Detach, the shell's owner left, the
+// bridge ended), they come after detachGrace unless it attaches again; the
+// bridge ending with a lost session bus while the marker is there holds
+// them anew for attachWait (a logout: the next login's panel), once until
+// a supported shell answers again: the bridge started again waits for its
+// bus in its process, but a bus that comes and goes again before any shell
+// answered must not hold the icons back again and again (review I1).
 func (l *trayLoop) bridgeEvent(e supervisor.Event) {
 	switch {
 	case e.Enabled:
@@ -396,7 +398,8 @@ func (l *trayLoop) bridgeEvent(e supervisor.Event) {
 			// the shell answered with a version the panel does not support:
 			// no panel attaches on this desktop, the next start shows the
 			// icons at once ("no shell", "no shell version": a session not
-			// up yet, the marker stays; ruling of 4b fix round 2)
+			// up yet, the marker stays and the bridge waits on for a shell;
+			// ruling of 4b fix round 2, review A-M1)
 			l.unmark()
 		}
 	case e.Exit != nil:

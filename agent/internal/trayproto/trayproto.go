@@ -28,7 +28,7 @@ const (
 	ExitSessionLost  = 75 // the desktop session's connection went away (Linux: the session bus)
 	ExitSessionEnded = 76 // the session is ending (Windows: WM_ENDSESSION)
 	ExitDesktopBack  = 77 // standby: the desktop's tray came (back): try the icon again
-	ExitUnsupported  = 78 // the GNOME bridge: no supported GNOME Shell on this session bus (plan PR-10)
+	ExitUnsupported  = 78 // the GNOME bridge: this session bus's GNOME Shell is of a version the panel does not support (plan PR-10)
 )
 
 // EnvToken is the environment variable that hands a helper the one-time

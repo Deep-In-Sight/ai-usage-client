@@ -82,7 +82,7 @@ type Event struct {
 	// supports answered (Supported true) or the shell is not one (false);
 	// turning the extension on succeeded (Enabled). Why says why attached
 	// or supported is false ("detach", "owner", "ping", "unsupported 44.2",
-	// "no shell").
+	// "no shell": the bridge then waits on for a shell).
 	Attached  *bool
 	Supported *bool
 	Enabled   bool
@@ -175,7 +175,8 @@ type slot struct {
 	trying      bool        // the process is a try of the stopped helper
 	tries       int         // tries of the stopped helper that failed (each doubles the gap to the next)
 	window      uint64      // Windows: the window of the process's icon (from its ready)
-	// parked: the bridge found no GNOME Shell the panel supports (exit 78);
+	// parked: the bridge found a GNOME Shell of a version the panel does
+	// not support (exit 78; a bus without a shell yet it waits on itself);
 	// it starts again only on a new session bus (an icon helper's exit 75)
 	// or WantBridge off and on (plan PR-10)
 	parked bool
@@ -255,7 +256,7 @@ func (s *Supervisor) Want(ids []provider.ID) {
 // WantBridge starts (on) or ends (off) the bridge, in its own slot apart
 // from Want's (plan PR-9). Its hello carries the role "shell" and, when
 // enableOnce allows it and Options.BridgeEnableOnce says so at that start,
-// enable_once. A bridge that found no supported shell (exit 78) is started
+// enable_once. A bridge that found an unsupported shell (exit 78) is started
 // again by WantBridge off and on, or by an icon helper's exit 75 (a new
 // session bus; plan PR-10); its other ends follow the helpers' restart
 // rules (it never gets a standby watcher).

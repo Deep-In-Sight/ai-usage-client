@@ -517,10 +517,12 @@ func TestShellLeftAfterADetachKeepsTheMarker(t *testing.T) {
 }
 
 // Review I1: a logout. The shell leaves, then the session bus: the bridge
-// ends with 75 and the icons wait 10 s from then; the bridge started again
-// on the dead bus ends with 75 again and again, which does not restart the
-// wait; when it ends the icons come but the marker stays (no supported
-// shell answered), so the next login's agent waits for its panel.
+// ends with 75 and the icons wait 10 s from then. A bridge started again
+// waits for its bus in its process (the lost-bus ruling); should its bus
+// come and go again before any supported shell answered, its further exits
+// with 75 (played here by four quick ones) do not restart the wait. When
+// the wait ends the icons come but the marker stays (no supported shell
+// answered), so the next login's agent waits for its panel.
 func TestLogoutKeepsTheMarker(t *testing.T) {
 	r := newLoopRig(t, claudeInUse(), nil)
 	b, c := r.bridge(), r.icon()

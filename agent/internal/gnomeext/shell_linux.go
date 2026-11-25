@@ -53,6 +53,24 @@ func parseMajor(version string) (int, error) {
 	return n, nil
 }
 
+// UserExtensionsEnabled reads the shell's UserExtensionsEnabled
+// (org.gnome.Shell.Extensions at /org/gnome/Shell): false when the user or
+// an administrator switched the extensions of users' own folders off
+// (disable-user-extensions), so the shell loads none of them.
+func UserExtensionsEnabled(ctx context.Context, c *dbus.Conn) (bool, error) {
+	var v dbus.Variant
+	err := c.Object("org.gnome.Shell", "/org/gnome/Shell").CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get",
+		dbus.FlagNoAutoStart, "org.gnome.Shell.Extensions", "UserExtensionsEnabled").Store(&v)
+	if err != nil {
+		return false, err
+	}
+	on, ok := v.Value().(bool)
+	if !ok {
+		return false, fmt.Errorf("UserExtensionsEnabled is a %s, not a boolean", v.Signature())
+	}
+	return on, nil
+}
+
 // Enable asks the shell to turn the extension uuid on
 // (org.gnome.Shell.Extensions.EnableExtension: false for an extension the
 // shell did not find when it started). The shell serves the interface at

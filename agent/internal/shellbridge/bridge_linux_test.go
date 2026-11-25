@@ -385,7 +385,29 @@ func TestUnsupportedShell(t *testing.T) {
 	}
 }
 
-// No GNOME Shell within 30 s: supported false, exit 78.
+// stillRuns: the bridge has not ended.
+func (r *rig) stillRuns() {
+	r.t.Helper()
+	select {
+	case c := <-r.code:
+		r.t.Fatalf("the bridge ended with %d", c)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// notSupported: the bridge says no supported shell answers, why.
+func notSupported(t *testing.T, m trayproto.Msg, why string) {
+	t.Helper()
+	if m.Type != trayproto.TypeShell || m.Supported == nil || *m.Supported || m.Attached != nil || m.Why != why {
+		t.Fatalf("got %+v, want supported false why %q", m, why)
+	}
+}
+
+// Review A-M1: no GNOME Shell within 30 s: supported false "no shell", so
+// the icons come at once, and the bridge waits on (it parks with 78 only
+// for an unsupported version): a shell that comes later on the same bus
+// (a session bus that outlived a logout gets the next login's shell) is
+// served. Quit still ends it at once.
 func TestNoShellWithinWait(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	r.owned()
@@ -393,11 +415,62 @@ func TestNoShellWithinWait(t *testing.T) {
 	r.clk.Advance(ShellWait - time.Millisecond)
 	r.none()
 	r.clk.Advance(time.Millisecond)
-	m := r.next()
-	if m.Supported == nil || *m.Supported || m.Why != "no shell" {
-		t.Fatalf("%+v", m)
+	notSupported(t, r.next(), "no shell")
+	for range 10 {
+		r.clk.Advance(time.Minute)
 	}
-	if c := r.exit(); c != trayproto.ExitUnsupported {
+	r.none()
+	r.stillRuns()
+	r.shell = fakeshell.Start(t, r.bus.Addr, *shell46())
+	r.ready("gnome46")
+	r.attached()
+
+	r2 := newRig(t, rigOptions{})
+	r2.owned()
+	r2.waiter()
+	r2.clk.Advance(ShellWait)
+	notSupported(t, r2.next(), "no shell")
+	r2.say(trayproto.Msg{Type: trayproto.TypeQuit})
+	if c := r2.exit(); c != trayproto.ExitOK {
+		t.Fatalf("quit: %d", c)
+	}
+	// the end of the input, and ctx (the agent stopping), too
+	r3 := newRig(t, rigOptions{})
+	r3.owned()
+	r3.waiter()
+	r3.clk.Advance(ShellWait)
+	notSupported(t, r3.next(), "no shell")
+	r3.in.Close()
+	if c := r3.exit(); c != trayproto.ExitOK {
+		t.Fatalf("EOF: %d", c)
+	}
+}
+
+// Review A-M1: a shell without a ShellVersion for 30 s: "no shell
+// version", and the bridge waits on; another shell on the bus is asked at
+// once; one of a version the panel does not support ends it with 78.
+func TestNoShellVersionWithinWait(t *testing.T) {
+	r := newRig(t, rigOptions{shell: &fakeshell.Options{}})
+	r.owned()
+	r.waiter()
+	r.clk.Advance(ShellWait)
+	notSupported(t, r.next(), "no shell version")
+	r.clk.Advance(5 * time.Minute)
+	r.none()
+	r.stillRuns()
+	r.shell.Conn.Close() // that shell ends; the next one has a version
+	r.shell = fakeshell.Start(t, r.bus.Addr, fakeshell.Options{Version: "42.9"})
+	r.ready("gnome42") // without the clock moving
+	r.attached()
+
+	r2 := newRig(t, rigOptions{})
+	r2.owned()
+	r2.waiter()
+	r2.clk.Advance(ShellWait)
+	notSupported(t, r2.next(), "no shell")
+	fakeshell.Start(t, r2.bus.Addr, fakeshell.Options{Version: "44.2"})
+	notSupported(t, r2.next(), "unsupported 44.2")
+	if c := r2.exit(); c != trayproto.ExitUnsupported {
 		t.Fatalf("exit %d", c)
 	}
 }
@@ -534,6 +607,35 @@ func TestEnableOnce(t *testing.T) {
 	r3.ready("gnome46")
 	r3.none()
 	if calls := r3.shell.Calls(); len(calls) != 0 {
+		t.Fatalf("%q", calls)
+	}
+}
+
+// Review A-I1: an EnableExtension that answers an error, or no answer in
+// time, may have turned the extension on all the same: it counts as done
+// (the Enabled line: the main process writes gnome-panel-enabled and no
+// later start asks again, so the user's own "off" is never undone). Only a
+// definite (false,) leaves it to the next start (TestEnableOnce).
+func TestEnableWithoutADefiniteNoIsDone(t *testing.T) {
+	r := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", EnableFails: true}, enableOnce: true})
+	r.ready("gnome46")
+	if m := r.next(); m.Type != trayproto.TypeShell || !m.Enabled {
+		t.Fatalf("an Enable that failed: %+v", m)
+	}
+	r.none()
+
+	g := fakeshell.NewGate(t)
+	old := enableTimeout
+	enableTimeout = 100 * time.Millisecond // read once by Run
+	r2 := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", EnableOK: true, EnableGate: g}, enableOnce: true})
+	r2.ready("gnome46")
+	enableTimeout = old
+	waitPending(t, g, 1)
+	if m := r2.next(); m.Type != trayproto.TypeShell || !m.Enabled {
+		t.Fatalf("an Enable not answered in time: %+v", m)
+	}
+	r2.none()
+	if calls := r2.shell.Calls(); !slices.Equal(calls, []string{"EnableExtension " + gnomeext.UUID}) {
 		t.Fatalf("%q", calls)
 	}
 }
@@ -895,32 +997,53 @@ func (r *rig) timerAt(d time.Duration) {
 }
 
 // Review m3: a held Detach asks the screen saver again every 30 s: no
-// longer active (its signal never came), or it cannot be asked (gone from
-// the bus), the Detach is told.
+// longer active (its signal never came), the Detach is told. (The screen
+// saver leaving the bus tells it at once: TestHeldDetachIsToldWhenTheLock
+// ServiceGoes.)
 func TestHeldDetachAsksAgain(t *testing.T) {
-	for _, end := range []string{"quiet unlock", "screen saver gone"} {
-		r := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", Locked: true}})
-		r.ready("gnome46")
-		r.attached()
-		r.clk.Advance(7 * time.Second) // timers of their own (none ends at a recheck)
-		must(t, r.call("Detach").Err)
-		r.timerAt(lockRecheck)
-		r.clk.Advance(lockRecheck) // still locked: held
-		r.timerAt(lockRecheck)
-		r.none()
-		if end == "quiet unlock" {
-			r.shell.SetLockedQuietly(false)
-		} else {
-			r.shell.Release(t, fakeshell.ScreenShieldName)
-		}
-		r.clk.Advance(lockRecheck - time.Millisecond)
-		r.none()
-		r.clk.Advance(time.Millisecond)
-		m := r.next()
-		if m.Attached == nil || *m.Attached || m.Why != "detach" {
-			t.Fatalf("%s: %+v", end, m)
-		}
-	}
+	r := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", Locked: true}})
+	r.ready("gnome46")
+	r.attached()
+	r.clk.Advance(7 * time.Second) // timers of their own (none ends at a recheck)
+	must(t, r.call("Detach").Err)
+	r.timerAt(lockRecheck)
+	r.clk.Advance(lockRecheck) // still locked: held
+	r.timerAt(lockRecheck)
+	r.none()
+	r.shell.SetLockedQuietly(false)
+	r.clk.Advance(lockRecheck - time.Millisecond)
+	r.none()
+	r.clk.Advance(time.Millisecond)
+	isAttached(t, r.next(), false, "detach")
+}
+
+// Review A-M6: a detach held for a lock is told as soon as the screen
+// saver leaves the bus (no lock service, no lock), not at the next
+// recheck: why "detach" while the shell stays; "owner" when the shell's
+// connection went (its names go together, in an order of the bus's
+// choosing), and then the shell's leaving is not told a second time.
+func TestHeldDetachIsToldWhenTheLockServiceGoes(t *testing.T) {
+	r := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", Locked: true}})
+	r.ready("gnome46")
+	r.attached()
+	r.clk.Advance(7 * time.Second)
+	must(t, r.call("Detach").Err)
+	r.timerAt(lockRecheck)
+	r.none()
+	r.shell.Release(t, fakeshell.ScreenShieldName)
+	isAttached(t, r.next(), false, "detach")
+	r.none()
+
+	r2 := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", Locked: true}})
+	r2.ready("gnome46")
+	r2.attached()
+	r2.clk.Advance(7 * time.Second)
+	must(t, r2.call("Detach").Err)
+	r2.timerAt(lockRecheck)
+	r2.none()
+	r2.shell.Conn.Close() // the session ends during the lock
+	isAttached(t, r2.next(), false, "owner")
+	r2.none()
 }
 
 // Measured on GNOME 46 and 50 (CI panel.lock; the headless 42 of the
@@ -1025,9 +1148,8 @@ func TestHeldDetachAfterTheShellLeftSaysOwner(t *testing.T) {
 	r.timerAt(lockRecheck)
 	r.none()
 	r.shell.Leave(t)
-	r.shell.Release(t, fakeshell.ScreenShieldName)
 	r.none()
-	r.clk.Advance(lockRecheck)
+	r.shell.Release(t, fakeshell.ScreenShieldName) // told now (review A-M6)
 	isAttached(t, r.next(), false, "owner")
 	r.none()
 }

@@ -51,6 +51,7 @@ const (
 	errAccessDenied = "org.freedesktop.DBus.Error.AccessDenied"
 	callTimeout     = 5 * time.Second  // the bridge's own calls on the bus
 	versionRetry    = time.Second      // a shell without its ShellVersion yet is asked again this often
+	lateRetry       = 30 * time.Second // after ShellWait the same, this often (and at once at a new owner)
 	lockRecheck     = 30 * time.Second // a detach held for a lock asks the screen saver again this often (review m3)
 	// A lock disables the extensions (their Detach) when it starts; the
 	// screen saver says it is active only once the lock screen is shown
@@ -68,13 +69,15 @@ const (
 	exitReplaced = trayproto.ExitRefused
 )
 
-// lockAskTimeout is how long GetActive may take (a variable for tests).
-var lockAskTimeout = callTimeout
+// lockAskTimeout is how long GetActive may take, enableTimeout how long
+// EnableExtension may (variables for tests).
+var lockAskTimeout, enableTimeout = callTimeout, callTimeout
 
 // Run serves the panel until quit or EOF (0), the loss of the session bus
-// it was on (75) or an unsupported shell (78); a bus that is not there yet
-// is waited for (dial). in is the main process's lines after the hello;
-// out takes the bridge's lines.
+// it was on (75) or a shell of a version the panel does not support (78);
+// a bus that is not there yet is waited for (dial), and so is a shell that
+// is not on the bus yet (run). in is the main process's lines after the
+// hello; out takes the bridge's lines.
 func Run(ctx context.Context, in *bufio.Reader, out io.Writer, o Options) int {
 	if o.Getenv == nil {
 		o.Getenv = os.Getenv
@@ -83,7 +86,7 @@ func Run(ctx context.Context, in *bufio.Reader, out io.Writer, o Options) int {
 		o.Clock = clock.Real{}
 	}
 	b := &bridge{o: o, out: out, reqs: make(chan func()), done: make(chan struct{}), locks: make(chan lockAnswer, 4),
-		askTimeout: lockAskTimeout}
+		askTimeout: lockAskTimeout, enableTimeout: enableTimeout}
 	defer close(b.done)
 	lines := make(chan trayproto.Msg, 16)
 	go func() {
@@ -156,8 +159,9 @@ type bridge struct {
 	reqs  chan func()
 	done  chan struct{}   // closed when Run ends
 	locks chan lockAnswer // GetActive's answers while a detach is held
-	// how long GetActive may take (read once: tests change lockAskTimeout)
-	askTimeout time.Duration
+	// how long GetActive and EnableExtension may take (read once: tests
+	// change lockAskTimeout and enableTimeout)
+	askTimeout, enableTimeout time.Duration
 
 	panel     *trayproto.Panel // the newest view (nil: none yet)
 	serial    uint64           // its serial, as signalled
@@ -228,8 +232,12 @@ func (b *bridge) run(ctx context.Context, lines <-chan trayproto.Msg) int {
 	}
 	b.notices = nil
 
-	// until GNOME Shell's version is known: waiting
-	waiting, asking := true, false
+	// until GNOME Shell's version is known: waiting. After ShellWait the
+	// main process hears that no supported shell answers (its icons come at
+	// once), and the bridge waits on for a shell (review A-M1: a session bus
+	// that outlived a logout gets the next login's shell later; only an
+	// unsupported version ends the bridge)
+	waiting, asking, late := true, false, false
 	deadline := b.o.Clock.After(ShellWait)
 	var retry <-chan time.Time
 	versions := make(chan version, 1)
@@ -266,17 +274,23 @@ func (b *bridge) run(ctx context.Context, lines <-chan trayproto.Msg) int {
 				log.Print("the connection to the session bus was lost")
 				return trayproto.ExitSessionLost
 			}
+			before := b.owner
 			if code, end := b.signal(s); end {
 				return code
 			}
+			if b.owner != before {
+				retry = nil // another shell: asked at once
+			}
 			ask()
 		case <-deadline:
+			deadline = nil
 			if waiting {
 				why := "no shell"
 				if b.owner != "" {
 					why = "no shell version"
 				}
-				return b.unsupported(why)
+				late = true
+				b.notYet(why)
 			}
 		case <-retry:
 			retry = nil
@@ -285,6 +299,8 @@ func (b *bridge) run(ctx context.Context, lines <-chan trayproto.Msg) int {
 			asking = false
 			switch {
 			case !waiting:
+			case v.err != nil && late:
+				retry = b.o.Clock.After(lateRetry)
 			case v.err != nil:
 				retry = b.o.Clock.After(versionRetry)
 			default:
@@ -325,10 +341,23 @@ func (b *bridge) unsupported(why string) int {
 	return trayproto.ExitUnsupported
 }
 
+// notYet says that no shell the panel supports answered within ShellWait
+// (why "no shell" or "no shell version"); the bridge keeps waiting for one.
+func (b *bridge) notYet(why string) {
+	log.Printf("no usage panel on this desktop yet (%s): waiting for GNOME Shell", why)
+	f := false
+	b.send(trayproto.Msg{Type: trayproto.TypeShell, Supported: &f, Why: why})
+}
+
 // ready: a supported shell. The extension's files are made current for it
 // (design 6.6: at every start), the main process hears that the shell is
 // supported (it may then judge an attach wait without an attach: review
 // I1), and the extension is turned on once when the hello asked for it.
+// Only a definite "no" of EnableExtension ((false,): the shell has not read
+// the extension yet) leaves the turning on to the next start; an error or
+// no answer in time may have turned it on all the same (Disable once did),
+// so it counts as done: the user's own "off" is never undone (review A-I1,
+// design 6.6).
 func (b *bridge) ready(major int, v string, enabled chan<- bool) {
 	log.Printf("GNOME Shell %s", v)
 	if dir, err := gnomeext.Dir(b.o.Getenv, b.o.Home); err != nil {
@@ -345,18 +374,18 @@ func (b *bridge) ready(major int, v string, enabled chan<- bool) {
 		return
 	}
 	go func() {
-		c, cancel := context.WithTimeout(context.Background(), callTimeout)
+		c, cancel := context.WithTimeout(context.Background(), b.enableTimeout)
 		defer cancel()
 		ok, err := gnomeext.Enable(c, b.conn, gnomeext.UUID)
 		switch {
 		case err != nil:
-			log.Printf("turning the panel extension on: %v", err)
+			log.Printf("turning the panel extension on: %v (it may have taken effect: not asked again)", err)
 		case !ok:
 			log.Print("the shell has not read the panel extension yet (it does at the next login)")
 		default:
 			log.Print("turned the panel extension on")
 		}
-		enabled <- ok && err == nil
+		enabled <- ok || err != nil
 	}()
 }
 
@@ -420,7 +449,18 @@ func (b *bridge) signal(s *dbus.Signal) (code int, end bool) {
 				b.send(trayproto.Msg{Type: trayproto.TypeShell, Attached: &f, Why: "owner"})
 			}
 		case screenShieldName:
+			prev := b.saver
 			b.saver = owner
+			if prev != "" && owner == "" && b.held != "" {
+				// no lock service, so no lock: the held detach is told now, not at
+				// the next recheck (review A-M6); the shell's own leaving takes
+				// both its names at once, in either order
+				if b.nameOwner(shellName) == "" {
+					b.owner, b.held = "", "owner"
+				}
+				log.Print("the screen saver left the session bus")
+				b.tell(false, b.held)
+			}
 		}
 	case screenSaverIface + ".ActiveChanged":
 		if s.Sender != b.saver || b.saver == "" || s.Path != screenSaverPath || len(s.Body) != 1 || b.held == "" {
