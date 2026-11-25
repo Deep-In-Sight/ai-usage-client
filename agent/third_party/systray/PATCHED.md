@@ -24,9 +24,11 @@ client's MIT licence (`LICENSE` at the repository's root).
 ## Changes
 
 Added files: this `PATCHED.md`, `systray_patch_test.go` (tests of the
-Linux and BSD changes) and `trayicon/` (`trayicon_windows.go` and its
-test, see Windows below). Each added Go file starts with a comment saying it
-is not upstream code and is under the AI Usage client's MIT licence.
+Linux and BSD changes), `trayicon/` (`trayicon_windows.go` and its
+test, see Windows below), and `ownerdraw.go`, `ownerdraw_windows.go` and
+`ownerdraw_other.go` (owner-drawn menu items, see Windows below). Each
+added Go file starts with a comment saying it is not upstream code and is
+under the AI Usage client's MIT licence.
 
 ### `systray_unix.go` (Linux and BSD)
 
@@ -104,6 +106,40 @@ extra properties.
   `EnsureIcon() bool` adds the icon when it is not there (an add, or a
   modify when an add that reported failure went through) and reports
   whether it is. The agent's helper calls it every 2 s.
+- Owner-drawn menu items (the AI Usage usage panel draws its menu
+  itself). The new files hold the API and its state; the upstream file
+  only calls them:
+  - `ownerdraw.go` (every OS): the types `Rect`, `MenuDrawer`
+    (`Measure(id, dpi)`, `Draw(id, hdc, rect, state, dpi)`,
+    `SettingChanged(area)`) and `MenuDecorator` (`MeasureSeparator`,
+    `DrawSeparator`, `MenuBackground`: what a drawer may also do), and
+    the method `(*MenuItem).ID()`, the item's menu command id.
+  - `ownerdraw_windows.go`: `SetMenuDrawer(d)`, `(*MenuItem).
+    SetOwnerDrawn(on)` (a hidden item stays hidden), `MenuOwnerWindow()`
+    (the hidden window that owns the menu) and `AddOwnerDrawnSeparator()`;
+    the handling of `WM_MEASUREITEM` (the size at the effective DPI of
+    the monitor under the pointer, `MonitorFromPoint` +
+    `shcore!GetDpiForMonitor`, 96 when unknown) and `WM_DRAWITEM` (the
+    DPI of the menu window, `GetDpiForWindow(WindowFromDC(hdc))`, else the
+    measured one) for the owner-drawn items and separators only
+    (`ODT_MENU`); `WM_SETTINGCHANGE`'s text to the drawer; before the
+    menu opens, the drawer's background colour (`SetMenuInfo`,
+    `MIM_BACKGROUND`) and a fresh measure of every visible owner-drawn
+    item and separator (Windows keeps an owner-drawn item's size until it
+    is inserted anew, so each is removed and inserted again at its place);
+    a panic in the drawer is logged instead of ending the program.
+  - `ownerdraw_other.go` (not Windows): the same functions doing nothing
+    (`AddOwnerDrawnSeparator` is `AddSeparator`).
+  - In `systray_windows.go`: `wndProc` passes `WM_MEASUREITEM`,
+    `WM_DRAWITEM` and `WM_SETTINGCHANGE` to `ownerDrawMessage` and runs
+    the default procedure for what it does not handle (always for
+    `WM_SETTINGCHANGE`, as upstream); `addOrUpdateMenuItem` gives an
+    owner-drawn item `MFT_OWNERDRAW`, `ItemData` = its id and no string or
+    bitmap (`MIIM_FTYPE|MIIM_ID|MIIM_STATE|MIIM_DATA`), and a text item
+    again once that is switched off; `addSeparatorMenuItem` gives an
+    owner-drawn separator `MFT_SEPARATOR|MFT_OWNERDRAW`; `showMenu` calls
+    `prepareOwnerDrawnMenu` before `TrackPopupMenu`; `resetMenu` forgets
+    the owner-drawn items and separators.
 - The header comment says the file was modified.
 
 ### Everything else

@@ -4,7 +4,8 @@
 //notification area's size (through the added package trayicon), and
 //loaded icons are cached per file and size; the icon's id can be set
 //(SetTrayID), and a first add that fails (no taskbar yet) no longer stops
-//the tray: the icon is added later (EnsureIcon, TaskbarCreated). See
+//the tray: the icon is added later (EnsureIcon, TaskbarCreated); menu
+//items and separators can be owner-drawn (ownerdraw_windows.go). See
 //PATCHED.md.
 
 package systray
@@ -342,6 +343,18 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 		case WM_RBUTTONUP:
 			systrayRightClick()
 		}
+	case odWMMeasureItem, odWMDrawItem, odWMSettingChange:
+		// patched (see PATCHED.md): owner-drawn menu items, and settings
+		// changes for their drawer
+		if handled, r := ownerDrawMessage(message, wParam, lParam); handled {
+			return r
+		}
+		lResult, _, _ = pDefWindowProc.Call(
+			uintptr(hWnd),
+			uintptr(message),
+			uintptr(wParam),
+			uintptr(lParam),
+		)
 	case t.wmTaskbarCreated: // on explorer.exe restarts
 		t.muNID.Lock()
 		// patched (see PATCHED.md): remember whether the add worked, so
@@ -645,7 +658,14 @@ func (t *winTray) addOrUpdateMenuItem(menuItemId uint32, parentId uint32, title 
 	t.muMenuItemIcons.RLock()
 	hIcon := t.menuItemIcons[menuItemId]
 	t.muMenuItemIcons.RUnlock()
-	if hIcon > 0 {
+	if isOwnerDrawn(menuItemId) {
+		// patched (see PATCHED.md): drawn by the MenuDrawer, without a
+		// text or bitmap of its own
+		mi.Mask = MIIM_FTYPE | MIIM_ID | MIIM_STATE | odMIIMData
+		mi.Type = odMFTOwnerDraw
+		mi.TypeData, mi.Cch = nil, 0
+		mi.ItemData = uintptr(menuItemId)
+	} else if hIcon > 0 {
 		mi.Mask |= MIIM_BITMAP
 		mi.BMPItem = hIcon
 	}
@@ -718,6 +738,11 @@ func (t *winTray) addSeparatorMenuItem(menuItemId, parentId uint32) error {
 		Mask: MIIM_FTYPE | MIIM_ID | MIIM_STATE,
 		Type: MFT_SEPARATOR,
 		ID:   uint32(menuItemId),
+	}
+	if isOwnerDrawnSeparator(menuItemId) { // patched (see PATCHED.md)
+		mi.Type |= odMFTOwnerDraw
+		mi.Mask |= odMIIMData
+		mi.ItemData = uintptr(menuItemId)
 	}
 
 	mi.Size = uint32(unsafe.Sizeof(mi))
@@ -803,6 +828,7 @@ func (t *winTray) showMenu() error {
 		return err
 	}
 	pSetForegroundWindow.Call(uintptr(t.window))
+	prepareOwnerDrawnMenu(t.menus[0]) // patched (see PATCHED.md)
 
 	res, _, err = pTrackPopupMenu.Call(
 		uintptr(t.menus[0]),
@@ -1178,6 +1204,7 @@ func resetMenu() {
 	wt.menus = make(map[uint32]windows.Handle)
 	wt.menuOf = make(map[uint32]windows.Handle)
 	wt.menuItemIcons = make(map[uint32]windows.Handle)
+	forgetOwnerDrawn() // patched (see PATCHED.md)
 	wt.createMenu()
 }
 
