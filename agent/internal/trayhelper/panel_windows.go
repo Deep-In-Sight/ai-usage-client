@@ -2,6 +2,7 @@ package trayhelper
 
 import (
 	"image/color"
+	"log"
 	"sync"
 	"unsafe"
 
@@ -40,6 +41,7 @@ var (
 	pwSaveDC                     = pwGdi32.NewProc("SaveDC")
 	pwRestoreDC                  = pwGdi32.NewProc("RestoreDC")
 	pwIntersectClipRect          = pwGdi32.NewProc("IntersectClipRect")
+	pwEndMenu                    = pwUser32.NewProc("EndMenu")
 	pwAlphaBlend                 = windows.NewLazySystemDLL("msimg32.dll").NewProc("AlphaBlend")
 )
 
@@ -62,26 +64,30 @@ func newItemDrawer() itemDrawer {
 }
 
 // winDrawer draws the panel's items: what each draws (drawStore, set by
-// the helper's goroutine), the mode and the system's light colours (read
-// at the start and again when the colour mode changes), the menu fonts
-// per DPI.
+// the helper's goroutine; what it held when the menu opened, while the
+// menu is open: design 6.2, new values from the next open), the mode and
+// the system's light colours (read at every open and at every settings
+// change), the menu fonts per DPI. Its methods run on the tray's thread.
+// After a panic in measuring or drawing it draws nothing more for the
+// helper's life: the helper shows the text menu instead (Failed).
 type winDrawer struct {
 	drawStore
-	load func() (menuTheme, panel.Palette)
+	load    func() (menuTheme, panel.Palette)
+	endMenu func() // closes the menu that is open (EndMenu: the tray's thread's)
 
-	mu    sync.Mutex
-	theme menuTheme
-	light panel.Palette
-	loads int
-	fonts map[uint32]*menuFonts
-	// lastOps are the steps of the last Draw (tests)
-	lastOps []panel.Op
+	mu     sync.Mutex
+	theme  menuTheme
+	light  panel.Palette
+	fonts  map[uint32]*menuFonts
+	open   map[uint32]panel.Item // what each item held when the menu opened
+	failed bool
+	// trace, when set (tests only), gets each Draw's steps
+	trace func(id uint32, ops []panel.Op)
 }
 
 func newWinDrawer(load func() (menuTheme, panel.Palette)) *winDrawer {
-	d := &winDrawer{load: load, fonts: map[uint32]*menuFonts{}}
+	d := &winDrawer{load: load, endMenu: func() { pwEndMenu.Call() }, fonts: map[uint32]*menuFonts{}}
 	d.theme, d.light = load()
-	d.loads = 1
 	return d
 }
 
@@ -97,53 +103,136 @@ func (d *winDrawer) palette() panel.Palette {
 	return d.theme.palette(d.light)
 }
 
-// SettingChanged follows a change of the colour mode (the panel repaints
-// in the new colours from the next draw on); any setting may have changed
-// the menu font, so the fonts are made again.
+// Failed reports whether a panic stopped the drawing (the helper then
+// builds the text menu).
+func (d *winDrawer) Failed() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.failed
+}
+
+// recovered ends a panic of what (deferred in each of the drawer's
+// methods): logged once, the drawing stops and the open menu is closed.
+func (d *winDrawer) recovered(what string) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	d.mu.Lock()
+	first := !d.failed
+	d.failed = true
+	d.mu.Unlock()
+	if first {
+		log.Printf("panel: %s failed (%v); the tray menu is text from now on", what, r)
+		d.endMenu()
+	}
+}
+
+// reload reads the mode and the system's colours again; true when the
+// colours changed.
+func (d *winDrawer) reload() bool {
+	th, light := d.load()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	changed := th.palette(light) != d.theme.palette(d.light)
+	d.theme, d.light = th, light
+	return changed
+}
+
+// MenuOpening: the menu is about to open. The mode is read again (a
+// missed broadcast must not keep the wrong colours) and what each item
+// holds now is what it draws until the next open.
+func (d *winDrawer) MenuOpening() {
+	defer d.recovered("opening the menu")
+	if d.Failed() {
+		return
+	}
+	d.reload()
+	open := d.snapshot()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.open = open
+}
+
+// SettingChanged follows a settings change: the mode and the colours are
+// read again whatever the change (high contrast need not say
+// "ImmersiveColorSet"), and a menu that is open when its colours change is
+// closed (one colour set in a menu; the next open is in the new one); any
+// setting may have changed the menu font, so the fonts are made again.
 func (d *winDrawer) SettingChanged(area string) {
-	var th menuTheme
-	var light panel.Palette
-	if area == "ImmersiveColorSet" {
-		th, light = d.load()
+	defer d.recovered("a settings change")
+	if d.Failed() {
+		return
+	}
+	if d.reload() {
+		d.endMenu()
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if area == "ImmersiveColorSet" {
-		d.theme, d.light = th, light
-		d.loads++
-	}
 	for k, f := range d.fonts {
 		f.close()
 		delete(d.fonts, k)
 	}
 }
 
+// item is what id draws: what it held when the menu opened, else what it
+// holds now (an item added to the open menu).
+func (d *winDrawer) item(id uint32) (panel.Item, bool) {
+	d.mu.Lock()
+	it, ok := d.open[id]
+	d.mu.Unlock()
+	if ok {
+		return it, true
+	}
+	return d.Get(id)
+}
+
+// Clear forgets every item's data (the menu was rebuilt).
+func (d *winDrawer) Clear() {
+	d.drawStore.Clear()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.open = nil
+}
+
 // Measure is the item's size at dpi (panel.Size with the menu font).
-func (d *winDrawer) Measure(id, dpi uint32) (int32, int32) {
+func (d *winDrawer) Measure(id, dpi uint32) (w, h int32) {
 	m := panel.MetricsAt(int(dpi))
-	it, ok := d.Get(id)
+	w, h = int32(m.Width), int32(m.Item)
+	defer d.recovered("measuring a menu item")
+	if d.Failed() {
+		return w, h
+	}
+	it, ok := d.item(id)
 	if !ok {
-		return int32(m.Width), int32(m.Item)
+		return w, h
 	}
 	dc, _, _ := pwCreateCompatibleDC.Call(0)
 	if dc == 0 {
-		return int32(m.Width), int32(m.Item)
+		return w, h
 	}
 	defer pwDeleteDC.Call(dc)
-	w, h := panel.Size(it, m, d.measurer(dc, dpi))
-	return int32(w), int32(h)
+	sw, sh := panel.Size(it, m, d.measurer(dc, dpi))
+	return int32(sw), int32(sh)
 }
 
 // Draw draws the item into rc (as wide as the menu: Windows adds a
 // gutter to the measured width).
 func (d *winDrawer) Draw(id uint32, hdc uintptr, rc systray.Rect, state, dpi uint32) {
+	defer d.recovered("drawing a menu item")
+	if d.Failed() {
+		return
+	}
 	pal := d.palette()
 	w, h := int(rc.Right-rc.Left), int(rc.Bottom-rc.Top)
 	var ops []panel.Op
-	if it, ok := d.Get(id); ok {
+	if it, ok := d.item(id); ok {
 		ops = panel.Layout(it, panel.MetricsAt(int(dpi)), d.measurer(hdc, dpi), w, h, pal, state&odsSelected != 0)
 	} else {
 		ops = []panel.Op{{Kind: panel.Fill, W: w, H: h, Colour: pal.Background}}
+	}
+	if d.trace != nil {
+		d.trace(id, ops)
 	}
 	d.run(hdc, rc, dpi, ops)
 }
@@ -155,19 +244,27 @@ func (d *winDrawer) MeasureSeparator(dpi uint32) (int32, int32) {
 }
 
 func (d *winDrawer) DrawSeparator(hdc uintptr, rc systray.Rect, dpi uint32) {
+	defer d.recovered("drawing a separator")
+	if d.Failed() {
+		return
+	}
 	m := panel.MetricsAt(int(dpi))
 	d.run(hdc, rc, dpi, panel.SeparatorOps(m, int(rc.Right-rc.Left), int(rc.Bottom-rc.Top), d.palette()))
 }
 
-// MenuBackground fills the menu around its items in the panel's colour.
-func (d *winDrawer) MenuBackground() (uint32, bool) { return colorRef(d.palette().Background), true }
+// MenuBackground fills the menu around its items in the panel's colour
+// (the system's once the drawing stopped).
+func (d *winDrawer) MenuBackground() (rgb uint32, ok bool) {
+	defer d.recovered("the menu's background")
+	if d.Failed() {
+		return 0, false
+	}
+	return colorRef(d.palette().Background), true
+}
 
 // run carries the steps out in rc, clipped to it.
 func (d *winDrawer) run(hdc uintptr, rc systray.Rect, dpi uint32, ops []panel.Op) {
-	d.mu.Lock()
-	d.lastOps = ops
-	f := d.fontsAt(dpi)
-	d.mu.Unlock()
+	f := d.fontsFor(dpi)
 	saved, _, _ := pwSaveDC.Call(hdc)
 	defer pwRestoreDC.Call(hdc, saved)
 	pwIntersectClipRect.Call(hdc, uintptr(rc.Left), uintptr(rc.Top), uintptr(rc.Right), uintptr(rc.Bottom))
@@ -218,10 +315,13 @@ func alphaBlend(hdc uintptr, x, y, w, h int, px []byte, opacity uint8) {
 	bi.Size = uint32(unsafe.Sizeof(bi))
 	var bits unsafe.Pointer
 	bmp, _, _ := pwCreateDIBSection.Call(mem, uintptr(unsafe.Pointer(&bi)), 0, uintptr(unsafe.Pointer(&bits)), 0, 0)
-	if bmp == 0 || bits == nil {
+	if bmp == 0 {
 		return
 	}
-	defer pwDeleteObject.Call(bmp)
+	defer pwDeleteObject.Call(bmp) // also when there are no bits
+	if bits == nil {
+		return
+	}
 	copy(unsafe.Slice((*byte)(bits), len(px)), px)
 	old, _, _ := pwSelectObject.Call(mem, bmp)
 	defer pwSelectObject.Call(mem, old)
@@ -241,25 +341,35 @@ type bitmapInfoHeader struct {
 
 func colorRef(c color.NRGBA) uint32 { return uint32(c.R) | uint32(c.G)<<8 | uint32(c.B)<<16 }
 
-// menuFonts are the menu font and its bold face at one DPI.
-type menuFonts struct{ regular, bold uintptr }
+// menuFonts are the menu font and its bold and semi-bold faces at one DPI.
+type menuFonts struct{ regular, bold, semiBold uintptr }
 
 func (f *menuFonts) get(font panel.Font) uintptr {
-	if font == panel.Bold {
+	switch font {
+	case panel.Bold:
 		return f.bold
+	case panel.SemiBold:
+		return f.semiBold
 	}
 	return f.regular
 }
 
 func (f *menuFonts) close() {
-	for _, h := range []uintptr{f.regular, f.bold} {
+	for _, h := range []uintptr{f.regular, f.bold, f.semiBold} {
 		if h != 0 {
 			pwDeleteObject.Call(h)
 		}
 	}
 }
 
-// fontsAt are the menu fonts at dpi, made once (d.mu held).
+// fontsFor are the menu fonts at dpi, made once.
+func (d *winDrawer) fontsFor(dpi uint32) *menuFonts {
+	d.mu.Lock()
+	defer d.mu.Unlock() // deferred: a panic here must not leave it locked
+	return d.fontsAt(dpi)
+}
+
+// fontsAt is fontsFor with d.mu held.
 func (d *winDrawer) fontsAt(dpi uint32) *menuFonts {
 	if f, ok := d.fonts[dpi]; ok {
 		return f
@@ -269,6 +379,8 @@ func (d *winDrawer) fontsAt(dpi uint32) *menuFonts {
 	f.regular, _, _ = pwCreateFontIndirectW.Call(uintptr(unsafe.Pointer(&lf)))
 	lf.Weight = 700 // FW_BOLD
 	f.bold, _, _ = pwCreateFontIndirectW.Call(uintptr(unsafe.Pointer(&lf)))
+	lf.Weight = 600 // FW_SEMIBOLD
+	f.semiBold, _, _ = pwCreateFontIndirectW.Call(uintptr(unsafe.Pointer(&lf)))
 	d.fonts[dpi] = f
 	return f
 }
@@ -315,9 +427,7 @@ func menuLogFont(dpi uint32) logFont {
 
 // measurer measures with the menu fonts at dpi in dc.
 func (d *winDrawer) measurer(dc uintptr, dpi uint32) gdiMeasurer {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return gdiMeasurer{dc: dc, f: d.fontsAt(dpi)}
+	return gdiMeasurer{dc: dc, f: d.fontsFor(dpi)}
 }
 
 type gdiMeasurer struct {

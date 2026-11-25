@@ -31,13 +31,28 @@ var (
 // toward the background.
 const SeparatorMix = 0.8
 
-// Problem is the problem line's colour: amber on a dark menu, dark amber
-// on a light one (design 5.2).
+// Problem is the problem line's colour: amber on a dark background, dark
+// amber on a light one (design 5.2), judged by the background's luminance
+// as the GNOME panel does, so that a high-contrast black menu (the light
+// set in the system's colours) gets the amber.
 func (p Palette) Problem() color.NRGBA {
-	if p.Dark {
+	if p.Dark || luminance(p.Background) < 0.5 {
 		return ProblemOnDark
 	}
 	return ProblemOnLight
+}
+
+// luminance is c's relative luminance (sRGB, linearised), as the GNOME
+// extension's isDarkBackground computes it.
+func luminance(c color.NRGBA) float64 {
+	lin := func(v uint8) float64 {
+		s := float64(v) / 255
+		if s <= 0.04045 {
+			return s / 12.92
+		}
+		return math.Pow((s+0.055)/1.055, 2.4)
+	}
+	return 0.2126*lin(c.R) + 0.7152*lin(c.G) + 0.0722*lin(c.B)
 }
 
 // Separator is the colour of the line between the groups.

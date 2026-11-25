@@ -370,6 +370,11 @@ func (h *helper) loop(ctx context.Context, built chan<- struct{}) {
 			h.check()
 			if h.view != nil {
 				h.setIcon(*h.view)
+				if h.drawing && !h.d.ui.Draws() {
+					// the ui stopped drawing (Windows: its drawer failed):
+					// today's text menu, at once rather than at the next view
+					h.apply(*h.view)
+				}
 			}
 		}
 	}
@@ -505,8 +510,9 @@ func (h *helper) apply(v trayproto.Msg) {
 			}
 		}
 		// Windows' tray library shows a hidden item again when its title
-		// is set: hide it again then
-		if !seen || it.Visible != old.Visible || (titled && !it.Visible) {
+		// is set: hide it again then (only there: elsewhere the menu stays
+		// exactly as before the drawn panel)
+		if !seen || it.Visible != old.Visible || (titled && !it.Visible && h.d.goos == "windows") {
 			m.SetVisible(it.Visible)
 		}
 		h.shown[id] = it

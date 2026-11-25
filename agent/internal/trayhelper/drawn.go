@@ -68,6 +68,25 @@ func (s *drawStore) Set(id uint32, it *panel.Item) {
 	s.byID[id] = *it
 }
 
+// Clear forgets every item (the menu was rebuilt: its ids are not used
+// again).
+func (s *drawStore) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.byID = nil
+}
+
+// snapshot is a copy of what every item draws now.
+func (s *drawStore) snapshot() map[uint32]panel.Item {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[uint32]panel.Item, len(s.byID))
+	for id, it := range s.byID {
+		out[id] = it
+	}
+	return out
+}
+
 // Get is what id draws (false: nothing kept).
 func (s *drawStore) Get(id uint32) (panel.Item, bool) {
 	s.mu.Lock()

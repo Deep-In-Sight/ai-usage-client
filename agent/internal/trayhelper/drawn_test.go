@@ -8,6 +8,7 @@ import (
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/panel"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/status"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray/panelfixture"
@@ -26,7 +27,7 @@ func fixtureView(in tray.MenuInputs) trayproto.Msg {
 func drawnRun(t *testing.T, draws bool, goos string) *run {
 	t.Helper()
 	ui := newFakeUI()
-	ui.draws = draws
+	ui.draws.Store(draws)
 	r := startRun(t, runOpts{goos: goos, ui: ui})
 	r.hello()
 	return r
@@ -50,6 +51,13 @@ func TestPanelItemsAreDrawnOnWindowsAndMac(t *testing.T) {
 			t.Fatalf("%s: drawn %v visible %v", id, items[id].drawn, items[id].visible)
 		}
 		eq(t, *items[id].drawn, want[id])
+	}
+	// every visible item is drawn (review B-M10): dashboard, remove and
+	// quit too
+	for _, id := range layout {
+		if id != "=" && items[id].visible && items[id].drawn == nil {
+			t.Fatalf("%s is visible and not drawn", id)
+		}
 	}
 	eq(t, items["h.codex"].drawn.Problem, text.CodexExpired)
 	eq(t, items["p.codex"].visible, false) // drawn under the header instead
@@ -163,6 +171,112 @@ func TestHiddenItemStaysHiddenWhenItsTextChanges(t *testing.T) {
 	eq(t, items["p.codex"].visible, false)
 	if n := len(sets); n < 2 || sets[n-1] != "visible=false" {
 		t.Fatalf("p.codex calls %v: not hidden after its title", sets)
+	}
+}
+
+// Every visible item is drawn in the states the CI menu never shows (review
+// B-M10): the new-version line, the sign-in prompt, "Refreshing…".
+func TestEveryVisibleItemIsDrawn(t *testing.T) {
+	signedOut := panelfixture.States()
+	signedOut.Snap.Providers = map[provider.ID]status.ProviderStatus{provider.Claude: {State: "not_signed_in"}, provider.Codex: {State: "not_signed_in"}}
+	newer := panelfixture.Combined()
+	newer.Snap.ClientLatestVersion = "99.0.0"
+	busy := panelfixture.Combined()
+	busy.Snap.FreshPending = true
+	for name, in := range map[string]tray.MenuInputs{"signed out": signedOut, "new version": newer, "refreshing": busy} {
+		r := drawnRun(t, true, "windows")
+		v := fixtureView(in)
+		r.send(v)
+		eq(t, r.next().Type, trayproto.TypeReady)
+		layout, items, _, _, _, _ := r.ui.snapshot()
+		visible := 0
+		for _, id := range layout {
+			if id == "=" || !items[id].visible {
+				continue
+			}
+			visible++
+			if items[id].drawn == nil {
+				t.Fatalf("%s: %s is visible and not drawn (%v)", name, id, layout)
+			}
+		}
+		var want string
+		switch name {
+		case "signed out":
+			want = "p."
+		case "new version":
+			want = "newversion"
+		case "refreshing":
+			want = "refresh"
+		}
+		found := false
+		for _, id := range layout {
+			if strings.HasPrefix(id, want) && items[id].visible && items[id].drawn != nil {
+				found = true
+				if name == "refreshing" && items[id].drawn.Enabled {
+					t.Fatalf("Refreshing… drawn enabled: %+v", items[id].drawn)
+				}
+			}
+		}
+		if !found || visible < 6 {
+			t.Fatalf("%s: no drawn %s among %v", name, want, layout)
+		}
+	}
+}
+
+// Review A-m4: when the ui stops drawing (the Windows drawer panicked),
+// the helper builds the text menu of today within a tick or two, without
+// waiting for a new view.
+func TestTextMenuWhenTheUIStopsDrawing(t *testing.T) {
+	r := drawnRun(t, true, "windows")
+	v := fixtureView(panelfixture.States())
+	r.send(v)
+	eq(t, r.next().Type, trayproto.TypeReady)
+	layout, _, _, _, _, _ := r.ui.snapshot()
+	if !strings.Contains(strings.Join(layout, " "), "=") {
+		t.Fatalf("not drawn first: %v", layout)
+	}
+	r.ui.draws.Store(false)
+	waitFor(t, "the text menu", func() bool {
+		layout, items, _, _, _, resets := r.ui.snapshot()
+		return resets == 1 && !strings.Contains(strings.Join(layout, " "), "=") && layout[len(layout)-1] == "quit" && items["quit"].visible
+	})
+	layout, items, _, _, _, _ := r.ui.snapshot()
+	eq(t, strings.Join(layout, " "), "newversion h.claude r.claude.0 r.claude.1 r.claude.2 r.claude.3 r.claude.4 p.claude - "+
+		"h.codex r.codex.0 r.codex.1 r.codex.2 r.codex.3 r.codex.4 p.codex - server - dashboard refresh autostart remove quit")
+	for id := range items {
+		if items[id].drawn != nil {
+			t.Fatalf("%s still drawn", id)
+		}
+	}
+	eq(t, items["p.codex"].visible, true)
+	eq(t, items["p.codex"].title, text.CodexExpired)
+}
+
+// Review A-m8: on a ui that does not draw (Linux, macOS), a hidden item
+// whose text changes gets its title and nothing else: the menu is exactly
+// as before the drawn panel.
+func TestHiddenItemTitleOnlyWhereTheLibraryShowsIt(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		r := drawnRun(t, false, goos)
+		in := panelfixture.Combined()
+		r.send(fixtureView(in))
+		eq(t, r.next().Type, trayproto.TypeReady)
+		_, items, _, _, _, _ := r.ui.snapshot()
+		before := len(items["newversion"].sets)
+		eq(t, items["newversion"].visible, false)
+		v := fixtureView(in)
+		for i := range v.Items {
+			if v.Items[i].ID == "newversion" {
+				v.Items[i].Text = "Version 9.9.9 is out (hidden)"
+			}
+		}
+		r.send(v)
+		waitFor(t, "the new title", func() bool {
+			_, items, _, _, _, _ := r.ui.snapshot()
+			return items["newversion"].title == "Version 9.9.9 is out (hidden)"
+		})
+		_, items, _, _, _, _ = r.ui.snapshot()
+		eq(t, items["newversion"].sets[before:], []string{"title"})
 	}
 }
 

@@ -27,13 +27,20 @@ func newUI(o Options) ui {
 
 func (systrayUI) Run(onReady, onExit func()) { systray.Run(onReady, onExit) }
 func (systrayUI) Quit()                      { systray.Quit() }
-func (u systrayUI) Draws() bool              { return u.drawer != nil }
-func (systrayUI) Reset()                     { systray.ResetMenu() }
+func (u systrayUI) Draws() bool              { return u.drawer != nil && !u.drawer.Failed() }
 func (systrayUI) SetNextToIcon(s string)     { setNextToIcon(s) }
 func (systrayUI) SetTooltip(s string)        { systray.SetTooltip(s) }
 func (systrayUI) Lost() <-chan struct{}      { return sessionLost() }
 func (systrayUI) Shown() bool                { return iconShown() }
 func (systrayUI) IconSize() int              { return trayIconSize() }
+
+// Reset removes every item; the drawer forgets what they drew.
+func (u systrayUI) Reset() {
+	systray.ResetMenu()
+	if u.drawer != nil {
+		u.drawer.Clear()
+	}
+}
 
 func (u systrayUI) AddItem(_ string, checkbox bool) uiItem {
 	if checkbox {

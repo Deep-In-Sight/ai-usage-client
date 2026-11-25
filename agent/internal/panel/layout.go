@@ -5,13 +5,15 @@ import (
 	"strings"
 )
 
-// Font is the menu font or its bold face (the provider's name and the
-// percent, design 6.2).
+// Font is the menu font or a heavier face of it: bold for the provider's
+// name and the percent (design 6.2), semi-bold for a limit's label (the
+// approved mock).
 type Font uint8
 
 const (
 	Regular Font = iota
 	Bold
+	SemiBold
 )
 
 // Align is where a text sits in its box.
@@ -58,9 +60,13 @@ type Measurer interface {
 }
 
 // Size is an item's size: what Windows is told when it measures the item,
-// and the height Layout fills. The width is the panel's (Windows widens
-// the menu to its widest item, so a long text item widens it rather than
-// being cut); the height grows with the menu font, never cutting a line.
+// and the height Layout fills. The width is the panel's, or more when a
+// header's or an action's text needs it (Windows widens the menu to its
+// widest item: nothing is cut, design 2); a line that cannot be clicked
+// (the server line, the sign-in prompt) wraps at the panel's text width
+// instead, as a header's problem line does, so the panel keeps its width
+// in the usual team case. The height grows with the menu font and the
+// wrapped lines, never cutting a line.
 func Size(it Item, m Metrics, tm Measurer) (w, h int) {
 	line := tm.LineHeight(Regular)
 	switch it.Kind {
@@ -69,17 +75,27 @@ func Size(it Item, m Metrics, tm Measurer) (w, h int) {
 		if lines := Wrap(it.Problem, Regular, m.Width-2*m.Pad, tm); len(lines) > 0 {
 			h += problemHeight(len(lines), m, line)
 		}
-		return m.Width, h
+		return max(m.Width, headerWidth(it, m, tm)), h
 	case "row":
 		return m.Width, max(m.Row, rowBlock(m, tm)+2*m.px(4))
-	case "action", "info":
-		w = m.Pad + tm.TextWidth(Regular, it.Text) + m.Pad
-		if it.Kind == "action" {
-			w += m.Check
+	case "action":
+		return max(m.Width, m.Pad+m.Check+tm.TextWidth(Regular, it.Text)+m.Pad), textHeight(m, line)
+	case "info":
+		w = m.Width
+		lines := Wrap(it.Text, Regular, m.Width-2*m.Pad, tm)
+		for _, l := range lines { // a word longer than a line stays whole
+			w = max(w, m.Pad+tm.TextWidth(Regular, l)+m.Pad)
 		}
-		return max(m.Width, w), textHeight(m, line)
+		return w, textHeight(m, line) + max(len(lines)-1, 0)*(line+m.px(2))
 	}
 	return m.Width, textHeight(m, line) // "more" and anything unknown
+}
+
+// headerWidth is what a header's line needs: the picture, the name, the
+// account and the time, each 8 px apart, between the pads.
+func headerWidth(it Item, m Metrics, tm Measurer) int {
+	return m.Pad + m.Picture + m.px(8) + tm.TextWidth(Bold, it.Name) + m.px(8) + tm.TextWidth(Regular, it.Account) +
+		m.px(8) + tm.TextWidth(Regular, it.Updated) + m.Pad
 }
 
 // SeparatorSize is a separator's size (it adds no width).
@@ -99,19 +115,28 @@ func problemHeight(n int, m Metrics, line int) int {
 
 // rowBlock is the height of a row's label, bar and reset line together.
 func rowBlock(m Metrics, tm Measurer) int {
-	return max(tm.LineHeight(Regular), tm.LineHeight(Bold)) + m.px(7) + m.Bar + m.px(6) + tm.LineHeight(Regular)
+	return rowFirst(tm) + m.px(7) + m.Bar + m.px(6) + tm.LineHeight(Regular)
 }
+
+// rowFirst is the height of a row's first line (its label and percent).
+func rowFirst(tm Measurer) int { return max(tm.LineHeight(SemiBold), tm.LineHeight(Bold)) }
 
 // Layout is how to draw it in a w×h item (h as Size gave, w at least its
 // width) with pal; selected: the item is under the pointer (or chosen
-// with the keyboard), which highlights only an item that can be clicked.
+// with the keyboard), which highlights only an item that can be clicked,
+// and then every text of it is in the highlight's text colour (the bars
+// keep theirs).
 func Layout(it Item, m Metrics, tm Measurer, w, h int, pal Palette, selected bool) []Op {
 	bg, text := pal.Background, pal.Text
 	clickable := it.Kind == "row" || it.Kind == "more" || (it.Kind == "action" && it.Enabled)
-	if selected && clickable {
+	highlighted := selected && clickable
+	if highlighted {
 		bg, text = pal.Highlight, pal.HighlightText
 	}
 	dim := Dim(text, bg)
+	if highlighted {
+		dim = text
+	}
 	opacity := uint8(255)
 	if it.Stale {
 		text, dim = Fade(text, bg, StaleOpacity), Fade(dim, bg, StaleOpacity)
@@ -160,14 +185,13 @@ func Layout(it Item, m Metrics, tm Measurer, w, h int, pal Palette, selected boo
 			y += line + m.px(2)
 		}
 	case "row":
-		bold := tm.LineHeight(Bold)
 		top := (h - rowBlock(m, tm)) / 2
-		first := max(line, bold)
+		first := rowFirst(tm)
 		pw := 0
 		if it.PercentText != "" {
 			pw = tm.TextWidth(Bold, it.PercentText)
 			c := text
-			if it.Level == "critical" {
+			if it.Level == "critical" && !highlighted {
 				c = Critical
 				if it.Stale {
 					c = Fade(c, bg, StaleOpacity)
@@ -179,7 +203,7 @@ func Layout(it Item, m Metrics, tm Measurer, w, h int, pal Palette, selected boo
 		if pw > 0 {
 			lw -= pw + m.px(8)
 		}
-		text1(m.Pad, top, lw, first, it.Label, Regular, text, Left, true)
+		text1(m.Pad, top, lw, first, it.Label, SemiBold, text, Left, true)
 		by := top + first + m.px(7)
 		track := right - m.Pad
 		fill := 0
@@ -208,7 +232,12 @@ func Layout(it Item, m Metrics, tm Measurer, w, h int, pal Palette, selected boo
 		if it.Dim {
 			c = dim
 		}
-		text1(m.Pad, 0, right-m.Pad, h, it.Text, Regular, c, Left, true)
+		lines := Wrap(it.Text, Regular, m.Width-2*m.Pad, tm)
+		y := (h - len(lines)*line - max(len(lines)-1, 0)*m.px(2)) / 2
+		for _, l := range lines {
+			text1(m.Pad, y, right-m.Pad, line, l, Regular, c, Left, true)
+			y += line + m.px(2)
+		}
 	case "more":
 		text1(m.Pad, 0, right-m.Pad, h, it.Label, Regular, text, Left, true)
 	}

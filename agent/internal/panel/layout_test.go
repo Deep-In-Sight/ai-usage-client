@@ -11,14 +11,14 @@ import (
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray/panelfixture"
 )
 
-// fixedMeasurer measures 7 px per character (bold 8) and 16 px lines at
-// 96 DPI, scaled for others: a stand-in for the menu font.
+// fixedMeasurer measures 7 px per character (bold and semi-bold 8) and
+// 16 px lines at 96 DPI, scaled for others: a stand-in for the menu font.
 type fixedMeasurer struct{ dpi int }
 
 func (f fixedMeasurer) s(v int) int { return (v*f.dpi + 48) / 96 }
 func (f fixedMeasurer) TextWidth(font Font, s string) int {
 	per := 7
-	if font == Bold {
+	if font != Regular {
 		per = 8
 	}
 	return f.s(per * utf8.RuneCountInString(s))
@@ -55,9 +55,27 @@ func TestPalettes(t *testing.T) {
 	eq(t, DarkPalette.Problem(), ProblemOnDark)
 	eq(t, LightPalette.Separator(), color.NRGBA{0xc0, 0xc0, 0xc0, 0xff})
 	eq(t, DarkPalette.Separator(), color.NRGBA{0x55, 0x55, 0x55, 0xff})
+	// the problem colour follows the background's luminance: high
+	// contrast black is the light set in black (review A-m7)
+	hcBlack := Palette{Background: color.NRGBA{0, 0, 0, 0xff}, Text: color.NRGBA{0xff, 0xff, 0xff, 0xff}}
+	eq(t, hcBlack.Problem(), ProblemOnDark)
+	hcWhite := Palette{Background: color.NRGBA{0xff, 0xff, 0xff, 0xff}}
+	eq(t, hcWhite.Problem(), ProblemOnLight)
+	// the GNOME extension's threshold: linear luminance 0.5, between
+	// #bbbbbb and #bcbcbc
+	eq(t, Palette{Background: color.NRGBA{0xbb, 0xbb, 0xbb, 0xff}}.Problem(), ProblemOnDark)
+	eq(t, Palette{Background: color.NRGBA{0xbc, 0xbc, 0xbc, 0xff}}.Problem(), ProblemOnLight)
 	// opacity 0.6 over the background
 	eq(t, Fade(Normal, DarkPalette.Background, StaleOpacity), color.NRGBA{0x93, 0x59, 0x45, 0xff})
 }
+
+// twoHosts is the server line of a PC that fetches for neither provider
+// (the usual case in a team) with Windows' default host names.
+const twoHosts = "Server connected · Claude from DESKTOP-ABCDEFG · Codex from DESKTOP-HIJKLMN"
+
+// longAccount is tray.account at its longest: a 20-character local part
+// (cut there), the PCs and a plan.
+const longAccount = "firstname.lastname.…@… · 12 PCs · Enterprise"
 
 func TestSizes(t *testing.T) {
 	m := MetricsAt(96)
@@ -66,16 +84,29 @@ func TestSizes(t *testing.T) {
 		it   Item
 		w, h int
 	}{
-		{"header", header(), 320, 32},
+		// the stand-in font is wider than the menu's: this header's line
+		// needs 16 + 18 + 8 + 48 + 8 + 16×7 + 8 + 13×7 + 16 = 325
+		{"header", header(), 325, 32},
 		{"header and problem", Item{Kind: "header", Name: "Codex", Problem: "Sign-in expired: open Codex to renew it"}, 320, 32 + 28},
 		{"header and a long problem", Item{Kind: "header", Name: "Codex", Problem: strings.Repeat("word ", 12)}, 320, 32 + 28 + 18},
 		{"row", row("normal", 42), 320, 64},
 		{"more", Item{Kind: "more", Label: "More limits on the dashboard"}, 320, 30},
 		{"action", Item{Kind: "action", Text: "Refresh now", Enabled: true}, 320, 30},
 		{"info", Item{Kind: "info", Text: "Server connected", Dim: true}, 320, 30},
-		// a long line widens the menu (nothing is cut): pad + text + pad
-		{"long info", Item{Kind: "info", Text: strings.Repeat("x", 50), Dim: true}, 16 + 350 + 16, 30},
+		// a word longer than the line widens the menu (nothing is cut)
+		{"long word", Item{Kind: "info", Text: strings.Repeat("x", 50), Dim: true}, 16 + 350 + 16, 30},
+		// the server line naming two fetching PCs wraps at the panel's
+		// text width (288 px: 41 characters here), the panel keeps 320
+		// (review A-I2): "Server connected · Claude from" / "DESKTOP-
+		// ABCDEFG · Codex from" / "DESKTOP-HIJKLMN", 18 px a further line
+		{"two hosts", Item{Kind: "info", Text: twoHosts, Dim: true}, 320, 30 + 2*18},
+		// an action stays one line and widens the menu
 		{"long action", Item{Kind: "action", Text: strings.Repeat("x", 50)}, 16 + 22 + 350 + 16, 30},
+		// a header is as wide as its line needs (review A-I1): 16 + 18 + 8
+		// + "Claude" 48 + 8 + the account 7 a character + 8 + "Updated Mon
+		// 15:30" 17×7 + 16
+		{"long account", Item{Kind: "header", Name: "Claude", Account: longAccount, Updated: "Updated Mon 15:30"},
+			16 + 18 + 8 + 48 + 8 + 7*utf8.RuneCountInString(longAccount) + 8 + 119 + 16, 32},
 	} {
 		w, h := Size(c.it, m, tm96)
 		if w != c.w || h != c.h {
@@ -143,6 +174,15 @@ func TestLayoutHeader(t *testing.T) {
 	ops = Layout(st, m, tm96, 350, 32, DarkPalette, false)
 	eq(t, find(t, ops, Pixels, "").Opacity, uint8(153))
 	eq(t, find(t, ops, Text, "Claude").Colour, Fade(DarkPalette.Text, DarkPalette.Background, StaleOpacity))
+	// the longest account at the width Size gives: every part whole, the
+	// PCs and the plan kept (review A-I1)
+	long := Item{Kind: "header", Provider: "codex", Name: "Codex", Account: longAccount, Updated: "Updated Mon 15:30"}
+	w, h := Size(long, m, tm96)
+	ops = Layout(long, m, tm96, w, h, LightPalette, false)
+	acc = find(t, ops, Text, longAccount)
+	eq(t, acc.W, tm96.TextWidth(Regular, longAccount))
+	upd = find(t, ops, Text, "Updated Mon 15:30")
+	eq(t, [2]int{acc.X + acc.W + 8, upd.X + upd.W}, [2]int{upd.X, w - 16})
 }
 
 func TestLayoutRow(t *testing.T) {
@@ -150,7 +190,7 @@ func TestLayoutRow(t *testing.T) {
 	ops := Layout(row("normal", 42), m, tm96, 350, 64, LightPalette, false)
 	eq(t, ops[0].Colour, LightPalette.Background)
 	lbl := find(t, ops, Text, "5-hour")
-	eq(t, [4]int{lbl.X, lbl.Y, lbl.H, int(lbl.Font)}, [4]int{16, 5, 16, int(Regular)})
+	eq(t, [4]int{lbl.X, lbl.Y, lbl.H, int(lbl.Font)}, [4]int{16, 5, 16, int(SemiBold)}) // the mock's weight (review A-m14)
 	pc := find(t, ops, Text, "42%")
 	eq(t, [4]int{pc.X + pc.W, pc.Y, int(pc.Align), int(pc.Font)}, [4]int{350 - 16, 5, int(Right), int(Bold)})
 	eq(t, pc.Colour, LightPalette.Text)
@@ -173,11 +213,18 @@ func TestLayoutRow(t *testing.T) {
 	if b := find(t, Layout(nv, m, tm96, 350, 64, LightPalette, false), Pixels, ""); !bytes.Equal(b.Pixels, BarPixels(318, 8, 0, Normal, Track)) {
 		t.Fatal("empty track")
 	}
-	// under the pointer: the highlight, its text colour
+	// under the pointer: the highlight, every text in its text colour,
+	// the critical percent too (review A-m10: #f66151 on #0078d4 is
+	// unreadable); the bar keeps its colour
 	ops = Layout(row("normal", 42), m, tm96, 350, 64, LightPalette, true)
 	eq(t, ops[0].Colour, LightPalette.Highlight)
 	eq(t, find(t, ops, Text, "5-hour").Colour, LightPalette.HighlightText)
-	eq(t, find(t, ops, Text, "Resets Fri 21:20 · in 2h 20m").Colour, Dim(LightPalette.HighlightText, LightPalette.Highlight))
+	eq(t, find(t, ops, Text, "Resets Fri 21:20 · in 2h 20m").Colour, LightPalette.HighlightText)
+	ops = Layout(row("critical", 100), m, tm96, 350, 64, LightPalette, true)
+	eq(t, find(t, ops, Text, "42%").Colour, LightPalette.HighlightText)
+	if b := find(t, ops, Pixels, ""); !bytes.Equal(b.Pixels, BarPixels(318, 8, 318, Critical, Track)) {
+		t.Fatal("critical bar under the pointer")
+	}
 	// stale: the bar at 0.6
 	st := row("normal", 42)
 	st.Stale = true
@@ -219,6 +266,25 @@ func TestLayoutTextItems(t *testing.T) {
 	eq(t, pr.Colour, LightPalette.Text)
 	more := find(t, Layout(Item{Kind: "more", Label: "More limits on the dashboard"}, m, tm96, 350, 30, LightPalette, false), Text, "More limits on the dashboard")
 	eq(t, more.X, 16)
+	// "More limits" under the pointer: the highlight's text colour
+	more = find(t, Layout(Item{Kind: "more", Label: "More"}, m, tm96, 350, 30, DarkPalette, true), Text, "More")
+	eq(t, more.Colour, DarkPalette.HighlightText)
+	// one line of an info item: in a line's box in the middle of the item
+	eq(t, [3]int{srv.Y, srv.H, srv.W}, [3]int{7, 16, 350 - 32})
+	// the server line with two hosts: three lines, 2 px apart, the block
+	// in the middle (review A-I2)
+	two := Item{Kind: "info", Text: twoHosts, Dim: true}
+	_, h := Size(two, m, tm96)
+	ops = Layout(two, m, tm96, 320, h, LightPalette, false)
+	var lines []string
+	var ys []int
+	for _, o := range ops[1:] {
+		eq(t, [4]int{int(o.Kind), o.X, o.H, int(o.Font)}, [4]int{int(Text), 16, 16, int(Regular)})
+		eq(t, o.Colour, Dim(LightPalette.Text, LightPalette.Background))
+		lines, ys = append(lines, o.Text), append(ys, o.Y)
+	}
+	eq(t, lines, []string{"Server connected · Claude from", "DESKTOP-ABCDEFG · Codex from", "DESKTOP-HIJKLMN"})
+	eq(t, ys, []int{7, 25, 43})
 	// the separator: a line across the content, in the middle
 	ops = SeparatorOps(m, 350, 13, DarkPalette)
 	eq(t, ops, []Op{{Kind: Fill, W: 350, H: 13, Colour: DarkPalette.Background}, {Kind: Fill, X: 16, Y: 6, W: 318, H: 1, Colour: DarkPalette.Separator()}})
@@ -293,12 +359,13 @@ func TestCheckPixels(t *testing.T) {
 	eq(t, bgra(b, 12, 11, 11)[3], 0)
 }
 
-// The fixtures' items: every one has a size and draws.
+// The fixtures' items: every one has a size and draws; only a header is
+// wider than the panel (the stand-in font is wider than the menu's).
 func TestFixtureItemsLayOut(t *testing.T) {
 	for _, in := range []tray.MenuInputs{panelfixture.Combined(), panelfixture.States()} {
 		for id, it := range Items(tray.BuildPanel(in)) {
 			w, h := Size(it, MetricsAt(96), tm96)
-			if w != 320 || h < 32 {
+			if (w != 320 && it.Kind != "header") || w < 320 || h < 32 {
 				t.Fatalf("%s: %dx%d", id, w, h)
 			}
 			if len(Layout(it, MetricsAt(96), tm96, w, h, LightPalette, false)) < 2 {

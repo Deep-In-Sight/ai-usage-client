@@ -53,7 +53,8 @@ type fakeMenuDrawer struct {
 	sepMeas  int
 	areas    []string
 	measures int
-	grow     int32 // added to every height measured from now on
+	grow     int32           // added to every height measured from now on
+	dpis     map[uint32]bool // every DPI Measure and Draw were given
 }
 
 func (f *fakeMenuDrawer) Measure(id, dpi uint32) (int32, int32) {
@@ -62,6 +63,7 @@ func (f *fakeMenuDrawer) Measure(id, dpi uint32) (int32, int32) {
 	w, h := int32(200+id), int32(20+id%7)+f.grow
 	f.measured[id] = [2]int32{w, h}
 	f.measures++
+	f.dpis[dpi] = true
 	return w, h
 }
 
@@ -69,6 +71,7 @@ func (f *fakeMenuDrawer) Draw(id uint32, hdc uintptr, rc systray.Rect, state, dp
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.drawn[id] = rc
+	f.dpis[dpi] = true
 }
 
 func (f *fakeMenuDrawer) SettingChanged(area string) {
@@ -109,6 +112,9 @@ type ownerDrawResult struct {
 	MeasuresFirst int      // Measure calls during the first open
 	MeasuresAgain int      // during the second open
 	GammaAgain    [2]int32 // Gamma measured and drawn high the second time
+	DPIs          []uint32 // the DPIs Measure and Draw were given
+	DeltaShown    bool     // Delta, hidden while the re-insert had it out, is in the open menu
+	DeltaHide     string   // what became of that Hide
 }
 
 // openMenu posts the tray icon's right-click to the tray's window, as a
@@ -210,7 +216,7 @@ func TestOwnerDrawChild(t *testing.T) {
 		t.Skip("child of TestOwnerDrawnItemIsOwnerDrawn")
 	}
 	runtime.LockOSThread()
-	f := &fakeMenuDrawer{measured: map[uint32][2]int32{}, drawn: map[uint32]systray.Rect{}}
+	f := &fakeMenuDrawer{measured: map[uint32][2]int32{}, drawn: map[uint32]systray.Rect{}, dpis: map[uint32]bool{}}
 	systray.SetMenuDrawer(f)
 	res := ownerDrawResult{IDs: map[string]uint32{}, TypesOn: map[string]uint32{}, TypesOff: map[string]uint32{}}
 	systray.Run(func() {
@@ -272,8 +278,43 @@ func TestOwnerDrawChild(t *testing.T) {
 		f.mu.Lock()
 		res.MeasuresAgain = f.measures - res.MeasuresFirst
 		res.GammaAgain = [2]int32{f.measured[gamma.ID()][1], f.drawn[gamma.ID()].Bottom - f.drawn[gamma.ID()].Top}
+		for dpi := range f.dpis {
+			res.DPIs = append(res.DPIs, dpi)
+		}
 		f.mu.Unlock()
 		closeMenu(w)
+
+		// review A-m1: a Hide from another goroutine while the re-insert
+		// before an open has the item out of the menu waits for it, and
+		// the item stays hidden (without the lock it came back)
+		delta := systray.AddMenuItem("Delta", "")
+		delta.SetOwnerDrawn(true)
+		hid := make(chan struct{})
+		var once sync.Once
+		systray.SetReinsertHookForTests(func(id uint32) {
+			if id != delta.ID() {
+				return
+			}
+			once.Do(func() {
+				go func() { delta.Hide(); close(hid) }()
+				time.Sleep(300 * time.Millisecond) // the Hide has all the time it needs
+			})
+		})
+		w, m = openMenu()
+		if w == 0 {
+			res.Error = "no menu window the third time"
+			return
+		}
+		select {
+		case <-hid:
+			res.DeltaHide = "done"
+		case <-time.After(5 * time.Second):
+			res.DeltaHide = "never returned"
+		}
+		time.Sleep(300 * time.Millisecond)
+		_, _, res.DeltaShown = itemType(m, delta.ID())
+		closeMenu(w)
+		systray.SetReinsertHookForTests(nil)
 
 		// what Windows sends every top-level window when the colour mode changes
 		const hwndBroadcast, wmSettingChange, smtoAbortIfHung = 0xffff, 0x001A, 0x0002
@@ -379,6 +420,13 @@ func TestOwnerDrawnItemIsOwnerDrawn(t *testing.T) {
 	}
 	if !slices.Contains(res.Areas, "ImmersiveColorSet") {
 		t.Fatalf("settings changes seen: %q", res.Areas)
+	}
+	// review B-M8: measured and drawn at the runner's DPI (100 %)
+	eq(t, res.DPIs, []uint32{96})
+	// review A-m1
+	eq(t, res.DeltaHide, "done")
+	if res.DeltaShown {
+		t.Fatal("Delta, hidden during the re-insert, is in the menu")
 	}
 	t.Logf("measures: first open %d, second %d; separator drawn %v", res.MeasuresFirst, res.MeasuresAgain, res.SepHeights)
 }

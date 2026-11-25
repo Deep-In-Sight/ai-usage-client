@@ -45,7 +45,7 @@ type fakeUI struct {
 	lost     chan struct{}
 	shown    atomic.Bool
 	size     atomic.Int32
-	draws    bool // the ui draws the panel's items itself (Windows)
+	draws    atomic.Bool // the ui draws the panel's items itself (Windows)
 }
 
 type fakeItem struct {
@@ -113,7 +113,7 @@ func (u *fakeUI) AddSeparator(drawn bool) {
 	}
 	u.layout = append(u.layout, "-")
 }
-func (u *fakeUI) Draws() bool { return u.draws }
+func (u *fakeUI) Draws() bool { return u.draws.Load() }
 func (u *fakeUI) Reset() {
 	u.mu.Lock()
 	defer u.mu.Unlock()

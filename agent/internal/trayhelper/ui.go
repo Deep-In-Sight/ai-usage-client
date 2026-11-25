@@ -51,4 +51,9 @@ type uiItem interface {
 // drawer; nil where the ui does not draw).
 type itemDrawer interface {
 	Set(id uint32, it *panel.Item)
+	// Clear forgets every item (the menu is rebuilt).
+	Clear()
+	// Failed reports that the drawing stopped for good (a panic): the
+	// ui does not draw from then on.
+	Failed() bool
 }
