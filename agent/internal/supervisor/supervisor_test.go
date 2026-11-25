@@ -611,7 +611,10 @@ func TestNoticeGoesToTheFirstHelper(t *testing.T) {
 		t.Fatalf("%+v", m)
 	}
 	b.none(t)
-	// once only: a restarted first helper does not show it again
+	// once only: a restarted first helper does not show it again (its icon
+	// came up: it took the notice)
+	a.say(t, trayproto.Msg{Type: trayproto.TypeReady})
+	h.event(func(e Event) bool { return e.Ready })
 	h.clk.Advance(time.Minute)
 	a.exit(trayproto.ExitSessionLost)
 	h.event(isExit)

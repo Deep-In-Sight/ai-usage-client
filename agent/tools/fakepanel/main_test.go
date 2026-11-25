@@ -18,6 +18,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/fakeshell"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray/panelfixture"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
@@ -200,13 +201,10 @@ func (s *syncBuffer) String() string {
 }
 
 // privateBus starts a session bus of its own and returns its address.
-// Needs dbus-daemon (skipped without it).
+// Needs dbus-daemon (skipped without it, a failure on CI).
 func privateBus(t *testing.T) string {
 	t.Helper()
-	daemon, err := exec.LookPath("dbus-daemon")
-	if err != nil {
-		t.Skip("no dbus-daemon")
-	}
+	daemon := fakeshell.Daemon(t) // skipped without it; fails on CI
 	cmd := exec.Command(daemon, "--session", "--nofork", "--print-address=1")
 	stdout, err := cmd.StdoutPipe()
 	must(t, err)

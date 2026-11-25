@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"io"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -368,4 +369,110 @@ func TestStopEndsTheBridgeToo(t *testing.T) {
 	h.sup.SetPanelAttached(false)
 	h.clk.Advance(time.Hour)
 	h.noSpawn()
+}
+
+// gatedProc is a helper whose output is read only once gate is closed:
+// its last line can come after its end (review m4).
+type gatedProc struct {
+	*fakeProc
+	out io.Reader
+}
+
+func (p *gatedProc) Stdout() io.Reader { return p.out }
+
+type gatedReader struct {
+	gate <-chan struct{}
+	r    io.Reader
+}
+
+func (g gatedReader) Read(b []byte) (int, error) {
+	<-g.gate
+	return g.r.Read(b)
+}
+
+// Review m4: a bridge that says enabled and ends at once (its line read
+// after its end was handled) still spends the enable-once: the event
+// comes, and the next bridge's hello does not ask again.
+func TestEnabledLineAfterTheBridgeEnded(t *testing.T) {
+	gate := make(chan struct{})
+	var first atomic.Bool
+	first.Store(true)
+	var h *harness
+	h = newHarnessFor(t, func(o *Options) {
+		o.Spawn = func(p provider.ID, uid uint32, token string) (Proc, error) {
+			fp := newFakeProc(p, uid, token, false)
+			h.spawns <- fp
+			if p == BridgeSlot && first.Swap(false) {
+				return &gatedProc{fp, gatedReader{gate, strings.NewReader(`{"v":1,"type":"shell","enabled":true}` + "\n")}}, nil
+			}
+			return fp, nil
+		}
+	})
+	h.sup.WantBridge(true, true)
+	b, m := h.bridge()
+	if !m.EnableOnce {
+		t.Fatalf("%+v", m)
+	}
+	b.exit(trayproto.ExitSessionLost)
+	h.event(isExitOf(BridgeSlot))
+	close(gate)
+	if e := h.event(func(e Event) bool { return e.Enabled }); e.Provider != BridgeSlot {
+		t.Fatalf("%+v", e)
+	}
+	h.clk.Advance(lostDelay)
+	if _, m := h.bridge(); m.EnableOnce {
+		t.Fatalf("asked to turn the extension on again: %+v", m)
+	}
+}
+
+// Review m5: a notice handed to a helper that ends before it took it (a
+// bridge that could not dial its bus says nothing) goes to the next
+// helper; once a helper took it (the bridge said something, an icon
+// helper's icon came up) it is not shown again.
+func TestNoticeKeptUntilAHelperTookIt(t *testing.T) {
+	h := newHarness(t)
+	h.sup.WantBridge(true, false)
+	b, _ := h.bridge()
+	h.sup.SetPanelAttached(true)
+	h.sup.Notice("AI Usage is running.")
+	if m := b.next(t); m.Type != trayproto.TypeNotice {
+		t.Fatalf("%+v", m)
+	}
+	b.exit(trayproto.ExitSessionLost) // no bus: it said nothing
+	h.event(isExitOf(BridgeSlot))
+	h.clk.Advance(lostDelay)
+	b, _ = h.bridge()
+	if m := b.next(t); m.Type != trayproto.TypeNotice || m.Text != "AI Usage is running." {
+		t.Fatalf("%+v", m)
+	}
+	yes := true
+	b.say(t, trayproto.Msg{Type: trayproto.TypeShell, Supported: &yes})
+	h.event(func(e Event) bool { return e.Supported != nil })
+	b.exit(trayproto.ExitSessionLost)
+	h.event(isExitOf(BridgeSlot))
+	h.clk.Advance(2 * lostDelay)
+	b, _ = h.bridge()
+	b.none(t)
+	// an icon helper that ends before its icon came up hands it on too
+	h2 := newHarness(t)
+	h2.sup.Notice("second")
+	h2.sup.Want([]provider.ID{provider.Claude})
+	c := h2.spawned()
+	if m := c.next(t); m.Text != "second" {
+		t.Fatalf("%+v", m)
+	}
+	c.exit(trayproto.ExitSessionLost)
+	h2.event(isExit)
+	h2.clk.Advance(lostDelay)
+	c = h2.spawned()
+	if m := c.next(t); m.Text != "second" {
+		t.Fatalf("%+v", m)
+	}
+	c.say(t, trayproto.Msg{Type: trayproto.TypeReady})
+	h2.event(func(e Event) bool { return e.Ready })
+	h2.clk.Advance(time.Minute)
+	c.exit(trayproto.ExitSessionLost)
+	h2.event(isExit)
+	h2.clk.Advance(lostDelay)
+	h2.spawned().none(t)
 }

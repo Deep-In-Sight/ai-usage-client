@@ -22,10 +22,11 @@ const addressEnv = "DBUS_SESSION_BUS_ADDRESS"
 // address failed fallbackAfter times in a row. It returns that address when the given
 // one does not answer and the runtime folder's does; ok is false when
 // nothing should change. An empty address is left alone: the D-Bus library
-// looks in $XDG_RUNTIME_DIR by itself then.
+// looks in $XDG_RUNTIME_DIR by itself then. A relative runtime folder is
+// none, as for Address (review m9).
 func Fallback(getenv func(string) string, reachable func(addr string) bool) (addr string, ok bool) {
 	cur, rt := getenv(addressEnv), getenv("XDG_RUNTIME_DIR")
-	if cur == "" || rt == "" {
+	if cur == "" || !path.IsAbs(rt) { // a POSIX path whatever the OS
 		return "", false
 	}
 	runtimeBus := "unix:path=" + strings.TrimRight(rt, "/") + "/bus"

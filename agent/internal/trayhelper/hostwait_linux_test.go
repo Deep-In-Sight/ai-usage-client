@@ -9,15 +9,14 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/fakeshell"
 )
 
 // The real connection on a private session bus: a watcher that takes its
-// name later is noticed at once. Needs dbus-daemon (skipped without it).
+// name later is noticed at once. Needs dbus-daemon (skipped without it, a failure on CI).
 func TestWaitForHostOnAPrivateBus(t *testing.T) {
-	daemon, err := exec.LookPath("dbus-daemon")
-	if err != nil {
-		t.Skip("no dbus-daemon")
-	}
+	daemon := fakeshell.Daemon(t) // skipped without it; fails on CI
 	cmd := exec.Command(daemon, "--session", "--nofork", "--print-address=1")
 	stdout, err := cmd.StdoutPipe()
 	must(t, err)
@@ -57,12 +56,9 @@ func TestWaitForHostOnAPrivateBus(t *testing.T) {
 }
 
 // The real watch on a private session bus: a watcher taking its name ends
-// it at once. Needs dbus-daemon (skipped without it).
+// it at once. Needs dbus-daemon (skipped without it, a failure on CI).
 func TestWatchSessionOnAPrivateBus(t *testing.T) {
-	daemon, err := exec.LookPath("dbus-daemon")
-	if err != nil {
-		t.Skip("no dbus-daemon")
-	}
+	daemon := fakeshell.Daemon(t) // skipped without it; fails on CI
 	cmd := exec.Command(daemon, "--session", "--nofork", "--print-address=1")
 	stdout, err := cmd.StdoutPipe()
 	must(t, err)

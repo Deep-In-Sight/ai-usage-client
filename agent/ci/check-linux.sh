@@ -172,27 +172,31 @@ print("ok" if head and rows else "missing: " + " | ".join(l for l, _ in items))
 # subcommand (its provider and icon folder, or its shell role, come over
 # its standard input), and it gets the desktop session's variables but not
 # the rest of the agent's environment (a canary the agent has): the icon
-# helper's and the GNOME bridge's (BUS: the session bus it serves on).
+# helper's and the GNOME bridge's (BUS: the session bus it serves on). The
+# message names each helper's own command line and variables (review m8).
 helper_private_check() {
-  local bus=$1 hp ap cmd names problems="" bridge seen=""
+  local bus=$1 hp ap cmd names problems="" bridge role seen="" each=""
   ap=$(pgrep -f "^$exe run" | head -n 1)
   bridge=$(bridge_pids "$bus" | head -n 1)
   [ -n "$ap" ] || problems="$problems no_agent"
-  [ -n "$bridge" ] || problems="$problems no_bridge"
+  # on these buses without GNOME Shell the bridge ends 30 s after it started
+  [ -n "$bridge" ] || problems="$problems no_bridge(it lives 30 s without a GNOME Shell)"
   tr '\0' '\n' < "/proc/$ap/environ" 2>/dev/null | grep -q '^CI_SECRET_CANARY=' || problems="$problems canary_not_in_agent"
   for hp in $(pgrep -f "^$exe tray-helper"); do
-    cmd=$(tr '\0' ' ' < "/proc/$hp/cmdline")
-    names=$(tr '\0' '\n' < "/proc/$hp/environ" | cut -d= -f1 | sort | tr '\n' ' ')
-    if [ "$hp" = "$bridge" ]; then seen="$seen bridge"; else seen="$seen icon"; fi
-    [ "$cmd" = "$exe tray-helper " ] || problems="$problems cmdline=[$cmd]"
-    case " $names " in *" CI_SECRET_CANARY "*) problems="$problems canary_in_helper_$hp" ;; esac
+    cmd=$(tr '\0' ' ' < "/proc/$hp/cmdline" 2>/dev/null)
+    names=$(tr '\0' '\n' < "/proc/$hp/environ" 2>/dev/null | cut -d= -f1 | sort | tr '\n' ' ')
+    if [ "$hp" = "$bridge" ]; then role=bridge; else role=icon; fi
+    seen="$seen $role"
+    each="$each; $role $hp: command line [$cmd], environment: $names"
+    [ "$cmd" = "$exe tray-helper " ] || problems="$problems ${role}_${hp}_cmdline=[$cmd]"
+    case " $names " in *" CI_SECRET_CANARY "*) problems="$problems canary_in_${role}_$hp" ;; esac
     for v in DBUS_SESSION_BUS_ADDRESS XDG_CURRENT_DESKTOP XDG_SESSION_TYPE HOME PATH AI_USAGE_HELPER_TOKEN; do
-      case " $names " in *" $v "*) ;; *) problems="$problems no_${v}_$hp" ;; esac
+      case " $names " in *" $v "*) ;; *) problems="$problems no_${v}_${role}_$hp" ;; esac
     done
   done
   case "$seen" in *icon*) ;; *) problems="$problems no_icon_helper" ;; esac
-  if [ -z "$problems" ]; then pass tray.helper_private "helpers [$seen ], command line [$cmd], environment: $names"
-  else fail tray.helper_private "$problems; helpers [$seen ]; environment: $names"; fi
+  if [ -z "$problems" ]; then pass tray.helper_private "helpers [$seen ]$each"
+  else fail tray.helper_private "$problems; helpers [$seen ]$each"; fi
 }
 
 tray_label_check() {
@@ -213,9 +217,13 @@ tray_label_check() {
     registered() { svc=$(awk '$1 == "registered" { s = $2 } END { print s }' "$out/watcher.log") && [ -n "$svc" ]; }
     get_prop() { DBUS_SESSION_BUS_ADDRESS="$bus_addr" "$CI_BIN/fakewatcher" get "$svc" "$1" 2>>"$out/watcher.err"; }
     label_is() { label=$(get_prop XAyatanaLabel) && [ "$label" = "$1" ]; }
+    # tray.helper_private as soon as the bridge and an icon helper run, not
+    # after the registration (up to 90 s): the bridge waits only 30 s for
+    # a GNOME Shell on this bus (review m8)
+    helpers_up() { [ -n "$(bridge_pids "$bus_addr")" ] && [ "$(icon_helper_count "$exe" "$bus_addr")" -ge 1 ]; }
+    wait_for 20 helpers_up
+    helper_private_check "$bus_addr"
     if wait_for 90 registered; then
-      # while the bridge still waits for a GNOME Shell (30 s)
-      helper_private_check "$bus_addr"
       wait_for 30 label_is 42% || problems="$problems label=[$label]"
       guide=$(get_prop XAyatanaLabelGuide)
       [ -n "$guide" ] || problems="$problems guide_empty"

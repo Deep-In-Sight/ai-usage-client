@@ -13,7 +13,8 @@ import (
 // in place) moves to $XDG_RUNTIME_DIR/bus when the address it has does not
 // answer and a bus answers there.
 func TestFallback(t *testing.T) {
-	alive := map[string]bool{"unix:path=/run/user/1000/bus": true, "unix:abstract=/tmp/dbus-live,guid=1": true}
+	alive := map[string]bool{"unix:path=/run/user/1000/bus": true, "unix:abstract=/tmp/dbus-live,guid=1": true,
+		"unix:path=run/user/1000/bus": true}
 	reachable := func(a string) bool { return alive[a] }
 	env := func(addr, rt string) func(string) string {
 		return func(k string) string {
@@ -36,6 +37,7 @@ func TestFallback(t *testing.T) {
 		{"unix:abstract=/tmp/dbus-old,guid=9", "", "", false},                // no runtime folder
 		{"unix:abstract=/tmp/dbus-old,guid=9", "/run/user/1001", "", false},  // nothing answers there either
 		{"", "/run/user/1000", "", false},                                    // godbus falls back by itself
+		{"unix:abstract=/tmp/dbus-old,guid=9", "run/user/1000", "", false},   // a relative runtime folder (as Address: review m9)
 	}
 	for _, c := range cases {
 		got, ok := Fallback(env(c.addr, c.rt), reachable)

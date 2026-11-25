@@ -28,15 +28,27 @@ type Bus struct {
 	cmd  *exec.Cmd
 }
 
-// NewBus starts a private session bus, at addr ("unix:path=…") or at an
-// address of its own (""); the test is skipped without dbus-daemon. It is
-// stopped when the test ends.
-func NewBus(t testing.TB, addr string) *Bus {
+// Daemon is the path of dbus-daemon. Without one the test is skipped, but
+// on CI (GITHUB_ACTIONS=true) it fails: a runner without dbus-daemon would
+// otherwise pass every bus test by skipping it (review I3).
+func Daemon(t testing.TB) string {
 	t.Helper()
 	daemon, err := exec.LookPath("dbus-daemon")
 	if err != nil {
+		if os.Getenv("GITHUB_ACTIONS") == "true" {
+			t.Fatal("no dbus-daemon on this CI runner: the session bus tests cannot run")
+		}
 		t.Skip("no dbus-daemon")
 	}
+	return daemon
+}
+
+// NewBus starts a private session bus, at addr ("unix:path=…") or at an
+// address of its own (""); without dbus-daemon the test is skipped (it
+// fails on CI: Daemon). It is stopped when the test ends.
+func NewBus(t testing.TB, addr string) *Bus {
+	t.Helper()
+	daemon := Daemon(t)
 	args := []string{"--session", "--nofork", "--print-address=1"}
 	if addr != "" {
 		args = append(args, "--address="+addr)
@@ -101,6 +113,7 @@ type Shell struct {
 	disableOK bool
 	locked    bool
 	notices   []string
+	gate      *ActiveGate // GetActive waits on it (nil: answers at once)
 }
 
 // Options say how the shell answers.
@@ -177,14 +190,55 @@ func (s *Shell) SetLocked(t testing.TB, locked bool) {
 	}
 }
 
+// SetLockedQuietly changes GetActive's answer without ActiveChanged (a
+// screen saver whose signal never comes).
+func (s *Shell) SetLockedQuietly(locked bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.locked = locked
+}
+
 // Leave gives up org.gnome.Shell (the shell went away; the connection
 // stays).
-func (s *Shell) Leave(t testing.TB) {
+func (s *Shell) Leave(t testing.TB) { s.Release(t, ShellName) }
+
+// Release gives up one of the shell's names (the connection stays).
+func (s *Shell) Release(t testing.TB, name string) {
 	t.Helper()
-	if _, err := s.Conn.ReleaseName(ShellName); err != nil {
+	if _, err := s.Conn.ReleaseName(name); err != nil {
 		t.Fatal(err)
 	}
 }
+
+// ActiveGate holds GetActive's answers back: each call takes the answer of
+// the moment it came and waits until Open.
+type ActiveGate struct {
+	mu      sync.Mutex
+	pending int
+	open    chan struct{}
+	once    sync.Once
+}
+
+// HoldGetActive makes GetActive wait until the gate it returns is opened
+// (at the latest when the test ends).
+func (s *Shell) HoldGetActive(t testing.TB) *ActiveGate {
+	g := &ActiveGate{open: make(chan struct{})}
+	t.Cleanup(g.Open)
+	s.mu.Lock()
+	s.gate = g
+	s.mu.Unlock()
+	return g
+}
+
+// Pending is the number of GetActive calls waiting.
+func (g *ActiveGate) Pending() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.pending
+}
+
+// Open lets every waiting GetActive answer (and later ones answer at once).
+func (g *ActiveGate) Open() { g.once.Do(func() { close(g.open) }) }
 
 type extensions struct{ s *Shell }
 
@@ -206,8 +260,15 @@ type screenSaver struct{ s *Shell }
 
 func (x screenSaver) GetActive() (bool, *dbus.Error) {
 	x.s.mu.Lock()
-	defer x.s.mu.Unlock()
-	return x.s.locked, nil
+	locked, g := x.s.locked, x.s.gate
+	x.s.mu.Unlock()
+	if g != nil {
+		g.mu.Lock()
+		g.pending++
+		g.mu.Unlock()
+		<-g.open
+	}
+	return locked, nil
 }
 
 type notifications struct{ s *Shell }
