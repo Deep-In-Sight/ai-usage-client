@@ -47,6 +47,25 @@ jobs:
             echo "::error file=agent/${f#./},title=gofmt::$d"
           done
           exit 1
+      - name: gjs and a session bus
+        # gjs runs the GNOME extension's view-model test; dbus-daemon gives
+        # the tests that need a session bus (tools/fakepanel) their own.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update -q > "$RUNNER_TEMP/apt.log" 2>&1
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q gjs dbus >> "$RUNNER_TEMP/apt.log" 2>&1 ||
+            { tail -5 "$RUNNER_TEMP/apt.log" | sed 's/^/::error title=apt::/'; exit 1; }
+      - name: extension view model
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          gjs -m ../gnome-extension/tests/test_view.js 2>&1 | tee "$RUNNER_TEMP/gjs.log" || {
+            grep -E -i -A2 'fail|error|exception' "$RUNNER_TEMP/gjs.log" | head -10 | sed 's/^/::error title=gjs::/'
+            exit 1
+          }
+          tail -1 "$RUNNER_TEMP/gjs.log" | sed 's/^/::notice title=gjs::/'
       - name: test
         shell: bash
         run: |

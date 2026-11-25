@@ -8,3 +8,6 @@ agent/internal/notices/borrowed/** -text
 agent/third_party/systray/** -text
 # Golden files the tests compare byte for byte.
 agent/internal/tray/testdata/** -text
+# The usage panel's GNOME extension: tools/mkext generates the agent's
+# embedded copies from it, which are compared byte for byte.
+gnome-extension/** -text

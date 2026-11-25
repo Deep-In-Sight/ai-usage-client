@@ -42,7 +42,8 @@ type Mark struct {
 var Marks = []Mark{
 	{Name: "The Clawd artwork", Shown: "which the tray icon shows while Claude Code is signed in",
 		Depicts: "the Claude Code mascot", Owner: "Anthropic PBC", Licensor: "Anthropic",
-		Files: []string{"claude-usage@localhost/clawd.svg", "agent/internal/icon/mascot.go"}},
+		Files: []string{"claude-usage@localhost/clawd.svg", "agent/internal/icon/mascot.go",
+			"gnome-extension/ai-usage-panel@localhost/clawd.svg"}},
 }
 
 // Borrowed is a public project whose logic the agent ports (rewritten in
