@@ -1,3 +1,4 @@
+'use strict';
 // The extension's link to the AI Usage agent: when it may show the agent's
 // view and when it counts as attached. Plain JavaScript without any Shell
 // or gi:// import, so plain `gjs -m` tests it

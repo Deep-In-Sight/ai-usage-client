@@ -35,12 +35,26 @@ func FormFor(shellMajor int) (form string, ok bool) {
 // Dir is the extension's folder in the user's data folder, where GNOME
 // Shell looks for it (plan PR-13): $XDG_DATA_HOME when it is absolute,
 // else ~/.local/share, then gnome-shell/extensions/ai-usage-panel@localhost.
-func Dir(getenv func(string) string, home string) string {
+// Without an absolute home either it is an error, never a folder relative
+// to wherever the agent runs.
+func Dir(getenv func(string) string, home string) (string, error) {
 	data := getenv("XDG_DATA_HOME")
 	if !filepath.IsAbs(data) {
+		if !filepath.IsAbs(home) {
+			return "", errors.New("no user data folder: no absolute XDG_DATA_HOME and no home folder")
+		}
 		data = filepath.Join(home, ".local", "share")
 	}
-	return filepath.Join(data, "gnome-shell", "extensions", UUID)
+	return filepath.Join(data, "gnome-shell", "extensions", UUID), nil
+}
+
+// absolute refuses a folder that is not absolute (Write and Remove work
+// only on Dir's folder).
+func absolute(dir string) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("%q is not an absolute folder", dir)
+	}
+	return nil
 }
 
 // errNotCurrent ends the walk of a folder that is not the form.
@@ -100,8 +114,12 @@ func Current(dir, form string) (bool, error) {
 	return seen == len(want), nil
 }
 
-// writeFile writes one file of a new folder (a test makes it fail).
-var writeFile = os.WriteFile
+// writeFile writes one file of a new folder and rename swaps the folders
+// (tests make them fail).
+var (
+	writeFile = os.WriteFile
+	rename    = os.Rename
+)
 
 // Staging folders sit beside extensions/, not in it: the shell scans
 // extensions/ and would report a folder there whose name is not its uuid.
@@ -116,6 +134,9 @@ const (
 // <pid>) and swapped in by two renames (the old one goes to .old-<pid>
 // and is removed), so the shell never finds half a folder (plan PR-13).
 func Write(dir string, shellMajor int) (wrote bool, err error) {
+	if err := absolute(dir); err != nil {
+		return false, err
+	}
 	form, ok := FormFor(shellMajor)
 	if !ok {
 		return false, fmt.Errorf("no extension form for GNOME Shell %d", shellMajor)
@@ -162,16 +183,16 @@ func Write(dir string, shellMajor int) (wrote bool, err error) {
 	}
 	hadOld := false
 	if _, err := os.Lstat(dir); err == nil {
-		if err := os.Rename(dir, old); err != nil {
+		if err := rename(dir, old); err != nil {
 			return false, err
 		}
 		hadOld = true
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return false, err
 	}
-	if err := os.Rename(staging, dir); err != nil {
+	if err := rename(staging, dir); err != nil {
 		if hadOld {
-			_ = os.Rename(old, dir)
+			_ = rename(old, dir)
 		}
 		return false, err
 	}
@@ -184,6 +205,9 @@ func Write(dir string, shellMajor int) (wrote bool, err error) {
 // Remove deletes the extension's folder and any staging folder a write
 // left behind (of any process).
 func Remove(dir string) error {
+	if err := absolute(dir); err != nil {
+		return err
+	}
 	errs := []error{os.RemoveAll(dir)}
 	base := filepath.Dir(filepath.Dir(dir))
 	entries, err := os.ReadDir(base)

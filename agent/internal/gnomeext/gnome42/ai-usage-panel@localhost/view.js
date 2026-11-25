@@ -1,3 +1,4 @@
+'use strict';
 // The usage panel's view, as the AI Usage agent sends it over the session
 // bus (GetView): reading it and the few decisions drawn from it. Plain
 // JavaScript without any Shell or gi:// import, so plain `gjs -m` tests it

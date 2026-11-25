@@ -34,13 +34,16 @@ func needForms(t *testing.T) {
 
 // extDir is a new user data folder's extension folder (not created).
 func extDir(t *testing.T) (dir, gnomeShell string) {
+	t.Helper()
 	data := t.TempDir()
-	return Dir(func(k string) string {
+	dir, err := Dir(func(k string) string {
 		if k == "XDG_DATA_HOME" {
 			return data
 		}
 		return ""
-	}, "/nowhere"), filepath.Join(data, "gnome-shell")
+	}, "/nowhere")
+	must(t, err)
+	return dir, filepath.Join(data, "gnome-shell")
 }
 
 // onDisk is the files under dir by their slash path.
@@ -107,9 +110,44 @@ func TestDirHonoursXDGDataHome(t *testing.T) {
 		"relative/share": filepath.Join(home, ".local", "share", "gnome-shell", "extensions", UUID),
 		"./share":        filepath.Join(home, ".local", "share", "gnome-shell", "extensions", UUID),
 	} {
-		if got := Dir(env(v), home); got != want {
-			t.Fatalf("XDG_DATA_HOME=%q: %s, want %s", v, got, want)
+		if got, err := Dir(env(v), home); err != nil || got != want {
+			t.Fatalf("XDG_DATA_HOME=%q: %s %v, want %s", v, got, err, want)
 		}
+	}
+	// m8: no home and no absolute XDG_DATA_HOME: no folder, never a
+	// relative one (it would be under whatever the current folder is)
+	for _, c := range []struct{ xdg, home string }{{"", ""}, {"relative/share", ""}, {"", "relative/home"}, {"./share", "."}} {
+		if got, err := Dir(env(c.xdg), c.home); err == nil {
+			t.Fatalf("XDG_DATA_HOME=%q home=%q: %q, want an error", c.xdg, c.home, got)
+		}
+	}
+	if got, err := Dir(env(data), ""); err != nil || got != filepath.Join(data, "gnome-shell", "extensions", UUID) {
+		t.Fatalf("an absolute XDG_DATA_HOME without a home: %q %v", got, err)
+	}
+}
+
+// m8: Write and Remove refuse a folder that is not absolute and touch
+// nothing under the current folder.
+func TestWriteAndRemoveRefuseARelativeFolder(t *testing.T) {
+	needForms(t)
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	rel := filepath.Join("share", "gnome-shell", "extensions", UUID)
+	if _, err := Write(rel, 46); err == nil {
+		t.Fatal("Write wrote to a relative folder")
+	}
+	must(t, os.MkdirAll(rel, 0o755))
+	must(t, os.MkdirAll(filepath.Join("share", "gnome-shell", ".ai-usage-panel.new-1"), 0o755))
+	if err := Remove(rel); err == nil {
+		t.Fatal("Remove removed a relative folder")
+	}
+	for _, p := range []string{rel, filepath.Join("share", "gnome-shell", ".ai-usage-panel.new-1")} {
+		if st, err := os.Stat(filepath.Join(cwd, p)); err != nil || !st.IsDir() {
+			t.Fatalf("%s: %v", p, err)
+		}
+	}
+	if n := names(t, filepath.Join(cwd, rel)); len(n) != 0 {
+		t.Fatalf("written: %v", n)
 	}
 }
 
@@ -284,6 +322,77 @@ func TestWriteNeverLeavesAHalfFolder(t *testing.T) {
 	}
 	if n := names(t, gnomeShell2); len(n) > 1 || (len(n) == 1 && n[0] != "extensions") {
 		t.Fatalf("gnome-shell holds %v", n)
+	}
+}
+
+// m7: a symlink is never taken for a file of the form, even to a file with
+// the right bytes, nor the folder itself a symlink to a current folder;
+// Write puts plain files in their place.
+func TestCurrentRefusesSymlinks(t *testing.T) {
+	needForms(t)
+	dir, _ := extDir(t)
+	_, err := Write(dir, 46)
+	must(t, err)
+	ext := filepath.Join(dir, "extension.js")
+	b, err := os.ReadFile(ext)
+	must(t, err)
+	elsewhere := filepath.Join(t.TempDir(), "extension.js")
+	must(t, os.WriteFile(elsewhere, b, 0o644))
+	must(t, os.Remove(ext))
+	must(t, os.Symlink(elsewhere, ext))
+	if cur, err := Current(dir, "gnome46"); err != nil || cur {
+		t.Fatalf("a symlinked file is current: %v %v", cur, err)
+	}
+	if wrote, err := Write(dir, 46); err != nil || !wrote {
+		t.Fatalf("Write: %v %v", wrote, err)
+	}
+	if st, err := os.Lstat(ext); err != nil || !st.Mode().IsRegular() {
+		t.Fatalf("not a plain file again: %v %v", st, err)
+	}
+	// the extension folder itself a symlink to a current folder
+	other, _ := extDir(t)
+	_, err = Write(other, 46)
+	must(t, err)
+	dir2, _ := extDir(t)
+	must(t, os.MkdirAll(filepath.Dir(dir2), 0o755))
+	must(t, os.Symlink(other, dir2))
+	if cur, err := Current(dir2, "gnome46"); err != nil || cur {
+		t.Fatalf("a symlinked folder is current: %v %v", cur, err)
+	}
+}
+
+// m7: when the new folder cannot be renamed into place, the old folder,
+// already moved aside, is renamed back: the shell keeps the old extension
+// whole, and nothing is left beside extensions/.
+func TestWriteRollsBackWhenTheSwapFails(t *testing.T) {
+	needForms(t)
+	dir, gnomeShell := extDir(t)
+	_, err := Write(dir, 42)
+	must(t, err)
+	before := onDisk(t, dir)
+	calls := 0
+	rename = func(from, to string) error {
+		calls++
+		if to == dir && strings.HasPrefix(filepath.Base(from), stagingNew) {
+			return errors.New("rename refused")
+		}
+		return os.Rename(from, to)
+	}
+	t.Cleanup(func() { rename = os.Rename })
+	if wrote, err := Write(dir, 46); err == nil || wrote {
+		t.Fatalf("Write: %v %v", wrote, err)
+	}
+	if calls < 2 {
+		t.Fatalf("%d renames", calls)
+	}
+	if got := onDisk(t, dir); !reflect.DeepEqual(got, before) {
+		t.Fatal("the old folder is not back whole")
+	}
+	if n := names(t, gnomeShell); !slices.Equal(n, []string{"extensions"}) {
+		t.Fatalf("gnome-shell holds %v", n)
+	}
+	if n := names(t, filepath.Dir(dir)); !slices.Equal(n, []string{UUID}) {
+		t.Fatalf("extensions/ holds %v", n)
 	}
 }
 

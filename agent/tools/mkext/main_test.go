@@ -67,7 +67,7 @@ func TestCheckShowsTheDifference(t *testing.T) {
 	if ok, err := check(src, out, &w); err != nil || ok {
 		t.Fatalf("%v %v", ok, err)
 	}
-	for _, want := range []string{"gnome42/ai-usage-panel@localhost/view.js (committed)", "-1: var PROTOCOL = 1;", "+1: var PROTOCOL = 2;",
+	for _, want := range []string{"gnome42/ai-usage-panel@localhost/view.js (committed)", "-2: var PROTOCOL = 1;", "+2: var PROTOCOL = 2;",
 		"-1: export const PROTOCOL = 1;", "+1: export const PROTOCOL = 2;"} {
 		if !strings.Contains(w.String(), filepath.FromSlash(want)) && !strings.Contains(w.String(), want) {
 			t.Fatalf("no %q in\n%s", want, w.String())

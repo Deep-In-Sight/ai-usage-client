@@ -40,7 +40,7 @@ type Mark struct {
 // things for it: not covered by the MIT licence, no licence claimed,
 // removed on request.
 var Marks = []Mark{
-	{Name: "The Clawd artwork", Shown: "which the tray icon shows while Claude Code is signed in",
+	{Name: "The Clawd artwork", Shown: "which the tray icon and the usage panel show while Claude Code is signed in",
 		Depicts: "the Claude Code mascot", Owner: "Anthropic PBC", Licensor: "Anthropic",
 		Files: []string{"claude-usage@localhost/clawd.svg", "agent/internal/icon/mascot.go",
 			"gnome-extension/ai-usage-panel@localhost/clawd.svg",

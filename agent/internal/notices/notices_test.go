@@ -136,7 +136,7 @@ func TestTextStartsWithTheProgramsLicence(t *testing.T) {
 		"Licence: MIT License",
 		"Copyright (c) 2026 Deep-In-Sight", "Permission is hereby granted", // LICENSE
 		"AI Usage is an independent internal tool. It is not affiliated with, endorsed by, or sponsored by Anthropic PBC or OpenAI.",
-		"The Clawd artwork, which the tray icon shows while Claude Code is signed in, depicts the Claude Code mascot, (c) Anthropic PBC. It is not covered by this licence, no licence from Anthropic is claimed, and it will be removed on request.",
+		"The Clawd artwork, which the tray icon and the usage panel show while Claude Code is signed in, depicts the Claude Code mascot, (c) Anthropic PBC. It is not covered by this licence, no licence from Anthropic is claimed, and it will be removed on request.",
 		"(fyne.io/systray: Apache License 2.0, changes to its files included; files added by AI Usage: MIT)",
 	} {
 		i := strings.Index(s, want)

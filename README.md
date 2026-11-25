@@ -432,7 +432,8 @@ Code extension for VS Code and used here only to identify the product this
 indicator reports on. All rights to it remain with Anthropic. "Claude" and
 "Claude Code" are Anthropic's names; this project is independent of Anthropic.
 
-The agent shows Clawd in its tray icon while Claude Code is signed in.
+The agent shows Clawd in its tray icon and its usage panel while Claude Code
+is signed in.
 Its program icon (`agent/winres/icon.ico`, drawn by `agent/tools/mkicon`)
 is our own drawing, a usage gauge split into a warm and a cool half, and
 contains no vendor's logo or mascot.

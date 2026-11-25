@@ -1,3 +1,4 @@
+'use strict';
 // AI Usage Panel: the AI Usage agent's usage panel in the GNOME top bar.
 //
 // Display only. Everything shown comes finished from the AI Usage agent on

@@ -7,13 +7,19 @@ import (
 	"testing"
 )
 
+// legacy is src's GNOME 42 form after its first line, which must be the
+// strict-mode directive (the ES modules are strict; the 42 form says so).
 func legacy(t *testing.T, src string) string {
 	t.Helper()
 	b, err := ToLegacy("extension.js", []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b)
+	rest, ok := strings.CutPrefix(string(b), "'use strict';\n")
+	if !ok {
+		t.Fatalf("the GNOME 42 form does not start with 'use strict': %q", b)
+	}
+	return rest
 }
 
 // One case per row of plan Task 11's table (PR-19).
@@ -71,6 +77,40 @@ func TestToLegacyDefaultClass(t *testing.T) {
 	}
 }
 
+// m6: what the GNOME 42 form runs as it is: await in functions, braces
+// and the words super and await in strings, comments and template text,
+// a class that is not the default one, a "}" in column 0 inside the class.
+func TestToLegacyKeepsWhatItCanRun(t *testing.T) {
+	src := "import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';\n" +
+		"// super.enable() and await are only words here\n" +
+		"const s = '{ super. await';\n" +
+		"const t = `${a ? '}' : `{`}`;\n" +
+		"/* {\n   super.x() */\n" +
+		"class Link {\n    constructor() {\n        this.a = 1;\n    }\n}\n" +
+		"async function load() {\n    await later();\n}\n" +
+		"const f = async () => {\n    await later();\n};\n" +
+		"export default class E extends Extension {\n" +
+		"    async enable() {\n" +
+		"        if (x) {\n" +
+		"            await this._load(); // not super\n" +
+		"        }\n" +
+		"        items.forEach(async i => {\n            await i.ready;\n        });\n" +
+		"        const s = 'super.';\n" +
+		"    }\n" +
+		"}\n" +
+		"\n" +
+		"function after() {\n    return 1;\n}\n"
+	got := legacy(t, src)
+	for _, want := range []string{"class Link {\n    constructor() {", "class E {\n    constructor(meta) {", "function after() {", "function init(meta) {\n    return new E(meta);\n}\n"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("no %q in\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "constructor(meta)") != 1 {
+		t.Fatalf("%s", got)
+	}
+}
+
 // Every other form with import or export, and a constructor in the
 // default class, fail with the file and line (PR-19).
 func TestConvertRefusesOtherForms(t *testing.T) {
@@ -92,6 +132,27 @@ func TestConvertRefusesOtherForms(t *testing.T) {
 		{"  import St from 'gi://St';\n", 1},
 		{"const u = import.meta.url;\n", 1},
 		{"export default class A extends Extension {\n}\nexport default class B extends Extension {\n}\n", 3},
+		// m6: what the GNOME 42 form cannot run. The default class has no
+		// base class there: no super, no Extension method.
+		{"export default class E extends Extension {\n    enable() {\n        super.enable();\n    }\n}\n", 3},
+		{"export default class E extends Extension {\n    enable() {\n        this._s = this.getSettings();\n    }\n}\n", 3},
+		{"export default class E extends Extension {\n    enable() {\n        this.openPreferences();\n    }\n}\n", 3},
+		{"export default class E extends Extension {\n    enable() {\n        this.initTranslations();\n    }\n}\n", 3},
+		{"export default class E extends Extension {\n    enable() {\n        this._t = this.gettext('x');\n    }\n}\n", 3},
+		{"export default class E extends Extension {\n    enable() {\n        const log = this.getLogger();\n    }\n}\n", 3},
+		{"const me = Extension.lookupByURL('x');\n", 1},
+		{"class Other extends Extension {\n}\n", 1},
+		// the class does not end at an indented "}" or at a "}" in a
+		// string: the constructor below is still in it
+		{"export default class E extends Extension {\n    enable() {\n        const s = '}';\n}\n    constructor() {\n    }\n}\n", 5},
+		{"export default class E extends Extension {\n    enable() {\n        if (a) {\n        }\n  }\n  constructor() {}\n}\n", 6},
+		// top-level await: the GNOME 42 form is a script
+		{"const a = 1;\nawait start();\n", 2},
+		{"if (a) {\n    await start();\n}\n", 2},
+		{"for await (const x of xs) {\n}\n", 1},
+		// braces or quotes that do not balance
+		{"function f() {\n", 1},
+		{"const s = 'x;\n", 1},
 	} {
 		_, err := ToLegacy("extension.js", []byte(c.src))
 		want := "extension.js:" + itoa(c.line) + ": not a supported form"
@@ -168,7 +229,7 @@ func TestBuild(t *testing.T) {
 			t.Fatalf("the ES module %s is not a copy", name)
 		}
 	}
-	if string(f42["view.js"]) != "var PROTOCOL = 1;\n" || !strings.Contains(string(f42["extension.js"]), "function init(meta)") {
+	if string(f42["view.js"]) != "'use strict';\nvar PROTOCOL = 1;\n" || !strings.Contains(string(f42["extension.js"]), "function init(meta)") {
 		t.Fatalf("not converted: %q %q", f42["view.js"], f42["extension.js"])
 	}
 	if !strings.Contains(string(f42["metadata.json"]), `["42"]`) || !strings.Contains(string(f46["metadata.json"]), `["46", "50"]`) {
