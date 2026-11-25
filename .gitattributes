@@ -6,3 +6,5 @@
 agent/internal/notices/licenses/** -text
 agent/internal/notices/borrowed/** -text
 agent/third_party/systray/** -text
+# Golden files the tests compare byte for byte.
+agent/internal/tray/testdata/** -text
