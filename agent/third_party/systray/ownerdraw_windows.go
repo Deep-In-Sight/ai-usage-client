@@ -10,6 +10,7 @@ package systray
 import (
 	"log"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -35,15 +36,64 @@ const (
 
 // od is what the owner-drawn items need: the drawer, which items and
 // separators are owner-drawn, the DPI of the last measure and the menu's
-// background brush.
+// background brush; state is what each item was last given (its parent
+// and its state), so that the re-insert before an open (on the tray's
+// thread) never reads the item, which the program's goroutines change.
 var od struct {
 	mu       sync.Mutex
 	drawer   MenuDrawer
 	items    map[uint32]bool
 	seps     map[uint32]bool
+	state    map[uint32]odItemState
 	dpi      uint32
 	brush    windows.Handle
 	brushRGB uint32
+}
+
+type odItemState struct {
+	parent            uint32
+	disabled, checked bool
+}
+
+// menuMu is the one lock of the menu's items: every add, update, hide,
+// show and removal (the package's wrappers in systray_windows.go, from any
+// goroutine) and the re-insert before each open (prepareOwnerDrawnMenu,
+// on the tray's thread) hold it, so that a Hide between the re-insert's
+// removal and its insert, or two inserts of one item, cannot happen.
+//
+// Why it cannot deadlock with the tray's thread: a thread that waits for
+// menuMu pumps no messages, so a holder must never wait for the tray's
+// thread. The holders only call the menu functions (InsertMenuItem,
+// SetMenuItemInfo, RemoveMenu, DeleteMenu, DestroyMenu, CreatePopupMenu,
+// SetMenuInfo) and the package's own locks; they call no drawer and send
+// no message. Windows sends WM_MEASUREITEM and WM_DRAWITEM to the tray's
+// window only for a menu on the screen, which is only while the tray's
+// thread is in TrackPopupMenu: then a holder's menu call may wait for the
+// tray's thread, which answers it in the menu's own loop, through
+// ownerDrawMessage and the drawer, neither of which takes menuMu. The
+// tray's thread takes menuMu only outside TrackPopupMenu (a second open
+// while the menu is shown, which a message handled in its loop could
+// start, does not touch the menu: od.shown), so it never waits for menuMu
+// while a holder waits for it. The drawer's own calls before an open
+// (MenuOpening, MenuBackground) are made before menuMu is taken. The order
+// is menuMu, then od.mu, never the other way round.
+var menuMu sync.Mutex
+
+// odShown is set while the tray's thread shows the menu (TrackPopupMenu).
+var odShown atomic.Bool
+
+// odReinsertHook, when set (SetReinsertHookForTests), runs in the
+// re-insert before an open between an item's removal and its insert, with
+// menuMu held.
+var odReinsertHook func(itemID uint32)
+
+// SetReinsertHookForTests is for tests only: f runs on the tray's thread
+// in the re-insert before each open, between an item's removal and its
+// insert again, with the menu's lock held (nil: none).
+func SetReinsertHookForTests(f func(itemID uint32)) {
+	menuMu.Lock()
+	defer menuMu.Unlock()
+	odReinsertHook = f
 }
 
 // SetMenuDrawer sets the drawer of the owner-drawn items; before or after
@@ -59,6 +109,8 @@ func SetMenuDrawer(d MenuDrawer) {
 // measures and draws it; it has no text or bitmap of its own in the menu)
 // or, with false, a text item again. A hidden item stays hidden.
 func (item *MenuItem) SetOwnerDrawn(on bool) {
+	menuMu.Lock()
+	defer menuMu.Unlock()
 	od.mu.Lock()
 	if od.items == nil {
 		od.items = map[uint32]bool{}
@@ -70,8 +122,24 @@ func (item *MenuItem) SetOwnerDrawn(on bool) {
 	}
 	od.mu.Unlock()
 	if wt.isReady() && wt.getVisibleItemIndex(item.parentId(), item.id) != -1 {
-		addOrUpdateMenuItem(item)
+		if err := addOrUpdateMenuItemLocked(item); err != nil {
+			log.Printf("systray error: unable to addOrUpdateMenuItem: %s\n", err)
+		}
 	}
+}
+
+// addOrUpdateMenuItemLocked adds or updates item in the menu (menuMu held)
+// and keeps its parent and state for the re-insert before an open.
+func addOrUpdateMenuItemLocked(item *MenuItem) error {
+	parent := item.parentId()
+	disabled, checked := item.disabled, item.checked
+	od.mu.Lock()
+	if od.state == nil {
+		od.state = map[uint32]odItemState{}
+	}
+	od.state[item.id] = odItemState{parent: parent, disabled: disabled, checked: checked}
+	od.mu.Unlock()
+	return wt.addOrUpdateMenuItem(uint32(item.id), parent, item.title, disabled, checked)
 }
 
 // MenuOwnerWindow is the tray's hidden window, which owns the menu and
@@ -107,7 +175,7 @@ func isOwnerDrawnSeparator(id uint32) bool {
 func forgetOwnerDrawn() {
 	od.mu.Lock()
 	defer od.mu.Unlock()
-	od.items, od.seps = nil, nil
+	od.items, od.seps, od.state = nil, nil, nil
 }
 
 type odMeasureItem struct {
@@ -210,7 +278,15 @@ func cursorDPI() uint32 {
 		return 96
 	}
 	const monitorDefaultToNearest, mdtEffectiveDPI = 2, 0
-	mon, _, _ := odMonitorFromPoint.Call(uintptr(uint32(p.X))|uintptr(uint32(p.Y))<<32, monitorDefaultToNearest)
+	// MonitorFromPoint takes its POINT by value: in one register on
+	// 64-bit Windows (amd64, arm64: x in the low half), as two stack words
+	// on 32-bit (x, then y)
+	var mon uintptr
+	if unsafe.Sizeof(uintptr(0)) == 8 {
+		mon, _, _ = odMonitorFromPoint.Call(uintptr(uint32(p.X))|uintptr(uint64(uint32(p.Y))<<32), monitorDefaultToNearest)
+	} else {
+		mon, _, _ = odMonitorFromPoint.Call(uintptr(uint32(p.X)), uintptr(uint32(p.Y)), monitorDefaultToNearest)
+	}
 	var x, y uint32
 	if hr, _, _ := odGetDpiForMonitor.Call(mon, mdtEffectiveDPI, uintptr(unsafe.Pointer(&x)), uintptr(unsafe.Pointer(&y))); hr != 0 || x == 0 {
 		return 96
@@ -236,17 +312,44 @@ func windowDPI(hdc uintptr) uint32 {
 	return 96
 }
 
-// prepareOwnerDrawnMenu runs before the menu opens: it gives the menu the
-// drawer's background colour and has Windows measure every owner-drawn
-// item and separator again (the pointer's monitor, its DPI, the menu font
-// or the item's content can have changed since the last time). Windows
-// keeps an owner-drawn item's size until the item is inserted anew (a
-// SetMenuItemInfo of the same type does not ask again, CI run
-// 45697510079), so each visible one is removed and inserted again at its
-// place.
-func prepareOwnerDrawnMenu(menu windows.Handle) {
+// prepareOwnerDrawnMenu runs on the tray's thread before the menu opens:
+// it tells the drawer (MenuOpener), gives the menu the drawer's background
+// colour (the system's when nothing in it is owner-drawn) and has Windows
+// measure every owner-drawn item and separator again (the pointer's
+// monitor, its DPI, the menu font or the item's content can have changed
+// since the last time). Windows keeps an owner-drawn item's size until the
+// item is inserted anew (a SetMenuItemInfo of the same type does not ask
+// again, CI run 45697510079), so each visible one is removed and inserted
+// again at its place, with menuMu held. The returned func is called once
+// TrackPopupMenu has returned.
+func prepareOwnerDrawnMenu(menu windows.Handle) (done func()) {
+	if !odShown.CompareAndSwap(false, true) {
+		return func() {} // the menu is on the screen already: leave it be
+	}
+	done = func() { odShown.Store(false) }
 	od.mu.Lock()
 	d := od.drawer
+	drawn := len(od.items) > 0 || len(od.seps) > 0
+	hadBrush := od.brush != 0
+	od.mu.Unlock()
+	if d == nil || menu == 0 {
+		return done
+	}
+	// the drawer's calls, before menuMu is taken
+	if op, ok := d.(MenuOpener); ok {
+		op.MenuOpening()
+	}
+	rgb, background := uint32(0), false
+	if dec, ok := d.(MenuDecorator); ok && drawn {
+		rgb, background = dec.MenuBackground()
+	}
+	if background || hadBrush {
+		setMenuBackground(menu, rgb, background)
+	}
+
+	menuMu.Lock()
+	defer menuMu.Unlock()
+	od.mu.Lock()
 	items := make([]uint32, 0, len(od.items))
 	for id := range od.items {
 		items = append(items, id)
@@ -255,27 +358,28 @@ func prepareOwnerDrawnMenu(menu windows.Handle) {
 	for id := range od.seps {
 		seps = append(seps, id)
 	}
-	od.mu.Unlock()
-	if d == nil || menu == 0 {
-		return
-	}
-	if dec, ok := d.(MenuDecorator); ok {
-		rgb, ok := dec.MenuBackground()
-		setMenuBackground(menu, rgb, ok)
-	}
+	state := make(map[uint32]odItemState, len(items))
 	for _, id := range items {
-		menuItemsLock.RLock()
-		item := menuItems[id]
-		menuItemsLock.RUnlock()
-		if item == nil {
+		if st, ok := od.state[id]; ok {
+			state[id] = st
+		}
+	}
+	hook := odReinsertHook
+	od.mu.Unlock()
+	for _, id := range items {
+		st, ok := state[id]
+		if !ok || wt.getVisibleItemIndex(st.parent, id) == -1 {
+			continue // never added, or hidden
+		}
+		if err := wt.hideMenuItem(id, st.parent); err != nil {
 			continue
 		}
-		parent := item.parentId()
-		if wt.getVisibleItemIndex(parent, id) == -1 {
-			continue // hidden
+		if hook != nil {
+			hook(id)
 		}
-		if err := wt.hideMenuItem(id, parent); err == nil {
-			addOrUpdateMenuItem(item)
+		// an owner-drawn item has no text: its title is not needed
+		if err := wt.addOrUpdateMenuItem(id, st.parent, "", st.disabled, st.checked); err != nil {
+			log.Printf("systray error: menu item %d could not be put back: %s", id, err)
 		}
 	}
 	for _, id := range seps {
@@ -283,9 +387,12 @@ func prepareOwnerDrawnMenu(menu windows.Handle) {
 			continue
 		}
 		if err := wt.hideMenuItem(id, 0); err == nil {
-			_ = wt.addSeparatorMenuItem(id, 0)
+			if err := wt.addSeparatorMenuItem(id, 0); err != nil {
+				log.Printf("systray error: separator %d could not be put back: %s", id, err)
+			}
 		}
 	}
+	return done
 }
 
 // setMenuBackground fills the menu around its items with rgb (on: true)
@@ -295,6 +402,11 @@ func setMenuBackground(menu windows.Handle, rgb uint32, on bool) {
 	od.mu.Lock()
 	defer od.mu.Unlock()
 	var brush windows.Handle
+	if !on && od.brush != 0 {
+		old := od.brush
+		od.brush, od.brushRGB = 0, 0
+		defer odDeleteObject.Call(uintptr(old)) // after the menu has the system's again
+	}
 	if on {
 		if od.brush == 0 || od.brushRGB != rgb {
 			b, _, _ := odCreateSolidBrush.Call(uintptr(rgb))

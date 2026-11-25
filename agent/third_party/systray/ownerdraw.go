@@ -37,9 +37,17 @@ type MenuDecorator interface {
 	MeasureSeparator(dpi uint32) (width, height int32)
 	DrawSeparator(hdc uintptr, rc Rect, dpi uint32)
 	// MenuBackground is the colour (a COLORREF, 0x00BBGGRR) the menu is
-	// filled with around its items, asked each time the menu opens;
-	// false: the system's.
+	// filled with around its items, asked each time the menu opens with
+	// an owner-drawn item in it; false: the system's.
 	MenuBackground() (rgb uint32, ok bool)
+}
+
+// MenuOpener is what a MenuDrawer may also do (Windows): hear that the menu
+// is about to open, on the tray's thread before anything of it is measured
+// or drawn (a drawer can read its settings again then and keep what each
+// item shows while the menu is open).
+type MenuOpener interface {
+	MenuOpening()
 }
 
 // ID is the item's id: on Windows its menu command id, which MenuDrawer's

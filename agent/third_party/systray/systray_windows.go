@@ -636,9 +636,13 @@ func (t *winTray) addOrUpdateMenuItem(menuItemId uint32, parentId uint32, title 
 		MFS_CHECKED  = 0x00000008
 		MFS_DISABLED = 0x00000003
 	)
-	titlePtr, err := windows.UTF16PtrFromString(title)
-	if err != nil {
-		return err
+	var titlePtr *uint16
+	var err error
+	if !isOwnerDrawn(menuItemId) { // patched (see PATCHED.md): an owner-drawn item has no text
+		titlePtr, err = windows.UTF16PtrFromString(title)
+		if err != nil {
+			return err
+		}
 	}
 
 	mi := menuItemInfo{
@@ -828,7 +832,7 @@ func (t *winTray) showMenu() error {
 		return err
 	}
 	pSetForegroundWindow.Call(uintptr(t.window))
-	prepareOwnerDrawnMenu(t.menus[0]) // patched (see PATCHED.md)
+	shown := prepareOwnerDrawnMenu(t.menus[0]) // patched (see PATCHED.md)
 
 	res, _, err = pTrackPopupMenu.Call(
 		uintptr(t.menus[0]),
@@ -839,6 +843,7 @@ func (t *winTray) showMenu() error {
 		uintptr(t.window),
 		0,
 	)
+	shown() // patched (see PATCHED.md)
 	if res == 0 {
 		return err
 	}
@@ -1155,7 +1160,9 @@ func SetTooltip(tooltip string) {
 }
 
 func addOrUpdateMenuItem(item *MenuItem) {
-	err := wt.addOrUpdateMenuItem(uint32(item.id), item.parentId(), item.title, item.disabled, item.checked)
+	menuMu.Lock() // patched (see PATCHED.md): one change of the menu at a time
+	defer menuMu.Unlock()
+	err := addOrUpdateMenuItemLocked(item)
 	if err != nil {
 		log.Printf("systray error: unable to addOrUpdateMenuItem: %s\n", err)
 		return
@@ -1171,6 +1178,8 @@ func (item *MenuItem) SetTemplateIcon(templateIconBytes []byte, regularIconBytes
 }
 
 func addSeparator(id uint32, parent uint32) {
+	menuMu.Lock() // patched (see PATCHED.md)
+	defer menuMu.Unlock()
 	err := wt.addSeparatorMenuItem(id, parent)
 	if err != nil {
 		log.Printf("systray error: unable to addSeparator: %s\n", err)
@@ -1179,6 +1188,8 @@ func addSeparator(id uint32, parent uint32) {
 }
 
 func hideMenuItem(item *MenuItem) {
+	menuMu.Lock() // patched (see PATCHED.md)
+	defer menuMu.Unlock()
 	err := wt.hideMenuItem(uint32(item.id), item.parentId())
 	if err != nil {
 		log.Printf("systray error: unable to hideMenuItem: %s\n", err)
@@ -1187,6 +1198,8 @@ func hideMenuItem(item *MenuItem) {
 }
 
 func removeMenuItem(item *MenuItem) {
+	menuMu.Lock() // patched (see PATCHED.md)
+	defer menuMu.Unlock()
 	err := wt.removeMenuItem(uint32(item.id), item.parentId())
 	if err != nil {
 		log.Printf("systray error: unable to removeMenuItem: %s\n", err)
@@ -1199,6 +1212,8 @@ func showMenuItem(item *MenuItem) {
 }
 
 func resetMenu() {
+	menuMu.Lock() // patched (see PATCHED.md)
+	defer menuMu.Unlock()
 	_, _, _ = pDestroyMenu.Call(uintptr(wt.menus[0]))
 	wt.visibleItems = make(map[uint32][]uint32)
 	wt.menus = make(map[uint32]windows.Handle)

@@ -1,7 +1,7 @@
 diff -aruN a/PATCHED.md b/PATCHED.md
 --- a/PATCHED.md
 +++ b/PATCHED.md
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,169 @@
 +# fyne.io/systray, patched copy
 +
 +This folder is a copy of [fyne.io/systray](https://github.com/fyne-io/systray)
@@ -115,23 +115,39 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 +  only calls them:
 +  - `ownerdraw.go` (every OS): the types `Rect`, `MenuDrawer`
 +    (`Measure(id, dpi)`, `Draw(id, hdc, rect, state, dpi)`,
-+    `SettingChanged(area)`) and `MenuDecorator` (`MeasureSeparator`,
-+    `DrawSeparator`, `MenuBackground`: what a drawer may also do), and
-+    the method `(*MenuItem).ID()`, the item's menu command id.
++    `SettingChanged(area)`), `MenuDecorator` (`MeasureSeparator`,
++    `DrawSeparator`, `MenuBackground`) and `MenuOpener` (`MenuOpening`,
++    called on the tray's thread before the menu opens): what a drawer may
++    also do; and the method `(*MenuItem).ID()`, the item's menu command
++    id.
 +  - `ownerdraw_windows.go`: `SetMenuDrawer(d)`, `(*MenuItem).
 +    SetOwnerDrawn(on)` (a hidden item stays hidden), `MenuOwnerWindow()`
-+    (the hidden window that owns the menu) and `AddOwnerDrawnSeparator()`;
-+    the handling of `WM_MEASUREITEM` (the size at the effective DPI of
-+    the monitor under the pointer, `MonitorFromPoint` +
-+    `shcore!GetDpiForMonitor`, 96 when unknown) and `WM_DRAWITEM` (the
-+    DPI of the menu window, `GetDpiForWindow(WindowFromDC(hdc))`, else the
-+    measured one) for the owner-drawn items and separators only
-+    (`ODT_MENU`); `WM_SETTINGCHANGE`'s text to the drawer; before the
-+    menu opens, the drawer's background colour (`SetMenuInfo`,
-+    `MIM_BACKGROUND`) and a fresh measure of every visible owner-drawn
-+    item and separator (Windows keeps an owner-drawn item's size until it
-+    is inserted anew, so each is removed and inserted again at its place);
-+    a panic in the drawer is logged instead of ending the program.
++    (the hidden window that owns the menu), `AddOwnerDrawnSeparator()` and,
++    for tests only, `SetReinsertHookForTests(f)` (f runs between an
++    item's removal and its insert in the re-insert before an open); the
++    handling of `WM_MEASUREITEM` (the size at the effective DPI of the
++    monitor under the pointer, `MonitorFromPoint` +
++    `shcore!GetDpiForMonitor`, 96 when unknown; the `POINT` is passed as
++    the 64-bit and the 32-bit calling conventions want it) and
++    `WM_DRAWITEM` (the DPI of the menu window,
++    `GetDpiForWindow(WindowFromDC(hdc))`, else the measured one) for the
++    owner-drawn items and separators only (`ODT_MENU`);
++    `WM_SETTINGCHANGE`'s text to the drawer; before the menu opens (not
++    again while it is shown): the drawer's `MenuOpening`, the drawer's
++    background colour (`SetMenuInfo`, `MIM_BACKGROUND`; the system's once
++    nothing in the menu is owner-drawn) and a fresh measure of every
++    visible owner-drawn item and separator (Windows keeps an owner-drawn
++    item's size until it is inserted anew, so each is removed and inserted
++    again at its place, from the parent and state it was last given, never
++    reading the item itself); a panic in the drawer is logged instead of
++    ending the program.
++  - One lock (`menuMu`) for the menu's items: every add, update, hide,
++    show, separator add, removal and reset (the package's wrappers), the
++    switch in `SetOwnerDrawn` and the re-insert before an open hold it, so
++    that the re-insert on the tray's thread and the program's goroutines
++    never interleave (a hidden item shown again, an item inserted twice).
++    It is never held across a drawer call or anything that waits for the
++    tray's thread; the comment at `menuMu` gives the reasoning.
 +  - `ownerdraw_other.go` (not Windows): the same functions doing nothing
 +    (`AddOwnerDrawnSeparator` is `AddSeparator`).
 +  - In `systray_windows.go`: `wndProc` passes `WM_MEASUREITEM`,
@@ -139,11 +155,14 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 +    the default procedure for what it does not handle (always for
 +    `WM_SETTINGCHANGE`, as upstream); `addOrUpdateMenuItem` gives an
 +    owner-drawn item `MFT_OWNERDRAW`, `ItemData` = its id and no string or
-+    bitmap (`MIIM_FTYPE|MIIM_ID|MIIM_STATE|MIIM_DATA`), and a text item
-+    again once that is switched off; `addSeparatorMenuItem` gives an
-+    owner-drawn separator `MFT_SEPARATOR|MFT_OWNERDRAW`; `showMenu` calls
-+    `prepareOwnerDrawnMenu` before `TrackPopupMenu`; `resetMenu` forgets
-+    the owner-drawn items and separators.
++    bitmap (`MIIM_FTYPE|MIIM_ID|MIIM_STATE|MIIM_DATA`; its title is not
++    converted), and a text item again once that is switched off;
++    `addSeparatorMenuItem` gives an owner-drawn separator
++    `MFT_SEPARATOR|MFT_OWNERDRAW`; `showMenu` calls
++    `prepareOwnerDrawnMenu` before `TrackPopupMenu` and tells it when
++    `TrackPopupMenu` returned; `resetMenu` forgets the owner-drawn items
++    and separators; the wrappers `addOrUpdateMenuItem`, `addSeparator`,
++    `hideMenuItem`, `removeMenuItem` and `resetMenu` hold `menuMu`.
 +- The header comment says the file was modified.
 +
 +### Everything else
@@ -155,7 +174,7 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 diff -aruN a/ownerdraw.go b/ownerdraw.go
 --- a/ownerdraw.go
 +++ b/ownerdraw.go
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,55 @@
 +// Not upstream code: this file was added to the copy of fyne.io/systray
 +// v1.12.2 in agent/third_party/systray of the AI Usage client (see
 +// PATCHED.md). It is under the AI Usage client's MIT licence (LICENSE at
@@ -195,9 +214,17 @@ diff -aruN a/ownerdraw.go b/ownerdraw.go
 +	MeasureSeparator(dpi uint32) (width, height int32)
 +	DrawSeparator(hdc uintptr, rc Rect, dpi uint32)
 +	// MenuBackground is the colour (a COLORREF, 0x00BBGGRR) the menu is
-+	// filled with around its items, asked each time the menu opens;
-+	// false: the system's.
++	// filled with around its items, asked each time the menu opens with
++	// an owner-drawn item in it; false: the system's.
 +	MenuBackground() (rgb uint32, ok bool)
++}
++
++// MenuOpener is what a MenuDrawer may also do (Windows): hear that the menu
++// is about to open, on the tray's thread before anything of it is measured
++// or drawn (a drawer can read its settings again then and keep what each
++// item shows while the menu is open).
++type MenuOpener interface {
++	MenuOpening()
 +}
 +
 +// ID is the item's id: on Windows its menu command id, which MenuDrawer's
@@ -231,7 +258,7 @@ diff -aruN a/ownerdraw_other.go b/ownerdraw_other.go
 diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 --- a/ownerdraw_windows.go
 +++ b/ownerdraw_windows.go
-@@ -0,0 +1,322 @@
+@@ -0,0 +1,434 @@
 +//go:build windows
 +
 +// Not upstream code: this file was added to the copy of fyne.io/systray
@@ -244,6 +271,7 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +import (
 +	"log"
 +	"sync"
++	"sync/atomic"
 +	"unsafe"
 +
 +	"golang.org/x/sys/windows"
@@ -269,15 +297,64 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +
 +// od is what the owner-drawn items need: the drawer, which items and
 +// separators are owner-drawn, the DPI of the last measure and the menu's
-+// background brush.
++// background brush; state is what each item was last given (its parent
++// and its state), so that the re-insert before an open (on the tray's
++// thread) never reads the item, which the program's goroutines change.
 +var od struct {
 +	mu       sync.Mutex
 +	drawer   MenuDrawer
 +	items    map[uint32]bool
 +	seps     map[uint32]bool
++	state    map[uint32]odItemState
 +	dpi      uint32
 +	brush    windows.Handle
 +	brushRGB uint32
++}
++
++type odItemState struct {
++	parent            uint32
++	disabled, checked bool
++}
++
++// menuMu is the one lock of the menu's items: every add, update, hide,
++// show and removal (the package's wrappers in systray_windows.go, from any
++// goroutine) and the re-insert before each open (prepareOwnerDrawnMenu,
++// on the tray's thread) hold it, so that a Hide between the re-insert's
++// removal and its insert, or two inserts of one item, cannot happen.
++//
++// Why it cannot deadlock with the tray's thread: a thread that waits for
++// menuMu pumps no messages, so a holder must never wait for the tray's
++// thread. The holders only call the menu functions (InsertMenuItem,
++// SetMenuItemInfo, RemoveMenu, DeleteMenu, DestroyMenu, CreatePopupMenu,
++// SetMenuInfo) and the package's own locks; they call no drawer and send
++// no message. Windows sends WM_MEASUREITEM and WM_DRAWITEM to the tray's
++// window only for a menu on the screen, which is only while the tray's
++// thread is in TrackPopupMenu: then a holder's menu call may wait for the
++// tray's thread, which answers it in the menu's own loop, through
++// ownerDrawMessage and the drawer, neither of which takes menuMu. The
++// tray's thread takes menuMu only outside TrackPopupMenu (a second open
++// while the menu is shown, which a message handled in its loop could
++// start, does not touch the menu: od.shown), so it never waits for menuMu
++// while a holder waits for it. The drawer's own calls before an open
++// (MenuOpening, MenuBackground) are made before menuMu is taken. The order
++// is menuMu, then od.mu, never the other way round.
++var menuMu sync.Mutex
++
++// odShown is set while the tray's thread shows the menu (TrackPopupMenu).
++var odShown atomic.Bool
++
++// odReinsertHook, when set (SetReinsertHookForTests), runs in the
++// re-insert before an open between an item's removal and its insert, with
++// menuMu held.
++var odReinsertHook func(itemID uint32)
++
++// SetReinsertHookForTests is for tests only: f runs on the tray's thread
++// in the re-insert before each open, between an item's removal and its
++// insert again, with the menu's lock held (nil: none).
++func SetReinsertHookForTests(f func(itemID uint32)) {
++	menuMu.Lock()
++	defer menuMu.Unlock()
++	odReinsertHook = f
 +}
 +
 +// SetMenuDrawer sets the drawer of the owner-drawn items; before or after
@@ -293,6 +370,8 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +// measures and draws it; it has no text or bitmap of its own in the menu)
 +// or, with false, a text item again. A hidden item stays hidden.
 +func (item *MenuItem) SetOwnerDrawn(on bool) {
++	menuMu.Lock()
++	defer menuMu.Unlock()
 +	od.mu.Lock()
 +	if od.items == nil {
 +		od.items = map[uint32]bool{}
@@ -304,8 +383,24 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +	}
 +	od.mu.Unlock()
 +	if wt.isReady() && wt.getVisibleItemIndex(item.parentId(), item.id) != -1 {
-+		addOrUpdateMenuItem(item)
++		if err := addOrUpdateMenuItemLocked(item); err != nil {
++			log.Printf("systray error: unable to addOrUpdateMenuItem: %s\n", err)
++		}
 +	}
++}
++
++// addOrUpdateMenuItemLocked adds or updates item in the menu (menuMu held)
++// and keeps its parent and state for the re-insert before an open.
++func addOrUpdateMenuItemLocked(item *MenuItem) error {
++	parent := item.parentId()
++	disabled, checked := item.disabled, item.checked
++	od.mu.Lock()
++	if od.state == nil {
++		od.state = map[uint32]odItemState{}
++	}
++	od.state[item.id] = odItemState{parent: parent, disabled: disabled, checked: checked}
++	od.mu.Unlock()
++	return wt.addOrUpdateMenuItem(uint32(item.id), parent, item.title, disabled, checked)
 +}
 +
 +// MenuOwnerWindow is the tray's hidden window, which owns the menu and
@@ -341,7 +436,7 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +func forgetOwnerDrawn() {
 +	od.mu.Lock()
 +	defer od.mu.Unlock()
-+	od.items, od.seps = nil, nil
++	od.items, od.seps, od.state = nil, nil, nil
 +}
 +
 +type odMeasureItem struct {
@@ -444,7 +539,15 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +		return 96
 +	}
 +	const monitorDefaultToNearest, mdtEffectiveDPI = 2, 0
-+	mon, _, _ := odMonitorFromPoint.Call(uintptr(uint32(p.X))|uintptr(uint32(p.Y))<<32, monitorDefaultToNearest)
++	// MonitorFromPoint takes its POINT by value: in one register on
++	// 64-bit Windows (amd64, arm64: x in the low half), as two stack words
++	// on 32-bit (x, then y)
++	var mon uintptr
++	if unsafe.Sizeof(uintptr(0)) == 8 {
++		mon, _, _ = odMonitorFromPoint.Call(uintptr(uint32(p.X))|uintptr(uint64(uint32(p.Y))<<32), monitorDefaultToNearest)
++	} else {
++		mon, _, _ = odMonitorFromPoint.Call(uintptr(uint32(p.X)), uintptr(uint32(p.Y)), monitorDefaultToNearest)
++	}
 +	var x, y uint32
 +	if hr, _, _ := odGetDpiForMonitor.Call(mon, mdtEffectiveDPI, uintptr(unsafe.Pointer(&x)), uintptr(unsafe.Pointer(&y))); hr != 0 || x == 0 {
 +		return 96
@@ -470,17 +573,44 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +	return 96
 +}
 +
-+// prepareOwnerDrawnMenu runs before the menu opens: it gives the menu the
-+// drawer's background colour and has Windows measure every owner-drawn
-+// item and separator again (the pointer's monitor, its DPI, the menu font
-+// or the item's content can have changed since the last time). Windows
-+// keeps an owner-drawn item's size until the item is inserted anew (a
-+// SetMenuItemInfo of the same type does not ask again, CI run
-+// 45697510079), so each visible one is removed and inserted again at its
-+// place.
-+func prepareOwnerDrawnMenu(menu windows.Handle) {
++// prepareOwnerDrawnMenu runs on the tray's thread before the menu opens:
++// it tells the drawer (MenuOpener), gives the menu the drawer's background
++// colour (the system's when nothing in it is owner-drawn) and has Windows
++// measure every owner-drawn item and separator again (the pointer's
++// monitor, its DPI, the menu font or the item's content can have changed
++// since the last time). Windows keeps an owner-drawn item's size until the
++// item is inserted anew (a SetMenuItemInfo of the same type does not ask
++// again, CI run 45697510079), so each visible one is removed and inserted
++// again at its place, with menuMu held. The returned func is called once
++// TrackPopupMenu has returned.
++func prepareOwnerDrawnMenu(menu windows.Handle) (done func()) {
++	if !odShown.CompareAndSwap(false, true) {
++		return func() {} // the menu is on the screen already: leave it be
++	}
++	done = func() { odShown.Store(false) }
 +	od.mu.Lock()
 +	d := od.drawer
++	drawn := len(od.items) > 0 || len(od.seps) > 0
++	hadBrush := od.brush != 0
++	od.mu.Unlock()
++	if d == nil || menu == 0 {
++		return done
++	}
++	// the drawer's calls, before menuMu is taken
++	if op, ok := d.(MenuOpener); ok {
++		op.MenuOpening()
++	}
++	rgb, background := uint32(0), false
++	if dec, ok := d.(MenuDecorator); ok && drawn {
++		rgb, background = dec.MenuBackground()
++	}
++	if background || hadBrush {
++		setMenuBackground(menu, rgb, background)
++	}
++
++	menuMu.Lock()
++	defer menuMu.Unlock()
++	od.mu.Lock()
 +	items := make([]uint32, 0, len(od.items))
 +	for id := range od.items {
 +		items = append(items, id)
@@ -489,27 +619,28 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +	for id := range od.seps {
 +		seps = append(seps, id)
 +	}
-+	od.mu.Unlock()
-+	if d == nil || menu == 0 {
-+		return
-+	}
-+	if dec, ok := d.(MenuDecorator); ok {
-+		rgb, ok := dec.MenuBackground()
-+		setMenuBackground(menu, rgb, ok)
-+	}
++	state := make(map[uint32]odItemState, len(items))
 +	for _, id := range items {
-+		menuItemsLock.RLock()
-+		item := menuItems[id]
-+		menuItemsLock.RUnlock()
-+		if item == nil {
++		if st, ok := od.state[id]; ok {
++			state[id] = st
++		}
++	}
++	hook := odReinsertHook
++	od.mu.Unlock()
++	for _, id := range items {
++		st, ok := state[id]
++		if !ok || wt.getVisibleItemIndex(st.parent, id) == -1 {
++			continue // never added, or hidden
++		}
++		if err := wt.hideMenuItem(id, st.parent); err != nil {
 +			continue
 +		}
-+		parent := item.parentId()
-+		if wt.getVisibleItemIndex(parent, id) == -1 {
-+			continue // hidden
++		if hook != nil {
++			hook(id)
 +		}
-+		if err := wt.hideMenuItem(id, parent); err == nil {
-+			addOrUpdateMenuItem(item)
++		// an owner-drawn item has no text: its title is not needed
++		if err := wt.addOrUpdateMenuItem(id, st.parent, "", st.disabled, st.checked); err != nil {
++			log.Printf("systray error: menu item %d could not be put back: %s", id, err)
 +		}
 +	}
 +	for _, id := range seps {
@@ -517,9 +648,12 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +			continue
 +		}
 +		if err := wt.hideMenuItem(id, 0); err == nil {
-+			_ = wt.addSeparatorMenuItem(id, 0)
++			if err := wt.addSeparatorMenuItem(id, 0); err != nil {
++				log.Printf("systray error: separator %d could not be put back: %s", id, err)
++			}
 +		}
 +	}
++	return done
 +}
 +
 +// setMenuBackground fills the menu around its items with rgb (on: true)
@@ -529,6 +663,11 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +	od.mu.Lock()
 +	defer od.mu.Unlock()
 +	var brush windows.Handle
++	if !on && od.brush != 0 {
++		old := od.brush
++		od.brush, od.brushRGB = 0, 0
++		defer odDeleteObject.Call(uintptr(old)) // after the menu has the system's again
++	}
 +	if on {
 +		if od.brush == 0 || od.brushRGB != rgb {
 +			b, _, _ := odCreateSolidBrush.Call(uintptr(rgb))
@@ -1187,7 +1326,24 @@ diff -aruN a/systray_windows.go b/systray_windows.go
  }
  
  func (t *winTray) createMenu() error {
-@@ -585,7 +658,14 @@
+@@ -563,9 +636,13 @@
+ 		MFS_CHECKED  = 0x00000008
+ 		MFS_DISABLED = 0x00000003
+ 	)
+-	titlePtr, err := windows.UTF16PtrFromString(title)
+-	if err != nil {
+-		return err
++	var titlePtr *uint16
++	var err error
++	if !isOwnerDrawn(menuItemId) { // patched (see PATCHED.md): an owner-drawn item has no text
++		titlePtr, err = windows.UTF16PtrFromString(title)
++		if err != nil {
++			return err
++		}
+ 	}
+ 
+ 	mi := menuItemInfo{
+@@ -585,7 +662,14 @@
  	t.muMenuItemIcons.RLock()
  	hIcon := t.menuItemIcons[menuItemId]
  	t.muMenuItemIcons.RUnlock()
@@ -1203,7 +1359,7 @@ diff -aruN a/systray_windows.go b/systray_windows.go
  		mi.Mask |= MIIM_BITMAP
  		mi.BMPItem = hIcon
  	}
-@@ -659,6 +739,11 @@
+@@ -659,6 +743,11 @@
  		Type: MFT_SEPARATOR,
  		ID:   uint32(menuItemId),
  	}
@@ -1215,15 +1371,23 @@ diff -aruN a/systray_windows.go b/systray_windows.go
  
  	mi.Size = uint32(unsafe.Sizeof(mi))
  
-@@ -743,6 +828,7 @@
+@@ -743,6 +832,7 @@
  		return err
  	}
  	pSetForegroundWindow.Call(uintptr(t.window))
-+	prepareOwnerDrawnMenu(t.menus[0]) // patched (see PATCHED.md)
++	shown := prepareOwnerDrawnMenu(t.menus[0]) // patched (see PATCHED.md)
  
  	res, _, err = pTrackPopupMenu.Call(
  		uintptr(t.menus[0]),
-@@ -797,38 +883,31 @@
+@@ -753,6 +843,7 @@
+ 		uintptr(t.window),
+ 		0,
+ 	)
++	shown() // patched (see PATCHED.md)
+ 	if res == 0 {
+ 		return err
+ 	}
+@@ -797,38 +888,31 @@
  
  // Loads an image from file to be shown in tray or menu item.
  // LoadImage: https://msdn.microsoft.com/en-us/library/windows/desktop/ms648045(v=vs.85).aspx
@@ -1273,7 +1437,52 @@ diff -aruN a/systray_windows.go b/systray_windows.go
  		t.muLoadedImages.Unlock()
  	}
  	return h, nil
-@@ -1125,6 +1204,7 @@
+@@ -1076,7 +1160,9 @@
+ }
+ 
+ func addOrUpdateMenuItem(item *MenuItem) {
+-	err := wt.addOrUpdateMenuItem(uint32(item.id), item.parentId(), item.title, item.disabled, item.checked)
++	menuMu.Lock() // patched (see PATCHED.md): one change of the menu at a time
++	defer menuMu.Unlock()
++	err := addOrUpdateMenuItemLocked(item)
+ 	if err != nil {
+ 		log.Printf("systray error: unable to addOrUpdateMenuItem: %s\n", err)
+ 		return
+@@ -1092,6 +1178,8 @@
+ }
+ 
+ func addSeparator(id uint32, parent uint32) {
++	menuMu.Lock() // patched (see PATCHED.md)
++	defer menuMu.Unlock()
+ 	err := wt.addSeparatorMenuItem(id, parent)
+ 	if err != nil {
+ 		log.Printf("systray error: unable to addSeparator: %s\n", err)
+@@ -1100,6 +1188,8 @@
+ }
+ 
+ func hideMenuItem(item *MenuItem) {
++	menuMu.Lock() // patched (see PATCHED.md)
++	defer menuMu.Unlock()
+ 	err := wt.hideMenuItem(uint32(item.id), item.parentId())
+ 	if err != nil {
+ 		log.Printf("systray error: unable to hideMenuItem: %s\n", err)
+@@ -1108,6 +1198,8 @@
+ }
+ 
+ func removeMenuItem(item *MenuItem) {
++	menuMu.Lock() // patched (see PATCHED.md)
++	defer menuMu.Unlock()
+ 	err := wt.removeMenuItem(uint32(item.id), item.parentId())
+ 	if err != nil {
+ 		log.Printf("systray error: unable to removeMenuItem: %s\n", err)
+@@ -1120,11 +1212,14 @@
+ }
+ 
+ func resetMenu() {
++	menuMu.Lock() // patched (see PATCHED.md)
++	defer menuMu.Unlock()
+ 	_, _, _ = pDestroyMenu.Call(uintptr(wt.menus[0]))
+ 	wt.visibleItems = make(map[uint32][]uint32)
  	wt.menus = make(map[uint32]windows.Handle)
  	wt.menuOf = make(map[uint32]windows.Handle)
  	wt.menuItemIcons = make(map[uint32]windows.Handle)

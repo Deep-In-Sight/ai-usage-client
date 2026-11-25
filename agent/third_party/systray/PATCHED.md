@@ -111,23 +111,39 @@ extra properties.
   only calls them:
   - `ownerdraw.go` (every OS): the types `Rect`, `MenuDrawer`
     (`Measure(id, dpi)`, `Draw(id, hdc, rect, state, dpi)`,
-    `SettingChanged(area)`) and `MenuDecorator` (`MeasureSeparator`,
-    `DrawSeparator`, `MenuBackground`: what a drawer may also do), and
-    the method `(*MenuItem).ID()`, the item's menu command id.
+    `SettingChanged(area)`), `MenuDecorator` (`MeasureSeparator`,
+    `DrawSeparator`, `MenuBackground`) and `MenuOpener` (`MenuOpening`,
+    called on the tray's thread before the menu opens): what a drawer may
+    also do; and the method `(*MenuItem).ID()`, the item's menu command
+    id.
   - `ownerdraw_windows.go`: `SetMenuDrawer(d)`, `(*MenuItem).
     SetOwnerDrawn(on)` (a hidden item stays hidden), `MenuOwnerWindow()`
-    (the hidden window that owns the menu) and `AddOwnerDrawnSeparator()`;
-    the handling of `WM_MEASUREITEM` (the size at the effective DPI of
-    the monitor under the pointer, `MonitorFromPoint` +
-    `shcore!GetDpiForMonitor`, 96 when unknown) and `WM_DRAWITEM` (the
-    DPI of the menu window, `GetDpiForWindow(WindowFromDC(hdc))`, else the
-    measured one) for the owner-drawn items and separators only
-    (`ODT_MENU`); `WM_SETTINGCHANGE`'s text to the drawer; before the
-    menu opens, the drawer's background colour (`SetMenuInfo`,
-    `MIM_BACKGROUND`) and a fresh measure of every visible owner-drawn
-    item and separator (Windows keeps an owner-drawn item's size until it
-    is inserted anew, so each is removed and inserted again at its place);
-    a panic in the drawer is logged instead of ending the program.
+    (the hidden window that owns the menu), `AddOwnerDrawnSeparator()` and,
+    for tests only, `SetReinsertHookForTests(f)` (f runs between an
+    item's removal and its insert in the re-insert before an open); the
+    handling of `WM_MEASUREITEM` (the size at the effective DPI of the
+    monitor under the pointer, `MonitorFromPoint` +
+    `shcore!GetDpiForMonitor`, 96 when unknown; the `POINT` is passed as
+    the 64-bit and the 32-bit calling conventions want it) and
+    `WM_DRAWITEM` (the DPI of the menu window,
+    `GetDpiForWindow(WindowFromDC(hdc))`, else the measured one) for the
+    owner-drawn items and separators only (`ODT_MENU`);
+    `WM_SETTINGCHANGE`'s text to the drawer; before the menu opens (not
+    again while it is shown): the drawer's `MenuOpening`, the drawer's
+    background colour (`SetMenuInfo`, `MIM_BACKGROUND`; the system's once
+    nothing in the menu is owner-drawn) and a fresh measure of every
+    visible owner-drawn item and separator (Windows keeps an owner-drawn
+    item's size until it is inserted anew, so each is removed and inserted
+    again at its place, from the parent and state it was last given, never
+    reading the item itself); a panic in the drawer is logged instead of
+    ending the program.
+  - One lock (`menuMu`) for the menu's items: every add, update, hide,
+    show, separator add, removal and reset (the package's wrappers), the
+    switch in `SetOwnerDrawn` and the re-insert before an open hold it, so
+    that the re-insert on the tray's thread and the program's goroutines
+    never interleave (a hidden item shown again, an item inserted twice).
+    It is never held across a drawer call or anything that waits for the
+    tray's thread; the comment at `menuMu` gives the reasoning.
   - `ownerdraw_other.go` (not Windows): the same functions doing nothing
     (`AddOwnerDrawnSeparator` is `AddSeparator`).
   - In `systray_windows.go`: `wndProc` passes `WM_MEASUREITEM`,
@@ -135,11 +151,14 @@ extra properties.
     the default procedure for what it does not handle (always for
     `WM_SETTINGCHANGE`, as upstream); `addOrUpdateMenuItem` gives an
     owner-drawn item `MFT_OWNERDRAW`, `ItemData` = its id and no string or
-    bitmap (`MIIM_FTYPE|MIIM_ID|MIIM_STATE|MIIM_DATA`), and a text item
-    again once that is switched off; `addSeparatorMenuItem` gives an
-    owner-drawn separator `MFT_SEPARATOR|MFT_OWNERDRAW`; `showMenu` calls
-    `prepareOwnerDrawnMenu` before `TrackPopupMenu`; `resetMenu` forgets
-    the owner-drawn items and separators.
+    bitmap (`MIIM_FTYPE|MIIM_ID|MIIM_STATE|MIIM_DATA`; its title is not
+    converted), and a text item again once that is switched off;
+    `addSeparatorMenuItem` gives an owner-drawn separator
+    `MFT_SEPARATOR|MFT_OWNERDRAW`; `showMenu` calls
+    `prepareOwnerDrawnMenu` before `TrackPopupMenu` and tells it when
+    `TrackPopupMenu` returned; `resetMenu` forgets the owner-drawn items
+    and separators; the wrappers `addOrUpdateMenuItem`, `addSeparator`,
+    `hideMenuItem`, `removeMenuItem` and `resetMenu` hold `menuMu`.
 - The header comment says the file was modified.
 
 ### Everything else
