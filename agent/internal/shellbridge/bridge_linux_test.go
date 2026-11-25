@@ -299,6 +299,9 @@ func TestAttachReportsAttached(t *testing.T) {
 	must(t, r.call("Ping").Err)
 	r.none()
 	must(t, r.call("Detach").Err)
+	r.timerAt(lockSettle) // a lock may be starting (TestDetachJustBeforeTheLockIsHeld)
+	r.none()
+	r.clk.Advance(lockSettle)
 	isAttached(t, r.next(), false, "detach")
 	must(t, r.call("Detach").Err) // not attached: nothing
 	r.none()
@@ -808,8 +811,8 @@ func TestSignalsFromOthersAreIgnored(t *testing.T) {
 	must(t, r.call("Ping").Err) // still attached, still serving
 	must(t, r.call("Detach").Err)
 	r.none() // held: locked
-	unicast(t, other, me, screenSaverPath, screenSaverName, "ActiveChanged", false)
-	must(t, other.Emit(screenSaverPath, screenSaverName+".ActiveChanged", false))
+	unicast(t, other, me, screenSaverPath, screenSaverIface, "ActiveChanged", false)
+	must(t, other.Emit(screenSaverPath, screenSaverIface+".ActiveChanged", false))
 	r.none()
 	r.shell.SetLocked(t, false)
 	isAttached(t, r.next(), false, "detach")
@@ -891,7 +894,7 @@ func TestHeldDetachAsksAgain(t *testing.T) {
 		if end == "quiet unlock" {
 			r.shell.SetLockedQuietly(false)
 		} else {
-			r.shell.Release(t, fakeshell.ScreenSaverName)
+			r.shell.Release(t, fakeshell.ScreenShieldName)
 		}
 		r.clk.Advance(lockRecheck - time.Millisecond)
 		r.none()
@@ -901,4 +904,63 @@ func TestHeldDetachAsksAgain(t *testing.T) {
 			t.Fatalf("%s: %+v", end, m)
 		}
 	}
+}
+
+// Measured on GNOME 46 and 50 (CI panel.lock; the headless 42 of the
+// runner has no screen lock): a lock disables the
+// extensions (its Detach) when it starts, and the screen saver says it is
+// active only after the lock screen's animation, so GetActive answers
+// false to that Detach (GNOME's screenShield.js: ActiveChanged only from
+// lockScreenShown). A Detach whose first answer is "not active" is held
+// for lockSettle: ActiveChanged(true) meanwhile, or "active" when asked
+// again, keeps it held for the lock; else it is told then.
+func TestDetachJustBeforeTheLockIsHeld(t *testing.T) {
+	for _, how := range []string{"signal", "asked again"} {
+		r := newRig(t, rigOptions{shell: shell46()})
+		r.ready("gnome46")
+		r.attached()
+		must(t, r.call("Detach").Err)
+		r.timerAt(lockSettle)
+		r.clk.Advance(lockSettle / 2)
+		if how == "signal" {
+			r.shell.SetLocked(t, true)
+			r.timerAt(lockRecheck) // held for the lock at once, not at the settle's end
+		} else {
+			r.shell.SetLockedQuietly(true)
+		}
+		r.none()
+		r.clk.Advance(lockSettle)
+		r.none()
+		for range 10 { // a lock of 10 minutes, asked again every 30 s
+			r.clk.Advance(time.Minute)
+		}
+		r.none()
+		r.shell.SetLocked(t, false)
+		isAttached(t, r.next(), false, "detach")
+	}
+}
+
+// Without a lock the Detach is told when lockSettle has passed, not
+// before; the extension attaching again meanwhile tells nothing. A shell
+// that left (why owner) is told at once, as before.
+func TestDetachWithoutALockIsToldAfterTheSettle(t *testing.T) {
+	r := newRig(t, rigOptions{shell: shell46()})
+	r.ready("gnome46")
+	r.attached()
+	must(t, r.call("Detach").Err)
+	r.timerAt(lockSettle)
+	r.clk.Advance(lockSettle - time.Millisecond)
+	r.none()
+	r.clk.Advance(time.Millisecond)
+	isAttached(t, r.next(), false, "detach")
+
+	r.attached()
+	must(t, r.call("Detach").Err)
+	r.timerAt(lockSettle)
+	must(t, r.call("Attach", uint32(1), "46.0").Err)
+	r.clk.Advance(lockSettle)
+	r.none()
+
+	r.shell.Leave(t)
+	isAttached(t, r.next(), false, "owner")
 }

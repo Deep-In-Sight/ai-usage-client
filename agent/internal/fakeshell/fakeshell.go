@@ -2,10 +2,17 @@
 
 // Package fakeshell stands in for a GNOME session in tests: a private
 // session bus (dbus-daemon) and a connection that plays GNOME Shell on it
-// (org.gnome.Shell with its ShellVersion, org.gnome.Shell.Extensions that
-// records EnableExtension and DisableExtension, org.gnome.ScreenSaver,
-// org.freedesktop.Notifications that records Notify). Tests only: nothing
-// that ships imports it.
+// as GNOME Shell 42, 46 and 50 lay it out (measured on CI, plan Task 15;
+// the screen shield on 46 and 50, the headless 42 there has none):
+// the name org.gnome.Shell with, at /org/gnome/Shell, its ShellVersion and
+// the org.gnome.Shell.Extensions interface that records EnableExtension and
+// DisableExtension; the name org.gnome.Shell.ScreenShield with the
+// org.gnome.ScreenSaver interface at /org/gnome/ScreenSaver; and
+// org.freedesktop.Notifications that records Notify. The well-known names
+// org.gnome.Shell.Extensions and org.gnome.ScreenSaver are not the shell's:
+// they belong to small GNOME services started on demand (D-Bus
+// activation), which a call without auto-start never reaches. Tests only:
+// nothing that ships imports it.
 package fakeshell
 
 import (
@@ -151,8 +158,9 @@ func NoBus(t testing.TB) (runtimeDir string, ran func(prog string) string) {
 // The names and paths the shell answers on.
 const (
 	ShellName         = "org.gnome.Shell"
-	ExtensionsName    = "org.gnome.Shell.Extensions"
-	ScreenSaverName   = "org.gnome.ScreenSaver"
+	ExtensionsIface   = "org.gnome.Shell.Extensions" // at /org/gnome/Shell of ShellName
+	ScreenShieldName  = "org.gnome.Shell.ScreenShield"
+	ScreenSaverIface  = "org.gnome.ScreenSaver" // at /org/gnome/ScreenSaver of ScreenShieldName
 	NotificationsName = "org.freedesktop.Notifications"
 )
 
@@ -177,7 +185,7 @@ type Options struct {
 	EnableOK  bool   // what EnableExtension answers
 	DisableOK bool   // what DisableExtension answers
 	Locked    bool   // what GetActive answers at first
-	// Names it owns (nil: all four)
+	// Names it owns (nil: all three)
 	Names []string
 	// OnCall, when set, is called with each extension call as it comes
 	// ("DisableExtension uuid"), before it is answered.
@@ -209,12 +217,12 @@ func Start(t testing.TB, addr string, o Options) *Shell {
 		}})
 		must(err)
 	}
-	must(conn.Export(extensions{s}, "/org/gnome/Shell/Extensions", ExtensionsName))
-	must(conn.Export(screenSaver{s}, "/org/gnome/ScreenSaver", ScreenSaverName))
+	must(conn.Export(extensions{s}, "/org/gnome/Shell", ExtensionsIface))
+	must(conn.Export(screenSaver{s}, "/org/gnome/ScreenSaver", ScreenSaverIface))
 	must(conn.Export(notifications{s}, "/org/freedesktop/Notifications", NotificationsName))
 	names := o.Names
 	if names == nil {
-		names = []string{ShellName, ExtensionsName, ScreenSaverName, NotificationsName}
+		names = []string{ShellName, ScreenShieldName, NotificationsName}
 	}
 	for _, n := range names {
 		reply, err := conn.RequestName(n, dbus.NameFlagDoNotQueue)
@@ -246,7 +254,7 @@ func (s *Shell) SetLocked(t testing.TB, locked bool) {
 	s.mu.Lock()
 	s.locked = locked
 	s.mu.Unlock()
-	if err := s.Conn.Emit("/org/gnome/ScreenSaver", ScreenSaverName+".ActiveChanged", locked); err != nil {
+	if err := s.Conn.Emit("/org/gnome/ScreenSaver", ScreenSaverIface+".ActiveChanged", locked); err != nil {
 		t.Fatal(err)
 	}
 }

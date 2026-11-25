@@ -54,8 +54,12 @@ func parseMajor(version string) (int, error) {
 }
 
 // Enable asks the shell to turn the extension uuid on
-// (org.gnome.Shell.Extensions.EnableExtension, as stage 0 recorded it:
-// false for an extension the shell did not find when it started).
+// (org.gnome.Shell.Extensions.EnableExtension: false for an extension the
+// shell did not find when it started). The shell serves the interface at
+// org.gnome.Shell /org/gnome/Shell; the well-known name
+// org.gnome.Shell.Extensions stage 0 called is a separate GNOME service
+// started on demand, which a call without auto-start never reaches (the
+// first real shells on CI, plan Task 15).
 func Enable(ctx context.Context, c *dbus.Conn, uuid string) (bool, error) {
 	return extensionsCall(ctx, c, "EnableExtension", uuid)
 }
@@ -68,7 +72,7 @@ func Disable(ctx context.Context, c *dbus.Conn, uuid string) (bool, error) {
 
 func extensionsCall(ctx context.Context, c *dbus.Conn, method, uuid string) (bool, error) {
 	var ok bool
-	err := c.Object("org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions").CallWithContext(ctx,
+	err := c.Object("org.gnome.Shell", "/org/gnome/Shell").CallWithContext(ctx,
 		"org.gnome.Shell.Extensions."+method, dbus.FlagNoAutoStart, uuid).Store(&ok)
 	return ok, err
 }
