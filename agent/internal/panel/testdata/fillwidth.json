@@ -1,0 +1,15 @@
+{
+  "comment": "Bar fill width from the shown percent (plan PR-18), read by the Go test (panel.FillWidth) and the GNOME extension's test (fillWidth).",
+  "track": 300,
+  "bar": 8,
+  "cases": [
+    {"percent": null, "fill": 0},
+    {"percent": 0, "fill": 0},
+    {"percent": 0.4, "fill": 0},
+    {"percent": 1, "fill": 8},
+    {"percent": 4.5, "fill": 15},
+    {"percent": 50, "fill": 150},
+    {"percent": 99.6, "fill": 300},
+    {"percent": 130, "fill": 300}
+  ]
+}
