@@ -94,7 +94,7 @@ jobs:
           }
       - name: session bus tests (-race)
         # The packages whose tests start a private dbus-daemon (the GNOME
-        # bridge, the shell calls, the tray helper's bus watch, the fake
+        # bridge, the shell calls, the tray helper's bus watch, notifications, the fake
         # panel) under the race detector (review I3). On CI a missing
         # dbus-daemon fails them instead of skipping (fakeshell.Daemon).
         # The counts become a notice, failures annotations: both readable
@@ -104,7 +104,7 @@ jobs:
         run: |
           rc=0
           go test -race -count=1 -v ./internal/shellbridge ./internal/gnomeext ./internal/fakeshell \
-            ./internal/trayhelper ./tools/fakepanel > "$RUNNER_TEMP/bus-race.log" 2>&1 || rc=$?
+            ./internal/trayhelper ./internal/notify ./tools/fakepanel > "$RUNNER_TEMP/bus-race.log" 2>&1 || rc=$?
           pass=$(grep -c -E '^--- PASS' "$RUNNER_TEMP/bus-race.log" || true)
           fail=$(grep -c -E '^--- FAIL' "$RUNNER_TEMP/bus-race.log" || true)
           skip=$(grep -c -E '^--- SKIP' "$RUNNER_TEMP/bus-race.log" || true)

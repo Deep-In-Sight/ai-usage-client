@@ -68,22 +68,18 @@ func Reachable(addr string) bool {
 // ErrNoBus: no session bus address to dial.
 var ErrNoBus = errors.New("no session bus: no DBUS_SESSION_BUS_ADDRESS and no bus in $XDG_RUNTIME_DIR")
 
-// Address is the session bus address to dial without ever starting a bus
-// (plan PR-14, RF3): DBUS_SESSION_BUS_ADDRESS, or $XDG_RUNTIME_DIR/bus
-// instead when the given address does not answer and that one does
-// (Fallback); without an address, $XDG_RUNTIME_DIR/bus when its socket
-// answers; else ErrNoBus. It does not judge the given address beyond
-// that: a dead address without a live runtime bus is returned as it is
-// (dialing it fails). An autolaunch: address is refused: dialing it would
-// start a bus.
-func Address(getenv func(string) string, reachable func(addr string) bool) (string, error) {
+// Given is the session bus address as this process was given it, never
+// one that would start a bus (plan RF3): DBUS_SESSION_BUS_ADDRESS as it
+// is (one that does not answer too: dialing it fails), or without one
+// $XDG_RUNTIME_DIR/bus when its socket answers; else ErrNoBus. An
+// autolaunch: address is refused: dialing it would start a bus
+// (dbus-launch), as the D-Bus library's own session-bus lookup does when
+// it finds none. The tray helpers dial this (they move to the runtime
+// folder's bus only after a while: trayhelper's busSwitch).
+func Given(getenv func(string) string, reachable func(addr string) bool) (string, error) {
 	if cur := getenv(addressEnv); strings.Contains(cur, "autolaunch:") {
-		// the D-Bus library would start a bus for it (dbus-launch)
 		return "", ErrNoBus
 	} else if cur != "" {
-		if alt, ok := Fallback(getenv, reachable); ok {
-			return alt, nil
-		}
 		return cur, nil
 	}
 	rt := getenv("XDG_RUNTIME_DIR")
@@ -95,4 +91,20 @@ func Address(getenv func(string) string, reachable func(addr string) bool) (stri
 		return "", ErrNoBus
 	}
 	return runtimeBus, nil
+}
+
+// Address is the session bus address to dial without ever starting a bus
+// (plan PR-14, RF3): Given, but $XDG_RUNTIME_DIR/bus instead of a given
+// address that does not answer when that one does (Fallback). It does
+// not judge the given address beyond that: a dead address without a live
+// runtime bus is returned as it is (dialing it fails).
+func Address(getenv func(string) string, reachable func(addr string) bool) (string, error) {
+	addr, err := Given(getenv, reachable)
+	if err != nil {
+		return "", err
+	}
+	if alt, ok := Fallback(getenv, reachable); ok {
+		return alt, nil
+	}
+	return addr, nil
 }

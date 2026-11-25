@@ -112,3 +112,38 @@ func TestAddress(t *testing.T) {
 		}
 	}
 }
+
+// Given: the address as given (a dead one too), the runtime folder's when
+// none is given and it answers; never autolaunch:.
+func TestGiven(t *testing.T) {
+	alive := map[string]bool{"unix:path=/run/user/1000/bus": true, "unix:path=/tmp/live": true}
+	reachable := func(a string) bool { return alive[a] }
+	for _, c := range []struct {
+		addr, rt, want string
+		err            bool
+	}{
+		{"unix:path=/tmp/live", "/run/user/1000", "unix:path=/tmp/live", false},
+		{"unix:path=/tmp/dead", "/run/user/1000", "unix:path=/tmp/dead", false}, // no switch here
+		{"", "/run/user/1000", "unix:path=/run/user/1000/bus", false},
+		{"", "/run/user/1000/", "unix:path=/run/user/1000/bus", false},
+		{"", "/run/user/1001", "", true},
+		{"", "relative/run", "", true},
+		{"", "", "", true},
+		{"autolaunch:", "/run/user/1000", "", true},
+		{"unix:path=/tmp/dead;autolaunch:", "/run/user/1000", "", true},
+	} {
+		env := func(k string) string {
+			switch k {
+			case "DBUS_SESSION_BUS_ADDRESS":
+				return c.addr
+			case "XDG_RUNTIME_DIR":
+				return c.rt
+			}
+			return ""
+		}
+		got, err := Given(env, reachable)
+		if got != c.want || (err != nil) != c.err || (err != nil && !errors.Is(err, ErrNoBus)) {
+			t.Errorf("%q %q: %q %v", c.addr, c.rt, got, err)
+		}
+	}
+}

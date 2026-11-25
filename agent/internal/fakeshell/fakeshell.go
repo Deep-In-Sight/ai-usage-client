@@ -33,7 +33,7 @@ type Bus struct {
 // otherwise pass every bus test by skipping it (review I3).
 func Daemon(t testing.TB) string {
 	t.Helper()
-	daemon, err := exec.LookPath("dbus-daemon")
+	daemon, err := lookDaemon()
 	if err != nil {
 		if os.Getenv("GITHUB_ACTIONS") == "true" {
 			t.Fatal("no dbus-daemon on this CI runner: the session bus tests cannot run")
@@ -41,6 +41,26 @@ func Daemon(t testing.TB) string {
 		t.Skip("no dbus-daemon")
 	}
 	return daemon
+}
+
+var (
+	daemonMu    sync.Mutex
+	daemonFound string
+)
+
+// lookDaemon finds dbus-daemon on PATH and remembers it (NoBus empties
+// PATH, and a test may start a bus after that).
+func lookDaemon() (string, error) {
+	daemonMu.Lock()
+	defer daemonMu.Unlock()
+	if daemonFound != "" {
+		return daemonFound, nil
+	}
+	p, err := exec.LookPath("dbus-daemon")
+	if err == nil {
+		daemonFound = p
+	}
+	return p, err
 }
 
 // NewBus starts a private session bus, at addr ("unix:path=…") or at an
@@ -93,6 +113,39 @@ func ShortDir(t testing.TB) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(d) })
 	return d
+}
+
+// NoBus prepares a test of a process without a session bus (plan RF3: an
+// SSH login, "su -", before the first GNOME login): no
+// DBUS_SESSION_BUS_ADDRESS, $XDG_RUNTIME_DIR an empty folder, and PATH
+// holding nothing but recorders for dbus-launch (which the D-Bus library
+// runs to start a bus when it finds none) and gio. It returns the runtime
+// folder and ran: what a recorder was run with ("" when it was not).
+// The D-Bus library's own lookup also finds the user's bus at
+// /run/user/<uid>/bus whatever XDG_RUNTIME_DIR says, so a broken build
+// would dial it: on a PC with such a bus the test is skipped, unless
+// GITHUB_ACTIONS=true (CI runners, a container and a sandbox run it).
+func NoBus(t testing.TB) (runtimeDir string, ran func(prog string) string) {
+	t.Helper()
+	if _, err := os.Stat(fmt.Sprintf("/run/user/%d/bus", os.Getuid())); err == nil && os.Getenv("GITHUB_ACTIONS") != "true" {
+		t.Skip("this PC has a user session bus: this test runs on CI runners only")
+	}
+	_, _ = lookDaemon() // before PATH is emptied
+	bin, rec := t.TempDir(), t.TempDir()
+	for _, prog := range []string{"dbus-launch", "gio"} {
+		script := "#!/bin/sh\necho \"$@\" >> " + filepath.Join(rec, prog) + "\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(bin, prog), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "")
+	runtimeDir = ShortDir(t)
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	return runtimeDir, func(prog string) string {
+		b, _ := os.ReadFile(filepath.Join(rec, prog))
+		return string(b)
+	}
 }
 
 // The names and paths the shell answers on.

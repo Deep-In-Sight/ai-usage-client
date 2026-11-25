@@ -2,12 +2,26 @@ package trayhelper
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/godbus/dbus/v5"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/clock"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sessionbus"
 )
+
+// connectSession connects to the session bus at the address this process
+// was given (sessionbus.Given): never the D-Bus library's own lookup,
+// which starts a bus (dbus-launch) when it finds none (plan RF3).
+func connectSession(getenv func(string) string) (*dbus.Conn, string, error) {
+	addr, err := sessionbus.Given(getenv, sessionbus.Reachable)
+	if err != nil {
+		return nil, "", err
+	}
+	conn, err := dbus.Connect(addr)
+	return conn, addr, err
+}
 
 // Available reports whether a tray icon can be shown, and why not. On Linux
 // it needs a desktop session, a session bus and a StatusNotifierWatcher
@@ -22,7 +36,7 @@ func Available(ctx context.Context, getenv func(string) string) (bool, string) {
 	}()
 	hasOwner := func() (bool, error) {
 		if conn == nil {
-			c, err := dbus.ConnectSessionBus()
+			c, _, err := connectSession(getenv)
 			if err != nil {
 				return false, errNoBus
 			}
@@ -54,12 +68,17 @@ type dbusHost struct {
 }
 
 func dialHost() (hostConn, error) {
-	conn, err := dbus.ConnectSessionBus()
+	conn, addr, err := connectSession(os.Getenv)
 	if err != nil {
 		sessionBus.failed()
 		return nil, err
 	}
 	sessionBus.ok()
+	if os.Getenv(busEnv) == "" {
+		// The tray library looks for the session bus by itself: give it
+		// this one, so it never looks further or starts a bus.
+		_ = os.Setenv(busEnv, addr)
+	}
 	if err := conn.AddMatchSignal(
 		dbus.WithMatchObjectPath("/org/freedesktop/DBus"),
 		dbus.WithMatchInterface("org.freedesktop.DBus"),

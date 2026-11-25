@@ -2,14 +2,23 @@ package notify
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/godbus/dbus/v5"
+
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/sessionbus"
 )
 
-// Show sends a notification through org.freedesktop.Notifications.
+// Show sends a notification through org.freedesktop.Notifications on the
+// session bus at sessionbus.Address: never the D-Bus library's own
+// lookup, which starts a bus (dbus-launch) when it finds none (plan RF3).
 func Show(title, body string) error {
-	conn, err := dbus.ConnectSessionBus()
+	addr, err := sessionbus.Address(os.Getenv, sessionbus.Reachable)
+	if err != nil {
+		return err
+	}
+	conn, err := dbus.Connect(addr)
 	if err != nil {
 		return err
 	}
