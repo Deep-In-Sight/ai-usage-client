@@ -4,13 +4,30 @@
 //
 //	pixcheck bars FILE
 //	    bar y=<y> x=<x0> fill=<px> track=<px> colour=#rrggbb alpha=<a> bg=#rrggbb
-//	    for each bar found: a horizontal run of a bar colour (the panel's
-//	    normal, warning or critical colour, also seen through an opacity
-//	    alpha over the background bg: a stale group), followed by a run
-//	    of the track colour (none for a full bar: plan ruling F19) and
+//	        base=#rrggbb trackcolour=#rrggbb|none height=<px> ends=round|square
+//	    for each bar found: a horizontal run of a bar colour (base: the
+//	    panel's normal, warning or critical colour, also seen through an
+//	    opacity alpha over the background bg: a stale group), followed by a
+//	    run of the track colour (none for a full bar: plan ruling F19) and
 //	    then the background, at least 100 px in all and in at least four
 //	    rows one under the other (a bar is 8 px high; text and icons are
-//	    not). y and the lengths are those of its middle row.
+//	    not). y and the lengths are those of its middle row; height is
+//	    counted down the bar's middle column, ends are round when the four
+//	    corner pixels show the background more than the bar.
+//	pixcheck judge -want P:LEVEL[:ALPHA],... FILE
+//	    the bars, then "problems: none" or "problems: …": the bars are not
+//	    as wanted, top to bottom (design 5.2, plan constraint 7): their
+//	    number; fill+track equal for all (±2 px, so a full bar is as long
+//	    as the others); the fill of P % of that (panel.FillWidth, ±2 px);
+//	    the level's colour seen at ALPHA (1 when left out; a stale group
+//	    0.6, ±0.05); the track rgba(128,128,128,0.32) at ALPHA over the
+//	    background (±4 per channel); 8 px high; round ends.
+//	pixcheck problem -menu x,y,w,h -rect x,y,w,h FILE
+//	    bg=#rrggbb light|dark want=#rrggbb pixels=<n>: the menu's
+//	    background (its commonest colour) decides light or dark (relative
+//	    luminance below 0.5: dark), which decides the problem line's colour
+//	    (#9a6700 on light, #f5c211 on dark: design 5.2); n is the pixels of
+//	    that colour (±8) in the problem line's rectangle.
 //	pixcheck colour [-tol N] [-rect x,y,w,h] FILE #rrggbb
 //	    the number of pixels within N per channel of the colour
 //	pixcheck ink -rect x,y,w,h FILE
@@ -27,7 +44,9 @@ import (
 	"image/draw"
 	"image/png"
 	"io"
+	"math"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -38,13 +57,15 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, out, errOut io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "usage: pixcheck bars FILE | colour [-tol N] [-rect x,y,w,h] FILE #rrggbb | ink -rect x,y,w,h FILE")
+		fmt.Fprintln(errOut, "usage: pixcheck bars FILE | judge -want P:LEVEL[:ALPHA],... FILE | colour [-tol N] [-rect x,y,w,h] FILE #rrggbb | ink -rect x,y,w,h FILE | problem -menu x,y,w,h -rect x,y,w,h FILE")
 		return 2
 	}
 	fs := flag.NewFlagSet("pixcheck "+args[0], flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	tol := fs.Int("tol", 0, "tolerance per channel")
 	rectArg := fs.String("rect", "", "x,y,w,h")
+	menuArg := fs.String("menu", "", "x,y,w,h (problem: the menu)")
+	wantArg := fs.String("want", "", "P:LEVEL[:ALPHA],... (judge: the bars top to bottom)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -69,6 +90,34 @@ func run(args []string, out, errOut io.Writer) int {
 		for _, b := range Bars(img) {
 			fmt.Fprintln(out, b)
 		}
+	case "judge":
+		wants, err := parseWants(*wantArg)
+		if err != nil {
+			return fail(err)
+		}
+		bars := Bars(img)
+		for _, b := range bars {
+			fmt.Fprintln(out, b)
+		}
+		probs := Judge(bars, wants)
+		if len(probs) == 0 {
+			probs = []string{"none"}
+		}
+		fmt.Fprintln(out, "problems:", strings.Join(probs, " "))
+	case "problem":
+		if *rectArg == "" || *menuArg == "" {
+			return fail(errors.New("problem needs -menu and -rect"))
+		}
+		menu, err := parseRect(*menuArg)
+		if err != nil {
+			return fail(err)
+		}
+		bg, dark, want, n := Problem(img, menu.Intersect(img.Bounds()), r)
+		shade := "light"
+		if dark {
+			shade = "dark"
+		}
+		fmt.Fprintf(out, "bg=%s %s want=%s pixels=%d\n", hex(bg), shade, hex(want), n)
 	case "colour":
 		if len(rest) != 2 {
 			return fail(errors.New("colour FILE #rrggbb"))
@@ -192,10 +241,23 @@ type Bar struct {
 	Y, X, Fill, Track int
 	Colour, Bg        color.NRGBA
 	Alpha             float64
+	Base              color.NRGBA // the panel's bar colour Colour is (at Alpha over what is under it)
+	TrackColour       color.NRGBA // the track's colour (when Track > 0)
+	Height            int         // rows of the bar down its middle column
+	Round             bool        // its four corner pixels show the background more than the bar
 }
 
 func (b Bar) String() string {
-	return fmt.Sprintf("bar y=%d x=%d fill=%d track=%d colour=%s alpha=%.2f bg=%s", b.Y, b.X, b.Fill, b.Track, hex(b.Colour), b.Alpha, hex(b.Bg))
+	tc := "none"
+	if b.Track > 0 {
+		tc = hex(b.TrackColour)
+	}
+	ends := "square"
+	if b.Round {
+		ends = "round"
+	}
+	return fmt.Sprintf("bar y=%d x=%d fill=%d track=%d colour=%s alpha=%.2f bg=%s base=%s trackcolour=%s height=%d ends=%s",
+		b.Y, b.X, b.Fill, b.Track, hex(b.Colour), b.Alpha, hex(b.Bg), hex(b.Base), tc, b.Height, ends)
 }
 
 const (
@@ -204,12 +266,12 @@ const (
 	minRows  = 4   // rows of the same bar one under the other
 )
 
-// barAlpha: c is one of the panel's bar colours seen through opacity
-// alpha over bg (1 when drawn as it is); ok false when it is none.
-func barAlpha(c, bg color.NRGBA) (alpha float64, ok bool) {
+// barAlpha: c is the panel's bar colour base seen through opacity alpha
+// over bg (1 when drawn as it is); ok false when it is none of them.
+func barAlpha(c, bg color.NRGBA) (alpha float64, base color.NRGBA, ok bool) {
 	for _, b := range []color.NRGBA{panel.Normal, panel.Warning, panel.Critical} {
 		if near(c, b, runTol) {
-			return 1, true
+			return 1, b, true
 		}
 		// c = a*b + (1-a)*bg per channel: a from the channel where b and
 		// bg differ most, then every channel must agree
@@ -235,10 +297,10 @@ func barAlpha(c, bg color.NRGBA) (alpha float64, ok bool) {
 			}
 		}
 		if agree {
-			return a, true
+			return a, b, true
 		}
 	}
-	return 0, false
+	return 0, color.NRGBA{}, false
 }
 
 // rowBars finds the bars' runs in row y. A fill is a run of pixels
@@ -270,12 +332,12 @@ func rowBars(img *image.NRGBA, y int) []Bar {
 			track = at(img, xe+1, y)
 		}
 		mid := at(img, (x+xe)/2, y)
-		a, ok := 0.0, false
+		a, base, ok := 0.0, color.NRGBA{}, false
 		if hasTrack {
-			a, ok = barAlpha(mid, track)
+			a, base, ok = barAlpha(mid, track)
 		}
 		if !ok {
-			a, ok = barAlpha(mid, bg)
+			a, base, ok = barAlpha(mid, bg)
 		}
 		if !ok {
 			x = xe - 1
@@ -309,7 +371,7 @@ func rowBars(img *image.NRGBA, y int) []Bar {
 			continue
 		}
 		if fill, tr := xe-x0, end-xe; fill+tr >= minTotal {
-			found = append(found, Bar{Y: y, X: x0, Fill: fill, Track: tr, Colour: mid, Bg: bg, Alpha: a})
+			found = append(found, Bar{Y: y, X: x0, Fill: fill, Track: tr, Colour: mid, Bg: bg, Alpha: a, Base: base, TrackColour: track})
 		}
 		x = end
 	}
@@ -356,7 +418,7 @@ func Bars(img *image.NRGBA) []Bar {
 			continue
 		}
 		seen[g] = true
-		bars = append(bars, g.rows[len(g.rows)/2])
+		bars = append(bars, shape(img, g.rows[len(g.rows)/2]))
 	}
 	// top to bottom (groups end in any order)
 	for i := 1; i < len(bars); i++ {
@@ -365,4 +427,163 @@ func Bars(img *image.NRGBA) []Bar {
 		}
 	}
 	return bars
+}
+
+// shape measures b's height down its middle column (the rows that are not
+// the background) and whether its ends are round: each corner pixel of
+// that box is nearer the background than the pixel of b's middle row in
+// its column (a square end's corner is the bar's own colour).
+func shape(img *image.NRGBA, b Bar) Bar {
+	r := img.Bounds()
+	mx := b.X + (b.Fill+b.Track)/2
+	top, bottom := b.Y, b.Y
+	for top-1 >= r.Min.Y && !near(at(img, mx, top-1), b.Bg, 8) {
+		top--
+	}
+	for bottom+1 < r.Max.Y && !near(at(img, mx, bottom+1), b.Bg, 8) {
+		bottom++
+	}
+	b.Height = bottom - top + 1
+	b.Round = b.Height > 2
+	for _, x := range []int{b.X, b.X + b.Fill + b.Track - 1} {
+		inside := at(img, x, b.Y)
+		for _, y := range []int{top, bottom} {
+			if c := at(img, x, y); dist(c, b.Bg) >= dist(c, inside) {
+				b.Round = false
+			}
+		}
+	}
+	return b
+}
+
+// Want is what one bar should be: the percent shown, its level's colour,
+// seen at alpha (1, or a stale group's 0.6).
+type Want struct {
+	Percent float64
+	Colour  color.NRGBA
+	Alpha   float64
+}
+
+// parseWants reads "42:normal,100:critical,13:normal:0.6".
+func parseWants(s string) ([]Want, error) {
+	if s == "" {
+		return nil, errors.New("judge needs -want")
+	}
+	var out []Want
+	for _, f := range strings.Split(s, ",") {
+		p := strings.Split(f, ":")
+		if len(p) < 2 || len(p) > 3 {
+			return nil, fmt.Errorf("want %q: P:LEVEL[:ALPHA]", f)
+		}
+		pc, err := strconv.ParseFloat(p[0], 64)
+		if err != nil {
+			return nil, fmt.Errorf("want %q: %v", f, err)
+		}
+		c, ok := panel.BarColour(p[1])
+		if !ok {
+			return nil, fmt.Errorf("want %q: no level %q", f, p[1])
+		}
+		w := Want{Percent: pc, Colour: c, Alpha: 1}
+		if len(p) == 3 {
+			if w.Alpha, err = strconv.ParseFloat(p[2], 64); err != nil || w.Alpha <= 0 || w.Alpha > 1 {
+				return nil, fmt.Errorf("want %q: alpha", f)
+			}
+		}
+		out = append(out, w)
+	}
+	return out, nil
+}
+
+// Tolerances of Judge.
+const (
+	lengthTol = 2    // px: a fill, and fill+track against the others'
+	alphaTol  = 0.05 // a stale group's opacity
+	trackTol  = 4    // per channel: the track's colour
+)
+
+// Judge compares bars, top to bottom, with wants (design 5.2, plan
+// constraint 7); nil when they are as wanted.
+func Judge(bars []Bar, wants []Want) []string {
+	var probs []string
+	if len(bars) != len(wants) {
+		probs = append(probs, fmt.Sprintf("bars=%d(want_%d)", len(bars), len(wants)))
+	}
+	n := min(len(bars), len(wants))
+	if n == 0 {
+		return probs
+	}
+	// the bars' common length: the median of fill+track
+	totals := make([]int, n)
+	for i := range n {
+		totals[i] = bars[i].Fill + bars[i].Track
+	}
+	sorted := slices.Clone(totals)
+	slices.Sort(sorted)
+	ref := sorted[len(sorted)/2]
+	for i := range n {
+		b, w := bars[i], wants[i]
+		if abs(totals[i]-ref) > lengthTol {
+			probs = append(probs, fmt.Sprintf("bar%d:length=%d(others_%d)", i, totals[i], ref))
+		}
+		pc := w.Percent
+		if want := panel.FillWidth(&pc, ref, panel.BarHeight); abs(b.Fill-want) > lengthTol {
+			probs = append(probs, fmt.Sprintf("bar%d:fill=%d(want_%d_of_%d)", i, b.Fill, want, ref))
+		}
+		if b.Base != w.Colour {
+			probs = append(probs, fmt.Sprintf("bar%d:colour=%s(want_%s)", i, hex(b.Base), hex(w.Colour)))
+		}
+		if w.Alpha == 1 && b.Alpha != 1 || w.Alpha != 1 && math.Abs(b.Alpha-w.Alpha) > alphaTol {
+			probs = append(probs, fmt.Sprintf("bar%d:alpha=%.2f(want_%.2f)", i, b.Alpha, w.Alpha))
+		}
+		if b.Track > 0 {
+			if want := over(panel.Track, b.Bg, w.Alpha); !near(b.TrackColour, want, trackTol) {
+				probs = append(probs, fmt.Sprintf("bar%d:track=%s(want_%s)", i, hex(b.TrackColour), hex(want)))
+			}
+		}
+		if b.Height != panel.BarHeight {
+			probs = append(probs, fmt.Sprintf("bar%d:height=%d(want_%d)", i, b.Height, panel.BarHeight))
+		}
+		if !b.Round {
+			probs = append(probs, fmt.Sprintf("bar%d:square_ends", i))
+		}
+	}
+	return probs
+}
+
+// over is c, its own alpha times opacity, drawn over bg.
+func over(c, bg color.NRGBA, opacity float64) color.NRGBA {
+	a := float64(c.A) / 255 * opacity
+	mix := func(f, b uint8) uint8 { return uint8(float64(f)*a + float64(b)*(1-a) + 0.5) }
+	return color.NRGBA{mix(c.R, bg.R), mix(c.G, bg.G), mix(c.B, bg.B), 0xff}
+}
+
+// The problem line's colours (design 5.2): on a dark menu, on a light one.
+var (
+	problemOnDark  = color.NRGBA{0xf5, 0xc2, 0x11, 0xff}
+	problemOnLight = color.NRGBA{0x9a, 0x67, 0x00, 0xff}
+)
+
+// Problem: the menu's background (the commonest colour of menu), whether
+// it is dark (relative luminance below 0.5), the problem line's colour for
+// it, and how many pixels of rect have that colour (±8).
+func Problem(img *image.NRGBA, menu, rect image.Rectangle) (bg color.NRGBA, dark bool, want color.NRGBA, n int) {
+	_, bg = Ink(img, menu)
+	dark = luminance(bg) < 0.5
+	want = problemOnLight
+	if dark {
+		want = problemOnDark
+	}
+	return bg, dark, want, Count(img, rect, want, 8)
+}
+
+// luminance is c's relative luminance (sRGB channels).
+func luminance(c color.NRGBA) float64 {
+	lin := func(v uint8) float64 {
+		s := float64(v) / 255
+		if s <= 0.04045 {
+			return s / 12.92
+		}
+		return math.Pow((s+0.055)/1.055, 2.4)
+	}
+	return 0.2126*lin(c.R) + 0.7152*lin(c.G) + 0.0722*lin(c.B)
 }

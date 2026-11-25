@@ -324,6 +324,9 @@ jobs:
       - name: results 4
         if: always()
         run: bash -c '. agent/ci/lib.sh && notices out/panel-results.txt 31 panel'
+      - name: results 5
+        if: always()
+        run: bash -c '. agent/ci/lib.sh && notices out/panel-results.txt 41 panel'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

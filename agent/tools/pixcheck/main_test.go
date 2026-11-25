@@ -22,6 +22,11 @@ type drawnBar struct {
 	x, y, fill int
 	bar        color.NRGBA
 	alpha      float64
+	// a bar drawn wrong (the zero values: as the panel draws it): its
+	// width and height, its track colour, square ends
+	w, h   int
+	track  color.NRGBA
+	square bool
 }
 
 const trackW, barH = 300, panel.BarHeight
@@ -32,11 +37,25 @@ func menu(bg color.NRGBA, bars []drawnBar) *image.NRGBA {
 		img.Pix[i] = []byte{bg.R, bg.G, bg.B, 0xff}[i%4]
 	}
 	for _, b := range bars {
+		w, h, trackC := b.w, b.h, b.track
+		if w == 0 {
+			w = trackW
+		}
+		if h == 0 {
+			h = barH
+		}
+		if trackC == (color.NRGBA{}) {
+			trackC = panel.Track
+		}
+		pixels := panel.BarPixels
+		if b.square {
+			pixels = squareBar
+		}
 		// GNOME draws the track and the fill on it each at the group's
 		// opacity (a stale group): the track over the background, then the
 		// fill over that
 		under := func(px []byte, x, y int, c color.NRGBA) color.NRGBA {
-			i := (y*trackW + x) * 4
+			i := (y*w + x) * 4
 			a := float64(px[i+3]) / 255
 			mix := func(src byte, u uint8) uint8 {
 				v := float64(src) + float64(u)*(1-a) // premultiplied over u
@@ -44,10 +63,10 @@ func menu(bg color.NRGBA, bars []drawnBar) *image.NRGBA {
 			}
 			return color.NRGBA{mix(px[i+2], c.R), mix(px[i+1], c.G), mix(px[i], c.B), 0xff}
 		}
-		track := panel.BarPixels(trackW, barH, 0, b.bar, panel.Track)
-		fill := panel.BarPixels(trackW, barH, b.fill, b.bar, color.NRGBA{})
-		for y := range barH {
-			for x := range trackW {
+		track := pixels(w, h, 0, b.bar, trackC)
+		fill := pixels(w, h, b.fill, b.bar, color.NRGBA{})
+		for y := range h {
+			for x := range w {
 				img.SetNRGBA(b.x+x, b.y+y, under(fill, x, y, under(track, x, y, bg)))
 			}
 		}
@@ -64,6 +83,23 @@ func menu(bg color.NRGBA, bars []drawnBar) *image.NRGBA {
 		}
 	}
 	return img
+}
+
+// squareBar is panel.BarPixels without the round ends: every pixel whole.
+func squareBar(w, h, fill int, bar, track color.NRGBA) []byte {
+	out := make([]byte, w*h*4)
+	for y := range h {
+		for x := range w {
+			c := track
+			if x < fill {
+				c = bar
+			}
+			a := float64(c.A) / 255
+			i := (y*w + x) * 4
+			out[i], out[i+1], out[i+2], out[i+3] = uint8(float64(c.B)*a+0.5), uint8(float64(c.G)*a+0.5), uint8(float64(c.R)*a+0.5), c.A
+		}
+	}
+	return out
 }
 
 func pct(v float64) *float64 { return &v }
@@ -184,5 +220,124 @@ func TestColourAndInk(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if run([]string{"ink", p}, &out, &errOut) == 0 || run([]string{"colour", p, "orange"}, &out, &errOut) == 0 || run([]string{"bars", "/nonexistent.png"}, &out, &errOut) == 0 {
 		t.Fatal("a bad call succeeded")
+	}
+}
+
+const (
+	wantCombined = "42:normal,13:normal,7:normal,100:critical,8:normal"
+	wantStates   = "42:normal:0.6,13:normal:0.6,7:normal:0.6,100:critical,8:normal"
+)
+
+// judge is pixcheck judge's problems line for a picture.
+func judge(t *testing.T, img image.Image, want string) string {
+	t.Helper()
+	lines := pixcheck(t, "judge", "-want", want, writePNG(t, img))
+	last := lines[len(lines)-1]
+	if !strings.HasPrefix(last, "problems: ") {
+		t.Fatalf("no problems line: %q", lines)
+	}
+	return strings.TrimPrefix(last, "problems: ")
+}
+
+// Review B-M1: the panel as it is drawn, light and dark, its Claude group
+// stale or not, has no problem.
+func TestJudgeTheDrawnPanel(t *testing.T) {
+	for _, bg := range []color.NRGBA{{250, 250, 250, 255}, {48, 48, 48, 255}} {
+		if p := judge(t, menu(bg, combinedBars(1)), wantCombined); p != "none" {
+			t.Errorf("bg %v combined: %s", bg, p)
+		}
+		if p := judge(t, menu(bg, combinedBars(0.6)), wantStates); p != "none" {
+			t.Errorf("bg %v states: %s", bg, p)
+		}
+	}
+}
+
+// Review B-M1: each way a bar can be drawn wrong is a problem of that bar:
+// (a) the track's colour, (b) its height and square ends, (c) a full bar
+// shorter than the others, (d) a stale bar at another opacity or in
+// another level's colour; and a bar too few.
+func TestJudgeFindsWhatIsWrong(t *testing.T) {
+	bg := color.NRGBA{250, 250, 250, 255}
+	for _, c := range []struct {
+		name, want, problem string
+		change              func(b []drawnBar) []drawnBar
+	}{
+		{"track 0.6", wantCombined, "bar0:track=", func(b []drawnBar) []drawnBar {
+			b[0].track = color.NRGBA{0x80, 0x80, 0x80, 153}
+			return b
+		}},
+		{"track blue", wantCombined, "bar1:track=", func(b []drawnBar) []drawnBar {
+			b[1].track = color.NRGBA{0x60, 0x60, 0xc0, 82}
+			return b
+		}},
+		{"10 px high", wantCombined, "bar2:height=10", func(b []drawnBar) []drawnBar { b[2].h = 10; return b }},
+		{"6 px high", wantCombined, "bar0:height=6", func(b []drawnBar) []drawnBar { b[0].h = 6; return b }},
+		{"square ends", wantCombined, "bar4:square_ends", func(b []drawnBar) []drawnBar { b[4].square = true; return b }},
+		{"short full bar", wantCombined, "bar3:length=250", func(b []drawnBar) []drawnBar {
+			b[3].w, b[3].fill = 250, 250
+			return b
+		}},
+		{"stale at 0.8", wantStates, "bar1:alpha=0.80", func(b []drawnBar) []drawnBar { b[1].alpha = 0.8; return b }},
+		{"stale in the warning colour", wantStates, "bar2:colour=#f5c211", func(b []drawnBar) []drawnBar {
+			b[2].bar = panel.Warning
+			return b
+		}},
+		{"not stale", wantStates, "bar0:alpha=1.00", func(b []drawnBar) []drawnBar { b[0].alpha = 1; return b }},
+		{"a bar too few", wantCombined, "bars=4(want_5)", func(b []drawnBar) []drawnBar { return b[:4] }},
+	} {
+		alpha := 1.0
+		if c.want == wantStates {
+			alpha = 0.6
+		}
+		p := judge(t, menu(bg, c.change(combinedBars(alpha))), c.want)
+		if !strings.Contains(p, c.problem) {
+			t.Errorf("%s: problems %q, want %q", c.name, p, c.problem)
+		}
+	}
+}
+
+// Review B-I1: the problem line's colour follows the menu's measured
+// background, not what the extension decided: on a light menu #9a6700, on
+// a dark one #f5c211; a line drawn in the dark menu's colour on a light
+// menu has none of the colour wanted.
+func TestProblemColourFollowsTheBackground(t *testing.T) {
+	line := func(bg, ink color.NRGBA) string {
+		img := menu(bg, nil)
+		for y := 30; y < 34; y++ {
+			for x := 100; x < 160; x++ {
+				img.SetNRGBA(x, y, ink)
+			}
+		}
+		return pixcheck(t, "problem", "-menu", "0,0,420,40", "-rect", "90,28,80,8", writePNG(t, img))[0]
+	}
+	light, dark := color.NRGBA{250, 250, 250, 255}, color.NRGBA{48, 48, 48, 255}
+	for _, c := range []struct {
+		bg, ink color.NRGBA
+		want    string
+	}{
+		{light, problemOnLight, "bg=#fafafa light want=#9a6700 pixels=240"},
+		{light, problemOnDark, "bg=#fafafa light want=#9a6700 pixels=0"},
+		{dark, problemOnDark, "bg=#303030 dark want=#f5c211 pixels=240"},
+		{dark, problemOnLight, "bg=#303030 dark want=#f5c211 pixels=0"},
+	} {
+		if got := line(c.bg, c.ink); got != c.want {
+			t.Errorf("%q, want %q", got, c.want)
+		}
+	}
+	var out, errOut bytes.Buffer
+	if run([]string{"problem", "-rect", "0,0,1,1", writePNG(t, menu(light, nil))}, &out, &errOut) == 0 {
+		t.Fatal("problem without -menu succeeded")
+	}
+}
+
+// Review B-M1 (e): the critical percent text is counted in its own
+// rectangle (pixcheck colour -rect), not anywhere in the menu.
+func TestCriticalTextInItsRectangle(t *testing.T) {
+	p := writePNG(t, menu(color.NRGBA{250, 250, 250, 255}, nil))
+	if got := pixcheck(t, "colour", "-tol", "8", "-rect", "336,18,20,10", p, "#f66151"); got[0] != "36" {
+		t.Errorf("in the label: %q", got)
+	}
+	if got := pixcheck(t, "colour", "-tol", "8", "-rect", "300,18,20,10", p, "#f66151"); got[0] != "0" {
+		t.Errorf("beside it: %q", got)
 	}
 }

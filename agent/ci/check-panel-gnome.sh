@@ -13,7 +13,9 @@
 # What it changes on the runner, and undoes on exit: GNOME Shell creates
 # its screen lock only when a display manager answers on the system bus
 # (org.gnome.DisplayManager); when none does, fakegdm answers, allowed by
-# a policy file in /etc/dbus-1/system.d that is removed again.
+# a policy file in /etc/dbus-1/system.d that is removed again. Nothing it
+# started outlives it: the shells, the agent and its helpers, the buses
+# (also when it is interrupted: the exit trap; review B-M6).
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$here/lib.sh"
@@ -38,7 +40,13 @@ start_fakeserver || { fail fakeserver "did not start"; finish; exit 1; }
 # the display manager the shell's screen lock asks for
 policy=/etc/dbus-1/system.d/ai-usage-ci-fakegdm.conf
 gdm_pid=""
+bus_pid=""
 cleanup() {
+  [ -n "${phome:-}" ] && pkill -f "^$phome/.local/bin/ai-usage" 2>/dev/null
+  pkill -f "gnome-shell --headless" 2>/dev/null
+  pkill -f "^$CI_BIN/fakepanel " 2>/dev/null
+  [ -n "$bus_pid" ] && kill "$bus_pid" 2>/dev/null
+  [ -n "${work:-}" ] && pkill -f "dbus-daemon --session --nofork --address=unix:path=$work/run/bus" 2>/dev/null
   [ -n "$gdm_pid" ] && kill "$gdm_pid" 2>/dev/null
   if [ -e "$policy" ]; then
     sudo rm -f "$policy"
@@ -97,55 +105,77 @@ work=$(mktemp -d "$RUNNER_TEMP/gp.XXXXXX")
 phome="$work/h"
 mkdir -p "$phome" "$work/config" "$work/cache" "$work/data" "$work/run"
 chmod 700 "$work/run"
-# phase 1: one session; phase 2: the next one (same folders, a new bus).
-# Phase 1's bus is dbus-run-session's; phase 2's is at the runtime
-# folder's address ($XDG_RUNTIME_DIR/bus, where systemd puts the user's
-# bus), where the agent of phase 1, whose own address died with its bus,
-# finds it (sessionbus.Address), as at a next login on a real PC.
-bus2=""
-# the private session's environment (phase 2's bus is started in it too:
-# the services it starts on demand, such as dconf, see these folders)
+# phase 1: one session; phase 2: the next one (same folders, a new bus)
+# after the bus was away 35 s or more; phase 3: the one after that, whose
+# bus is up without a shell for 35 s first (review B-I3). Phase 1's bus is
+# dbus-run-session's; the later ones are at the runtime folder's address
+# ($XDG_RUNTIME_DIR/bus, where systemd puts the user's bus), where the
+# agent of phase 1, whose own address died with its bus, finds them
+# (sessionbus.Address), as at a next login on a real PC.
+bus_addr=""
+# the private session's environment (the later buses are started in it
+# too: the services they start on demand, such as dconf, see these folders)
 senv() {
   env -i HOME="$phome" USER="$(id -un)" LANG=C.UTF-8 PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin \
     XDG_CONFIG_HOME="$work/config" XDG_DATA_HOME="$work/data" XDG_RUNTIME_DIR="$work/run" XDG_CACHE_HOME="$work/cache" \
     XDG_DATA_DIRS=/usr/share/ubuntu:/usr/share/gnome:/usr/local/share:/usr/share \
     XDG_CURRENT_DESKTOP=ubuntu:GNOME XDG_SESSION_TYPE=wayland ${sid:+XDG_SESSION_ID="$sid"} \
-    ${bus2:+DBUS_SESSION_BUS_ADDRESS="$bus2"} \
+    ${bus_addr:+DBUS_SESSION_BUS_ADDRESS="$bus_addr"} \
     GITHUB_ACTIONS=true RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}" "$@"
 }
+# session N [VAR=VALUE...]: phase N in the private session
 session() {
-  local run=(dbus-run-session --)
-  [ -n "$bus2" ] && run=()
-  senv CI_DIST="$CI_DIST" CI_BIN="$CI_BIN" CI_SCRIPTS="$CI_SCRIPTS" PANEL_PRIVATE=1 PHASE="$1" FAKEGDM_PID="$gdm_pid" \
-    LABEL="$label" MAJOR="$major" FORM="$form" FLAGS="$flags" APPIND="$appind" SHELL_VERSION="$ver" \
-    timeout 1800 "${run[@]}" bash "$here/panel-session.sh" > "$out/session-$1.log" 2>&1
+  local n=$1 run=(dbus-run-session --)
+  shift
+  [ -n "$bus_addr" ] && run=()
+  senv CI_DIST="$CI_DIST" CI_BIN="$CI_BIN" CI_SCRIPTS="$CI_SCRIPTS" PANEL_PRIVATE=1 PHASE="$n" FAKEGDM_PID="$gdm_pid" \
+    LABEL="$label" MAJOR="$major" FORM="$form" FLAGS="$flags" APPIND="$appind" SHELL_VERSION="$ver" "$@" \
+    timeout 1800 "${run[@]}" bash "$here/panel-session.sh" > "$out/session-$n.log" 2>&1
 }
-session 1
-# phase 1 ends its bus itself (what the bridge sees of a session's end):
-# its verdicts are in phase1.status
-wait_for 30 test -e "$out/phase1.done"
-sleep 3
-rc1=$(cat "$out/phase1.status" 2>/dev/null || echo 1)
-grep -E '^::(error|notice)' "$out/session-1.log"
-rc2=1
-if [ -e "$out/phase1.done" ]; then
+# start_bus N: phase N's bus at the runtime folder's address (bus_addr,
+# bus_pid, bus_up: when it answered)
+start_bus() {
+  bus_addr=""
   rm -f "$work/run/bus"
-  senv dbus-daemon --session --nofork --address="unix:path=$work/run/bus" > "$out/bus-2.log" 2>&1 &
-  bus2_pid=$!
-  if wait_for 10 test -S "$work/run/bus"; then
-    bus2="unix:path=$work/run/bus"
-    session 2
-    rc2=$?
-    grep -E '^::(error|notice)' "$out/session-2.log"
-  else
-    echo "::error title=panel-gnome::phase 2's session bus did not start ($(head -c 300 "$out/bus-2.log"))"
+  senv dbus-daemon --session --nofork --address="unix:path=$work/run/bus" > "$out/bus-$1.log" 2>&1 &
+  bus_pid=$!
+  wait_for 10 test -S "$work/run/bus" || { echo "::error title=panel-gnome::phase $1's session bus did not start ($(head -c 300 "$out/bus-$1.log"))"; return 1; }
+  bus_up=$(date +%s.%N)
+  bus_addr="unix:path=$work/run/bus"
+}
+# phase_end N: phase N ended its bus itself (what the bridge sees of a
+# session's end); its verdicts are in phaseN.status
+phase_end() {
+  grep -E '^::(error|notice)' "$out/session-$1.log"
+  [ -n "$bus_pid" ] && kill "$bus_pid" 2>/dev/null
+  bus_pid=""
+  [ -e "$out/phase$1.done" ]
+}
+rc1=1 rc2=1 rc3=1
+session 1
+rc1=$(cat "$out/phase1.status" 2>/dev/null || echo 1)
+if phase_end 1; then
+  # the bus stays away 35 s or more: a bridge stopped by quick failures
+  # in that time (five exits with 75 in about 16 s) would show
+  gone=$(cat "$out/bus-1.gone")
+  sleep "$(python3 -c "import sys,time; print(max(0.0, 35.5 - (time.time() - float(sys.argv[1]))))" "$gone")"
+  if start_bus 2; then
+    away=$(python3 -c "import sys; print('%.1f' % (float(sys.argv[2]) - float(sys.argv[1])))" "$gone" "$bus_up")
+    session 2 BUS_AWAY="$away"
+    rc2=$(cat "$out/phase2.status" 2>/dev/null || echo 1)
+    if phase_end 2 && start_bus 3; then
+      session 3 BUS_UP="$bus_up"
+      rc3=$?
+      phase_end 3
+    fi
   fi
-  kill "$bus2_pid" 2>/dev/null
 fi
-# nothing of the sessions may outlive them: the agent, its helpers, the shell
+# nothing of the sessions may outlive them: the agent, its helpers, the
+# shell (the exit trap does it again)
 pkill -f "^$phome/.local/bin/ai-usage" 2>/dev/null
 pkill -f "gnome-shell --headless" 2>/dev/null
 rc=0
 [ "$rc1" = 0 ] || { echo "::error title=panel-gnome::phase 1 failed (out/session-1.log)"; rc=1; }
 [ "$rc2" = 0 ] || { echo "::error title=panel-gnome::phase 2 failed (out/session-2.log)"; rc=1; }
+[ "$rc3" = 0 ] || { echo "::error title=panel-gnome::phase 3 failed (out/session-3.log)"; rc=1; }
 exit "$rc"

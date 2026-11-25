@@ -8,17 +8,24 @@
 #                          no JS error or warning of it, attached
 #   panel.proxy_flags      its proxy has the no-auto-start flag (review m4)
 #   panel.picture_combined fakepanel's combined fixture, the menu opened:
-#                          five bars 42/13/7/100/8 % (pixcheck, ±2 px), the
-#                          colours #d97757 ×4 and #f66151
+#                          five bars 42/13/7/100/8 % (pixcheck judge: ±2 px
+#                          of one common length, the colours #d97757 ×4 and
+#                          #f66151, the track rgba(128,128,128,0.32) over
+#                          the background, 8 px high, round ends), the
+#                          critical row's percent text in #f66151
 #   panel.header_colour    a header's name in a row label's colour (review I1)
-#   panel.open_redraw      a new view while the menu is open: the same,
-#                          still open and hovered items; a click goes out (m5)
+#   panel.open_redraw      a view with the same items and another percent
+#                          while the menu is open: GetView again, the same
+#                          item still open and hovered shows the new text;
+#                          a click goes out (m5, review B-I2)
 #   panel.click_pending    a view with other items while the menu is open:
 #                          kept for the close, and a click made meanwhile
 #                          still reaches the agent
 #   panel.hides_without_agent, panel.returns
-#   panel.picture_states   the stale Claude group at 0.6, the problem line
-#                          in the colour PR-16 picked for the menu
+#   panel.picture_states   the stale Claude group's bars in their colour at
+#                          0.6 (their track too), the problem line in the
+#                          colour for the menu's measured background
+#                          (#9a6700 light, #f5c211 dark: review B-I1)
 #   panel.extension_failure badjson, extrafields, missing, hang, vanish
 #                          (stage 0 Z4): the shell lives, judged by state
 #                          and the button, not by logged, caught failures
@@ -29,8 +36,9 @@
 #                          AppIndicator extension
 #   panel.end_to_end       next login: turned on once, attached, no icon
 #                          helper, a click reaches the agent; turned off by
-#                          the user: an icon within 10 s + 5 s; next login:
-#                          stays off; turned on again: attached again
+#                          the user: an icon within 20 s (measured: the 10 s
+#                          grace and a helper's start); next login: stays
+#                          off; turned on again: attached again
 #   panel.attach_accepted  the shell's Attach is taken by the bridge (it
 #                          comes from the owner of org.gnome.Shell)
 #   panel.lock             a lock longer than 100 s and the unlock: no icon
@@ -46,15 +54,26 @@
 #                          came back
 #   panel.session_end      what the bridge sees when the session ends: the
 #                          shell ended (SIGTERM) and 5 s later the bus
-# PHASE 2 (the next session, same folders):
-#   panel.relogin_same_agent the agent of the last session, its bus gone:
-#                          its bridge finds the new bus and the panel
-#                          attaches within 15 s of the shell (lost-bus
-#                          ruling, 4b fix round 2)
+# PHASE 2 (the next session, same folders, after its bus was away 35 s or
+# more: an agent stopped by repeated failures in that time would show):
+#   panel.relogin_same_agent the agent of the last session: its bridge
+#                          finds the new bus and the panel attaches within
+#                          15 s of the shell answering (lost-bus ruling, 4b
+#                          fix round 2; review B-I3); then the session ends
+# PHASE 3 (the session after that: its bus is up without a shell for 35 s
+# first, as when a user manager outlived the logout):
+#   panel.relogin_shell_late the same agent's bridge said "no shell" and
+#                          waited on: the panel attaches within 15 s of the
+#                          shell answering, the icons go (review A-M1, B-I3)
 #   panel.relogin          a new agent logs in again (autostart): no icon
-#                          helper before the panel attaches
-#   panel.remove           uninstall: the shell turns it off, the folder
-#                          goes, nothing of the agent is left
+#                          helper before the panel attaches; the new agent
+#                          is the one left (review B-M2)
+#   panel.privacy          no request to a vendor, no fake token in the
+#                          agent's files, the fake server's requests or this
+#                          job's output (as check-linux.sh; review B-M10)
+#   panel.remove           uninstall: the shell turns it off and out of its
+#                          enabled list, the folder goes, nothing of the
+#                          agent is left
 # Each verdict is a line of out/panel-results.txt (the workflow's
 # notices); failures are also errors at once (lib.sh).
 set -u
@@ -89,16 +108,18 @@ verdict() {
 fact() { res "$1 fact ($LABEL): $2"; }
 now() { date +%s.%N; }
 since() { python3 -c "import sys; print('%.1f' % (float(sys.argv[2]) - float(sys.argv[1])))" "$1" "$(now)"; }
-# wait_ms SECONDS COMMAND...: like wait_for, polling every 0.25 s
-wait_ms() {
-  local end
-  end=$(python3 -c "import time,sys; print(time.time() + float(sys.argv[1]))" "$1"); shift
+# wait_every STEP SECONDS COMMAND...: like wait_for, polling every STEP s
+wait_every() {
+  local step=$1 end
+  end=$(python3 -c "import time,sys; print(time.time() + float(sys.argv[1]))" "$2"); shift 2
   while :; do
     "$@" && return 0
     python3 -c "import time,sys; sys.exit(0 if time.time() < float(sys.argv[1]) else 1)" "$end" || return 1
-    sleep 0.25
+    sleep "$step"
   done
 }
+# wait_ms SECONDS COMMAND...: polling every 0.25 s
+wait_ms() { wait_every 0.25 "$@"; }
 
 # ------------------------------------------------------------ the shell
 shell_eval() {
@@ -124,6 +145,7 @@ JS='const find = (a, cls) => { const out = []; const walk = x => { if (x.has_sty
 n=0
 shell_pid=""
 slog=""
+shell_t="" # when the shell started last answered on the bus
 start_shell() {
   n=$((n + 1))
   slog="$out/shell-$LABEL-$phase-$n.log"
@@ -131,7 +153,7 @@ start_shell() {
   gnome-shell --headless --virtual-monitor 1920x1080 $FLAGS > "$slog" 2>&1 &
   shell_pid=$!
   for _ in $(seq 120); do
-    [ "$(ev 1)" = 1 ] && { sleep 2; shell_eval 'Main.overview.hide()' > /dev/null; sleep 1; return 0; }
+    [ "$(ev 1)" = 1 ] && { shell_t=$(now); sleep 2; shell_eval 'Main.overview.hide()' > /dev/null; sleep 1; return 0; }
     kill -0 "$shell_pid" 2>/dev/null || return 1
     sleep 0.5
   done
@@ -147,9 +169,12 @@ stop_shell() {
   sleep 1
 }
 state() { ev "(() => { const e = $X; return e ? e.state + '|' + (e.error || '') : 'none'; })()"; }
+# visible: true, false, absent (no button), or ERR:… (the shell did not
+# answer: neither shown nor hidden; review B-M3)
 visible() { ev "(() => { const b = $B; return b ? String(b.visible && (!b.container || b.container.visible)) : 'absent'; })()"; }
+hidden_v() { [ "$1" = false ] || [ "$1" = absent ]; }
 is_visible() { [ "$(visible)" = true ]; }
-is_hidden() { [ "$(visible)" != true ]; }
+is_hidden() { hidden_v "$(visible)"; }
 open_menu() { ev "(() => { $B.menu.open(); return 'open'; })()" > /dev/null; sleep 1.5; }
 close_menu() { ev "(() => { const b = $B; if (b) b.menu.close(); return 1; })()" > /dev/null; sleep 0.5; }
 shot() { # NAME: a screenshot in out/NAME.png
@@ -293,7 +318,7 @@ fake_owns() { grep -c '^owns local.AIUsage.Panel$' "$fakelog" 2>/dev/null || tru
 start_fake() { # VIEW MODE
   local o
   o=$(fake_owns)
-  "$CI_BIN/fakepanel" -view "$1" -mode "$2" -next "$out/next.json" -log "$fakelog" &
+  "$CI_BIN/fakepanel" -view "$1" -mode "$2" -next "$out/next.json" -redraw "$out/redraw.json" -log "$fakelog" &
   fake_pid=$!
   more() { [ "$(fake_owns)" -gt "$o" ]; }
   wait_ms 10 more
@@ -304,42 +329,68 @@ cleanup() { unmonitor; stop_fake; stop_shell; }
 trap cleanup EXIT
 
 # judge_bars FILE combined|states: problems with the bars pixcheck finds
-# in the menu (empty: as they should be), and what was found
+# in the menu (empty: as they should be: pixcheck judge, review B-M1), and
+# what was found. The fixture's bars: Claude 42/13/7 % (stale in the
+# states fixture: opacity 0.6), Codex 100 % critical and 8 %.
 judge_bars() {
-  "$CI_BIN/pixcheck" bars "$1" > "$1.bars" 2>&1
-  python3 - "$1.bars" "$2" <<'PY'
+  local want="42:normal,13:normal,7:normal,100:critical,8:normal"
+  [ "$2" = states ] && want="42:normal:0.6,13:normal:0.6,7:normal:0.6,100:critical,8:normal"
+  "$CI_BIN/pixcheck" judge -want "$want" "$1" > "$1.bars" 2>&1
+  python3 - "$1.bars" <<'PY'
 import re, sys
-bars = []
+bars, probs = [], "no problems line"
 for l in open(sys.argv[1]):
-    m = re.match(r"bar y=(\d+) x=(\d+) fill=(\d+) track=(\d+) colour=(#\w+) alpha=([0-9.]+) bg=(#\w+)", l)
+    m = re.match(r"bar y=\d+ x=\d+ fill=(\d+) track=(\d+) colour=(#\w+) alpha=([0-9.]+) bg=(#\w+) base=(#\w+) trackcolour=(\S+) height=(\d+) ends=(\w+)", l)
     if m:
-        bars.append((int(m[1]), int(m[2]), int(m[3]), int(m[4]), m[5], float(m[6]), m[7]))
-want = [0.42, 0.13, 0.07, 1.00, 0.08]
-colours = ["#d97757", "#d97757", "#d97757", "#f66151", "#d97757"]
-probs = []
-if len(bars) != 5:
-    probs.append("%d bars" % len(bars))
-for i, (y, x, fill, track, c, a, bg) in enumerate(bars[:5]):
-    total = fill + track
-    if abs(fill - want[i] * total) > 2:
-        probs.append("bar %d fill %d of %d (want %.2f)" % (i, fill, total, want[i]))
-    if sys.argv[2] == "states" and i < 3:
-        if c == colours[i] or abs(a - 0.6) > 0.08:
-            probs.append("bar %d not dimmed: %s alpha %.2f" % (i, c, a))
-    elif c != colours[i] or a != 1.0:
-        probs.append("bar %d colour %s alpha %.2f (want %s)" % (i, c, a, colours[i]))
-print(" ".join(probs) + "|" + " ".join("%d/%d:%s@%.2f" % (b[2], b[2] + b[3], b[4], b[5]) for b in bars))
+        bars.append("%s/%d:%s@%s(%s) track %s on %s h%s %s" % (m[1], int(m[1]) + int(m[2]), m[3], m[4], m[6], m[7], m[5], m[8], m[9]))
+    elif l.startswith("problems: "):
+        probs = l[len("problems: "):].strip()
+print(("" if probs == "none" else probs) + "|" + "; ".join(bars))
 PY
+}
+
+# end_session: the session ends as GNOME ends it (measured in phase 1):
+# the shell is sent SIGTERM, its bus goes 5 s later; phase 1 publishes
+# what the bus saw. Its verdicts are in phaseN.status (the bus ending ends
+# dbus-run-session, phase 1's parent, too).
+end_session() {
+  monitor "$out/monitor-end-$LABEL-$phase.txt" "type='method_call',interface='local.AIUsage.Panel1'" "type='signal',sender='org.freedesktop.DBus',member='NameOwnerChanged'"
+  local t0 tshell order dpid tbus
+  t0=$(now)
+  date '+%Y-%m-%d %H:%M:%S' > "$out/end-$LABEL-$phase.t0"
+  kill -TERM "$shell_pid"
+  for _ in $(seq 40); do kill -0 "$shell_pid" 2>/dev/null || break; sleep 0.25; done
+  tshell=$(since "$t0")
+  kill -9 "$shell_pid" 2>/dev/null; wait "$shell_pid" 2>/dev/null; shell_pid=""
+  sleep 5
+  order=$(monparse "$out/monitor-end-$LABEL-$phase.txt" "$t0" | grep -E 'Detach|Ping|NameOwnerChanged string (org.gnome.Shell|local.AIUsage.Panel|org.gnome.ScreenSaver) ' | head -n 8 | tr '\n' ';')
+  dpid=$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+    --method org.freedesktop.DBus.GetConnectionUnixProcessID org.freedesktop.DBus 2>/dev/null | grep -o '[0-9]\+' | tail -n 1)
+  tbus=$(since "$t0")
+  [ "$phase" = 1 ] && res "panel.session_end fact ($LABEL): shell sent SIGTERM at 0 s, ended after ${tshell}s; seen on the bus (s): $order the bus ended by the script at ${tbus}s (pid ${dpid:-?})"
+  echo 1 > "$out/phase$phase.done"
+  finish > "$out/phase$phase.summary"; echo $? > "$out/phase$phase.status"
+  cat "$out/phase$phase.summary"
+  unmonitor
+  # last: the bus goes; when, for check-panel-gnome.sh's next bus; the
+  # bridge's view of it is read from agent.log in the next phase
+  now > "$out/bus-$phase.gone"
+  [ -n "$dpid" ] && kill "$dpid"
+  exit 0
 }
 
 # ======================================================================
 if [ "$phase" = 1 ]; then
 # ------------------------------------------------------------ fake agent
-python3 - "$GITHUB_WORKSPACE/agent/internal/tray/testdata/panel-combined.json" "$out/next.json" <<'PY'
+python3 - "$GITHUB_WORKSPACE/agent/internal/tray/testdata/panel-combined.json" "$out/next.json" "$out/redraw.json" <<'PY'
 import json, sys
 v = json.load(open(sys.argv[1]))
 v["sections"][1]["rows"] = v["sections"][1]["rows"][:1]  # r.codex.1 gone: other items
 json.dump(v, open(sys.argv[2], "w"))
+v = json.load(open(sys.argv[1]))
+r = v["sections"][0]["rows"][0]  # r.claude.0: the same items, another percent
+r["percent"], r["percent_text"] = 57, "57%"
+json.dump(v, open(sys.argv[3], "w"))
 PY
 cp -r "$forms" "$exts/"
 # shellcheck disable=SC2046
@@ -385,7 +436,16 @@ mr=$(ev "(() => { $JS return rect($B.menu.box); })()")
 jb=$(judge_bars "$out/panel-combined-$LABEL.png" combined)
 e=$(grep -c "$uuid: menu" "$slog" || true)
 p="${jb%%|*}"; [ "$e" -eq 0 ] || p="$p menu_errors=$e"
-verdict panel.picture_combined "${p:+ $p}" "bars ${jb#*|}; menu $mr; the problem colour picked for a dark menu: $dark; picture panel-combined-$LABEL.png"
+# the critical row's percent text in #f66151, a normal row's not (B-M1);
+# the labels are found by the fixture's texts (Codex 100 %, Claude 42 %),
+# not by the extension's own style classes
+pt=$(ev "(() => { $JS const box = $B.menu.box; const pc = find(box, 'ai-usage-percent'); const c = pc.filter(x => x.text === '100%')[0]; const n = pc.filter(x => x.text === '42%')[0]; return [c ? rect(c) : 'none', n ? rect(n) : 'none', c ? c.text : '-'].join(' '); })()")
+read -r crect nrect ctext <<< "$pt"
+cpx=$("$CI_BIN/pixcheck" colour -tol 8 -rect "$crect" "$out/panel-combined-$LABEL.png" '#f66151' 2>&1)
+npx=$("$CI_BIN/pixcheck" colour -tol 8 -rect "$nrect" "$out/panel-combined-$LABEL.png" '#f66151' 2>&1)
+case "$cpx" in ''|*[!0-9]*) p="$p critical_text=[$pt $cpx]" ;; *) [ "$cpx" -ge 10 ] || p="$p critical_text_pixels=$cpx" ;; esac
+case "$npx" in ''|*[!0-9]*) p="$p normal_text=[$npx]" ;; *) [ "$npx" -eq 0 ] || p="$p normal_text_red=$npx" ;; esac
+verdict panel.picture_combined "${p:+ $p}" "bars ${jb#*|}; critical percent [$ctext] $cpx px of #f66151, a normal percent $npx; menu $mr; the extension's dark flag: $dark; picture panel-combined-$LABEL.png"
 
 # review I1: the header's name has a row label's colour (no :insensitive)
 hc=$(ev "(() => { $JS const b = $B; const n = find(b.menu.box, 'ai-usage-name')[0]; const l = find(b.menu.box, 'ai-usage-label')[0]; const fg = a => { const c = a.get_theme_node().get_foreground_color(); return [c.red, c.green, c.blue, c.alpha].join('/'); }; let it = n; while (it && !(it.has_style_class_name && it.has_style_class_name('popup-menu-item'))) it = it.get_parent(); return [rect(n), rect(l), fg(n), fg(l), n.opacity, l.opacity, it ? (it.get_style_pseudo_class() || '-') : 'none'].join(' '); })()")
@@ -409,20 +469,24 @@ PY
 case "$pseudo" in *insensitive*) p="$p pseudo=$pseudo" ;; esac
 verdict panel.header_colour "$p" "name ink [$ni] label ink [$li]; theme colour $nfg vs $lfg; opacity $nop vs $lop; header pseudo-class [$pseudo]"
 
-# review m5: a new view with the same items while the menu is open
-ev "(() => { $JS const r = rows($B); global._aiuCi = r[0]; r[0].active = true; return String(r.length); })()" > /dev/null
+# review m5, B-I2: a view with the same items and another percent while
+# the menu is open (fakepanel -redraw: r.claude.0 42 % -> 57 %)
+t1=$(ev "(() => { $JS const r = rows($B); global._aiuCi = r[0]; r[0].active = true; return find(r[0], 'ai-usage-percent')[0].text; })()")
 g0=$(calls GetView); kill -USR1 "$fake_pid"
 more_gv() { [ "$(calls GetView)" -gt "$g0" ]; }
 wait_ms 10 more_gv; sleep 1
-kept=$(ev "(() => { $JS const b = $B; const r = rows(b); return [b.menu.isOpen, r[0] === global._aiuCi, r[0].active].join(' '); })()")
+g1=$(calls GetView)
+kept=$(ev "(() => { $JS const b = $B; const r = rows(b); const pc = find(r[0], 'ai-usage-percent')[0]; return [b.menu.isOpen, r[0] === global._aiuCi, r[0].active, pc.text, pc.is_mapped() && pc.opacity > 0].join(' '); })()")
 c0=$(calls 'Click r.claude.0$')
 ev "(() => { global._aiuCi.activate(null); return 'clicked'; })()" > /dev/null
 more_click() { [ "$(calls 'Click r.claude.0$')" -gt "$c0" ]; }
 wait_ms 5 more_click; clicked=$(calls 'Click r.claude.0$')
 p=""
-[ "$kept" = "true true true" ] || p="$p open,same,hovered=[$kept]"
+[ "$g1" -gt "$g0" ] || p="$p no_GetView_after_ViewChanged"
+[ "$t1" = "42%" ] || p="$p text_before=[$t1]"
+[ "$kept" = "true true true 57% true" ] || p="$p open,same,hovered,text,shown=[$kept]"
 [ "$clicked" -gt "$c0" ] || p="$p no_click"
-verdict panel.open_redraw "$p" "after ViewChanged with the menu open: open,same item,hovered = $kept; a row click then: Click r.claude.0 ×$((clicked - c0))"
+verdict panel.open_redraw "$p" "ViewChanged with the menu open: GetView ×$((g1 - g0)); the first row's percent $t1 before; after: open,same item,hovered,percent,shown = $kept; a row click then: Click r.claude.0 ×$((clicked - c0))"
 verdict panel.click "$( [ "$clicked" -gt "$c0" ] || echo ' no_click')" "activate on the first row: $(grep -m1 '^Click' "$fakelog")"
 close_menu
 
@@ -447,7 +511,7 @@ verdict panel.click_pending "$p" "items $i0; other items while open: open,pendin
 # the agent goes and comes back
 t0=$(now); stop_fake
 wait_ms 5 is_hidden; hid=$(visible); th=$(since "$t0")
-verdict panel.hides_without_agent "$( [ "$hid" != true ] || echo ' still_visible')" "visible=$hid ${th}s after fakepanel ended"
+verdict panel.hides_without_agent "$(hidden_v "$hid" || echo " not_hidden=[$hid]")" "visible=$hid ${th}s after fakepanel ended"
 a0=$(calls Attach)
 start_fake fixture:states ok
 wait_ms 10 is_visible
@@ -461,15 +525,18 @@ shot "panel-states-$LABEL"
 dark=$(ev "String($B._aiuDark)")
 mr=$(ev "(() => { $JS return rect($B.menu.box); })()")
 probs=$(ev "(() => { $JS return String(find($B.menu.box, 'ai-usage-problem').filter(p => p.text !== '').length); })()")
-if [ "$dark" = true ]; then pc='#f5c211'; else pc='#9a6700'; fi
-np=$("$CI_BIN/pixcheck" colour -tol 8 -rect "$mr" "$out/panel-states-$LABEL.png" "$pc" 2>&1)
+prect=$(ev "(() => { $JS const l = find($B.menu.box, 'ai-usage-problem').filter(p => p.text !== '')[0]; return l ? rect(l) : 'none'; })()")
+# light or dark from the menu's background pixel, not the extension's own
+# flag (review B-I1): #9a6700 on light, #f5c211 on dark
+pr=$("$CI_BIN/pixcheck" problem -menu "$mr" -rect "$prect" "$out/panel-states-$LABEL.png" 2>&1)
+np=$(printf '%s' "$pr" | sed -nE 's/.* pixels=([0-9]+)$/\1/p')
 jb=$(judge_bars "$out/panel-states-$LABEL.png" states)
 e=$(grep -c "$uuid: menu" "$slog" || true)
 p="${jb%%|*}"
-case "$np" in ''|*[!0-9]*) p="$p pixels=[$np]" ;; *) [ "$np" -gt 10 ] || p="$p problem_pixels=$np" ;; esac
+case "$np" in ''|*[!0-9]*) p="$p problem=[$pr]" ;; *) [ "$np" -gt 10 ] || p="$p problem_pixels=$np" ;; esac
 [ "${probs:-0}" -ge 1 ] 2>/dev/null || p="$p problem_lines=[$probs]"
 [ "$e" -eq 0 ] || p="$p menu_errors=$e"
-verdict panel.picture_states "${p:+ $p}" "bars ${jb#*|}; problem lines $probs, $np pixels of $pc (menu dark: $dark); picture panel-states-$LABEL.png"
+verdict panel.picture_states "${p:+ $p}" "bars ${jb#*|}; problem lines $probs, the menu: $pr in the line $prect (the extension's dark flag: $dark); picture panel-states-$LABEL.png"
 close_menu
 
 # ------------------------------------------------------------ failures (Z4)
@@ -482,7 +549,7 @@ for mode in badjson extrafields missing hang vanish; do
     badjson)
       sleep 10; v=$(visible)
       [ "$(calls Detach)" -gt "$d0" ] || p="$p badjson:no_detach"
-      [ "$v" != true ] || p="$p badjson:visible" ;;
+      hidden_v "$v" || p="$p badjson:not_hidden=[$v]" ;;
     extrafields|missing)
       sleep 10; v=$(visible)
       [ "$v" = true ] || p="$p $mode:hidden"
@@ -490,12 +557,12 @@ for mode in badjson extrafields missing hang vanish; do
       [ "$(calls Attach)" -gt "$a0" ] || p="$p $mode:no_attach" ;;
     hang)
       sleep 10; v=$(visible)
-      [ "$v" != true ] || p="$p hang:visible"
+      hidden_v "$v" || p="$p hang:not_hidden=[$v]"
       sleep 25; alive || p="$p hang:shell_dead_after_the_timeout"
       v="$v,$(visible)" ;;
     vanish)
       wait_ms 20 more_attach; sleep 8; v1=$(visible); sleep 12; v="$v1,$(visible)"
-      [ "$v1" != true ] || p="$p vanish:visible_while_away"
+      hidden_v "$v1" || p="$p vanish:not_hidden_while_away=[$v1]"
       [ "$(visible)" = true ] || p="$p vanish:not_back"
       [ "$(calls Attach)" -ge $((a0 + 2)) ] || p="$p vanish:no_reattach" ;;
   esac
@@ -632,12 +699,12 @@ unmonitor
 curl -fsS --max-time 10 -X POST "$BASE/weekly?percent=42" > /dev/null 2>&1
 p=""
 [ "$fl" = failed ] || p="$p eval=[$fl]"
-[ "$hid" != true ] || p="$p still_visible"
+hidden_v "$hid" || p="$p not_hidden=[$hid]"
 alive || p="$p shell_dead"
 [ "$got_icons" = yes ] || p="$p no_icons"
 [ "$nv" -ge 1 ] || p="$p no_new_view_seen"
 [ "$ext_calls" -eq 0 ] || p="$p extension_called_$ext_calls"
-[ "$still" != true ] || p="$p shown_again"
+hidden_v "$still" || p="$p shown_again=[$still]"
 [ "$ba" -eq "$a0" ] || p="$p attached_again_before_the_name_went"
 reattached || p="$p not_back_after_the_name_came_back"
 verdict panel.failure "$p" "hidden ($hid), shell alive, an icon helper after ${ti}s; $nv ViewChanged and $ext_calls Attach/GetView calls of the extension since; the bridge ended (pid ${bp:-none}): back and attached after ${tr2}s"
@@ -646,9 +713,12 @@ verdict panel.failure "$p" "hidden ($hid), shell alive, an icon helper after ${t
 t0=$(now)
 dis=$(ext_call DisableExtension)
 offline() { some_icons && [ ! -e "$data/gnome-panel-attached" ]; }
-wait_for 25 offline; toff=$(since "$t0")
+# polled every 0.5 s; the limit (not a design value: the 10 s grace, the
+# bridge's 2 s lock settle and an icon helper's start) is 20 s, the time
+# measured is published (review B-M4)
+wait_every 0.5 30 offline; toff=$(since "$t0")
 offline || e2e="$e2e off:icons=$(icons),marker=$([ -e "$data/gnome-panel-attached" ] && echo kept || echo gone)"
-python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) <= 15 else 1)" "$toff" || e2e="$e2e off:after_${toff}s"
+python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) <= 20 else 1)" "$toff" || e2e="$e2e off:after_${toff}s"
 # next login: it stays off
 turned_on() { grep -c 'turned the panel extension on' "$alog" 2>/dev/null || true; }
 on0=$(turned_on)
@@ -666,50 +736,63 @@ en=$(ext_call EnableExtension)
 wait_for 40 attached || e2e="$e2e on_again:not_attached"
 verdict panel.end_to_end "$e2e" "$e2e_detail; off: $dis -> icon after ${toff}s, gnome-panel-attached gone; next login: state ${st%%|*}, lists $l, icons $(icons); on again: $en, attached $(attached && echo yes || echo no)"
 
-# ------------------------------------------------------------ the session ends
-monitor "$out/monitor-end-$LABEL.txt" "type='method_call',interface='local.AIUsage.Panel1'" "type='signal',sender='org.freedesktop.DBus',member='NameOwnerChanged'"
-t0=$(now)
-date '+%Y-%m-%d %H:%M:%S' > "$out/end-$LABEL.t0"
-kill -TERM "$shell_pid"
-for _ in $(seq 40); do kill -0 "$shell_pid" 2>/dev/null || break; sleep 0.25; done
-tshell=$(since "$t0")
-kill -9 "$shell_pid" 2>/dev/null; wait "$shell_pid" 2>/dev/null; shell_pid=""
-sleep 5
-order=$(monparse "$out/monitor-end-$LABEL.txt" "$t0" | grep -E 'Detach|Ping|NameOwnerChanged string (org.gnome.Shell|local.AIUsage.Panel|org.gnome.ScreenSaver) ' | head -n 8 | tr '\n' ';')
-dpid=$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
-  --method org.freedesktop.DBus.GetConnectionUnixProcessID org.freedesktop.DBus 2>/dev/null | grep -o '[0-9]\+' | tail -n 1)
-tbus=$(since "$t0")
-res "panel.session_end fact ($LABEL): shell sent SIGTERM at 0 s, ended after ${tshell}s; seen on the bus (s): $order the bus ended by the script at ${tbus}s (pid ${dpid:-?})"
-echo 1 > "$out/phase1.done"
-finish > "$out/phase1.summary"; echo $? > "$out/phase1.status"
-cat "$out/phase1.summary"
-unmonitor
-# last: the bus goes (dbus-run-session ends with it); the bridge's view of
-# it is read from agent.log in phase 2
-[ -n "$dpid" ] && kill "$dpid"
-exit 0
+end_session
 fi
 
 # ====================================================================== phase 2
-# the next session: the same folders, a new bus; the agent of the last
-# session is still running (its bus is gone), autostart starts another
-end=$(cat "$out/end-$LABEL.t0" 2>/dev/null)
+# the next session: the same folders, a new bus after the last one was away
+# BUS_AWAY seconds (check-panel-gnome.sh keeps it away 35 s or more); the
+# agent of the last session is still running, its bridge waiting for its
+# bus (it dials again every 2 s)
+if [ "$phase" = 2 ]; then
+end=$(cat "$out/end-$LABEL-1.t0" 2>/dev/null)
 res "panel.session_end fact ($LABEL): the bridge in agent.log since: $(awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\]|usage panel' | head -n 8 | cut -c12- | tr '\n' ';' | cut -c1-700)"
 a0=$(attaches)
-start_shell || { verdict panel.relogin " shell_did_not_start" ""; finish; exit 1; }
-# the agent of the last session: its bridge has waited for a bus since its
-# own went (it dials again every 2 s); this session's bus is at the runtime
-# folder's address, where it looks
-t0=$(now)
+start_shell || { verdict panel.relogin_same_agent " shell_did_not_start" ""; finish; exit 1; }
+# this session's bus is at the runtime folder's address, where the bridge
+# looks; the clock starts when the shell answers (review B-I3)
 same=$(pgrep -f "^$exe run" | tr '\n' ' ')
 again() { [ "$(attaches)" -gt "$a0" ] && [ "$(state)" = "1|" ] && is_visible; }
 wait_ms 30 again
-ts=$(since "$t0")
+ts=$(since "$shell_t")
 p=""
 [ -n "$same" ] || p=" no_agent_of_the_last_session"
 again || p="$p not_attached"
 python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) <= 15 else 1)" "$ts" || p="$p after_${ts}s"
-verdict panel.relogin_same_agent "$p" "the agent of the last session (pid $(echo $same)) attached ${ts}s after the shell answered; its bridge: $(awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\] (.*waiting for the session bus|the session bus is there|GNOME Shell [0-9]|the panel extension attached)' | head -n 4 | cut -c12- | tr '\n' ';' | cut -c1-500)"
+python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) >= 35 else 1)" "${BUS_AWAY:-0}" || p="$p bus_away_only_${BUS_AWAY:-?}s"
+verdict panel.relogin_same_agent "$p" "the bus away ${BUS_AWAY:-?}s; the agent of the last session (pid $(echo $same)) attached ${ts}s after the shell answered; its bridge: $(awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\] (.*waiting for the session bus|the session bus is there|GNOME Shell [0-9]|the panel extension attached)' | head -n 4 | cut -c12- | tr '\n' ';' | cut -c1-500)"
+end_session
+fi
+
+# ====================================================================== phase 3
+# the session after that: its bus is up without a shell for 35 s first (a
+# user manager that outlived the logout keeps the bus; the shell comes with
+# the next login), then the shell; the same agent serves it
+end=$(cat "$out/end-$LABEL-2.t0" 2>/dev/null)
+a0=$(attaches)
+up=${BUS_UP:-$(now)}
+# the bridge reaches this bus and, 30 s later, says "no shell"; the shell
+# comes when the bus has been up 35 s and the bridge has said it
+said() { awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\] no usage panel on this desktop.*\(no shell\)' | head -n 1 | cut -c12-; }
+has_said() { [ -n "$(said)" ]; }
+wait_for 70 has_said
+rest=$(python3 -c "import sys,time; print(max(0.0, 35 - (time.time() - float(sys.argv[1]))))" "$up")
+sleep "$rest"
+before=$(said)
+noshell=$(since "$up")
+start_shell || { verdict panel.relogin_shell_late " shell_did_not_start" ""; finish; exit 1; }
+again() { [ "$(attaches)" -gt "$a0" ] && [ "$(state)" = "1|" ] && is_visible; }
+wait_ms 30 again
+ts=$(since "$shell_t")
+wait_ms 15 no_icons
+p=""
+[ -n "$before" ] || p=" no_shell_not_seen_by_the_bridge"
+python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) >= 35 else 1)" "$noshell" || p="$p no_shell_only_${noshell}s"
+again || p="$p not_attached"
+python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) <= 15 else 1)" "$ts" || p="$p after_${ts}s"
+no_icons || p="$p icon_helpers=$(icons)"
+verdict panel.relogin_shell_late "$p" "${noshell}s on the bus without a shell: the bridge said [$before]; attached ${ts}s after the shell answered, icon helpers $(icons); its bridge: $(awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\] (the session bus is there|no usage panel|GNOME Shell [0-9]|the panel extension attached)' | head -n 5 | cut -c12- | tr '\n' ';' | cut -c1-500)"
+
 : > "$out/relogin-icons-$LABEL.txt"
 old=" $(pgrep -f "^$exe run" | tr '\n' ' ') "
 t0=$(now)
@@ -718,22 +801,37 @@ newpid=""
 new_agent() { local p; for p in $(pgrep -f "^$exe run"); do case "$old" in *" $p "*) ;; *) newpid=$p; return 0 ;; esac; done; return 1; }
 wait_ms 5 new_agent
 m=$(sample_children 30 "$out/relogin-icons-$LABEL.txt" "${newpid:-0}")
+left=$(pgrep -f "^$exe run" | tr '\n' ' ' | sed 's/ $//')
 p=""
 [ "$m" -eq 0 ] || p=" icon_helper=$m"
 [ "$(state)" = "1|" ] && is_visible || p="$p not_attached=[$(state) $(visible)]"
 [ "$(agent_count)" -eq 1 ] || p="$p agents=$(agent_count)"
 [ -n "$newpid" ] || p="$p no_new_agent"
-verdict panel.relogin "$p" "the agent of the last session: $(echo $old); the marker gnome-panel-attached $([ -e "$data/gnome-panel-attached" ] && echo there || echo gone) at login; icon helpers at most $m in 30 s; panel $(visible); agents $(agent_count)"
+[ -n "$newpid" ] && [ "$left" = "$newpid" ] || p="$p survivor=[$left](new_${newpid:-none})"
+verdict panel.relogin "$p" "the agent of the last session: $(echo $old); the new one ${newpid:-none}, left running: [$left]; the marker gnome-panel-attached $([ -e "$data/gnome-panel-attached" ] && echo there || echo gone) at login; icon helpers at most $m in 30 s; panel $(visible); agents $(agent_count)"
+
+# no request to Anthropic or OpenAI, no fake token anywhere (the checks of
+# check-linux.sh: run.vendors_off, fakeserver.token_leaks, files.token_leaks;
+# also this job's output, which is kept as an artefact)
+p=""
+vendors_off "$data" || p="$p no_vendors_off_line"
+lk=$(stats | jget - token_leaks)
+[ "$lk" = 0 ] || p="$p token_leaks=[$lk]"
+h=$(no_fake_tokens "$data") || p="$p token_in_files=[$h]"
+ho=$(no_fake_tokens "$out") || p="$p token_in_output=[$ho]"
+verdict panel.privacy "$p" "agent.log: $(grep -m1 -o 'CI build: no request to Anthropic or OpenAI' "$alog"); the fake server's token leaks: $lk; no fake token in $(ls "$data" | wc -l) files of the agent nor in $(find "$out" -type f | wc -l) files of out/"
 
 "$exe" uninstall > "$out/uninstall-panel-$LABEL.log" 2>&1
 rc=$?
 sleep 3
 st=$(state); b=$(ev "String(!!$B)")
+en=$(gsettings get org.gnome.shell enabled-extensions)
 p=""
 [ "$rc" -eq 0 ] || p="$p rc=$rc"
 [ ! -e "$exts/$uuid" ] || p="$p folder_left"
 [ "$st" != "1|" ] || p="$p still_on"
 [ "$b" = false ] || p="$p button_left"
+case "$en" in *"$uuid"*) p="$p still_in_enabled_extensions" ;; esac
 [ "$(agent_count)" -eq 0 ] && [ "$(pgrep -f "^$exe tray-helper" | wc -l)" -eq 0 ] || p="$p processes_left"
 [ ! -e "$data" ] || p="$p data_left"
 alive || p="$p shell_dead"

@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -334,3 +335,55 @@ func TestSwitchToTheNextView(t *testing.T) {
 		t.Fatalf("log:\n%s\nwant:\n%s", log.String(), want)
 	}
 }
+
+// -redraw: SIGUSR1 puts a view with the same items and other texts in
+// place with the next serial (Task 15's redraw-while-open check, review
+// B-I2); without -redraw it raises the serial only; SIGUSR2 without -next
+// does nothing; any other signal ends fakepanel.
+func TestSignals(t *testing.T) {
+	addr := privateBus(t)
+	server, err := dbus.Connect(addr)
+	must(t, err)
+	defer server.Close()
+	var log syncBuffer
+	p := newPanel(server, combinedJSON(t), "ok", &log)
+	must(t, export(server, p))
+	must(t, own(server))
+	client, err := dbus.Connect(addr)
+	must(t, err)
+	defer client.Close()
+	obj := client.Object(busName, objectPath)
+	view := func() trayproto.Panel {
+		t.Helper()
+		var v string
+		must(t, obj.Call(iface+".GetView", 0).Store(&v))
+		var got trayproto.Panel
+		must(t, json.Unmarshal([]byte(v), &got))
+		return got
+	}
+	var redraw trayproto.Panel
+	must(t, json.Unmarshal(combinedJSON(t), &redraw))
+	redraw.Sections[0].Rows[0].Percent, redraw.Sections[0].Rows[0].PercentText = ptr(57.0), "57%"
+	rb, err := json.Marshal(redraw)
+	must(t, err)
+	if !p.signalled(syscall.SIGUSR1, nil, rb) {
+		t.Fatal("SIGUSR1 ended it")
+	}
+	if got := view(); got.Serial != 2 || got.Sections[0].Rows[0].PercentText != "57%" || len(got.Sections[1].Rows) != 2 {
+		t.Fatalf("after SIGUSR1 with -redraw: %+v", got)
+	}
+	if !p.signalled(syscall.SIGUSR1, nil, nil) || view().Serial != 3 {
+		t.Fatal("SIGUSR1 without -redraw: not the next serial")
+	}
+	if !p.signalled(syscall.SIGUSR2, nil, nil) || view().Serial != 3 {
+		t.Fatal("SIGUSR2 without -next changed the view")
+	}
+	if p.signalled(syscall.SIGTERM, nil, nil) {
+		t.Fatal("SIGTERM did not end it")
+	}
+	if want := "ViewChanged 2\nGetView\nViewChanged 3\nGetView\nGetView\n"; log.String() != want {
+		t.Fatalf("log:\n%s\nwant:\n%s", log.String(), want)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

@@ -188,8 +188,8 @@ helper_private_check() {
   ap=$(pgrep -f "^$exe run" | head -n 1)
   bridge=$(bridge_pids "$bus" | head -n 1)
   [ -n "$ap" ] || problems="$problems no_agent"
-  # on these buses without GNOME Shell the bridge ends 30 s after it started
-  [ -n "$bridge" ] || problems="$problems no_bridge(it lives 30 s without a GNOME Shell)"
+  # on these buses without GNOME Shell the bridge waits on for one
+  [ -n "$bridge" ] || problems="$problems no_bridge"
   tr '\0' '\n' < "/proc/$ap/environ" 2>/dev/null | grep -q '^CI_SECRET_CANARY=' || problems="$problems canary_not_in_agent"
   for hp in $(pgrep -f "^$exe tray-helper"); do
     cmd=$(tr '\0' ' ' < "/proc/$hp/cmdline" 2>/dev/null)
@@ -227,8 +227,7 @@ tray_label_check() {
     get_prop() { DBUS_SESSION_BUS_ADDRESS="$bus_addr" "$CI_BIN/fakewatcher" get "$svc" "$1" 2>>"$out/watcher.err"; }
     label_is() { label=$(get_prop XAyatanaLabel) && [ "$label" = "$1" ]; }
     # tray.helper_private as soon as the bridge and an icon helper run, not
-    # after the registration (up to 90 s): the bridge waits only 30 s for
-    # a GNOME Shell on this bus (review m8)
+    # after the registration (up to 90 s; review m8)
     helpers_up() { [ -n "$(bridge_pids "$bus_addr")" ] && [ "$(icon_helper_count "$exe" "$bus_addr")" -ge 1 ]; }
     wait_for 20 helpers_up
     helper_private_check "$bus_addr"

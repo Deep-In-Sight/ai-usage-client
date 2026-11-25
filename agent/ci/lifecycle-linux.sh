@@ -38,7 +38,7 @@ lc_pids() { pgrep -f "^$exe run" | tr '\n' ' ' | sed 's/ $//'; }
 lc_count() { pgrep -f "^$exe run" | wc -l; }
 # the icon helpers (design 6.4): "$exe tray-helper" but the GNOME bridge,
 # which owns local.AIUsage.Panel on one of the buses started here
-# (lc_addrs) until it gives up without a shell (lib.sh, ruling F13)
+# (lc_addrs; lib.sh, ruling F13)
 lc_addrs=""
 lc_hpids() { icon_helper_pids "$exe" $lc_addrs | tr '\n' ' ' | sed 's/ $//'; }
 lc_hcount() { icon_helper_pids "$exe" $lc_addrs | grep -c .; }

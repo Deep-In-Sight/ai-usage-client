@@ -162,9 +162,10 @@ sync_ok() {
 
 # The GNOME bridge (drawn-panel design 6.4) is a tray helper too: the same
 # "$exe tray-helper" in the shell role, which owns local.AIUsage.Panel on
-# its session bus (on these buses without GNOME Shell it waits up to 30 s
-# and ends with 78; it may have moved to $XDG_RUNTIME_DIR/bus when its
-# address died). Counts of icons leave it out (pre-flight ruling F13).
+# its session bus (on these buses without GNOME Shell it says "no shell"
+# after 30 s and waits on for a shell; it may have moved to
+# $XDG_RUNTIME_DIR/bus when its address died). Counts of icons leave it
+# out (pre-flight ruling F13).
 # bridge_pids ADDR...: the pids owning local.AIUsage.Panel on those buses
 # and on the runtime folder's.
 bridge_pids() {
