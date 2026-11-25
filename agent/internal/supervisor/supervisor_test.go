@@ -433,7 +433,7 @@ func TestViewsAreSentWhenTheyChange(t *testing.T) {
 		provider.Claude: {Icon: trayproto.Icon{Provider: "claude", Level: "normal"}, Title: "42%", Tooltip: "AI Usage · Claude"},
 		provider.Codex:  {Icon: trayproto.Icon{Provider: "codex", Level: "normal"}, Title: "17%", Tooltip: "AI Usage · Codex"},
 	}
-	h.sup.Show(items, icons) // before any helper: kept for the first ones
+	h.sup.Show(items, icons, nil) // before any helper: kept for the first ones
 	h.sup.Want([]provider.ID{provider.Claude, provider.Codex})
 	a, b := h.spawned(), h.spawned()
 	for _, p := range []*fakeProc{a, b} {
@@ -442,19 +442,19 @@ func TestViewsAreSentWhenTheyChange(t *testing.T) {
 			t.Fatalf("%q got %+v", p.id, m)
 		}
 	}
-	h.sup.Show(items, icons) // nothing changed
+	h.sup.Show(items, icons, nil) // nothing changed
 	a.none(t)
 	b.none(t)
 	// only Codex's icon changed: only its helper hears it
 	icons2 := map[provider.ID]IconView{provider.Claude: icons[provider.Claude], provider.Codex: {Icon: trayproto.Icon{Provider: "codex", Level: "critical"}, Title: "100%"}}
-	h.sup.Show(items, icons2)
+	h.sup.Show(items, icons2, nil)
 	if m := b.next(t); m.Title != "100%" {
 		t.Fatalf("%+v", m)
 	}
 	a.none(t)
 	// the menu changed: both
 	items2 := []trayproto.Item{{ID: "quit", Text: "Quit now", Enabled: true, Visible: true}}
-	h.sup.Show(items2, icons2)
+	h.sup.Show(items2, icons2, nil)
 	if m := a.next(t); m.Items[0].Text != "Quit now" {
 		t.Fatalf("%+v", m)
 	}
@@ -469,6 +469,41 @@ func TestViewsAreSentWhenTheyChange(t *testing.T) {
 	a = h.spawned()
 	if m := a.next(t); m.Type != trayproto.TypeView || m.Items[0].Text != "Quit now" {
 		t.Fatalf("%+v", m)
+	}
+}
+
+// The usage panel goes into every helper's view (design 6.5: one panel
+// for all; a Linux icon helper ignores it, PR-24); a new panel is sent to
+// all, the same one again to none.
+func TestPanelGoesIntoEveryView(t *testing.T) {
+	h := newHarness(t)
+	items := []trayproto.Item{{ID: "quit", Text: "Quit", Enabled: true, Visible: true}}
+	icons := map[provider.ID]IconView{provider.Claude: {Title: "42%"}, provider.Codex: {Title: "17%"}}
+	panel := &trayproto.Panel{Serial: 1, Server: "Server connected", Sections: []trayproto.PanelSection{}}
+	h.sup.Show(items, icons, panel)
+	h.sup.Want([]provider.ID{provider.Claude, provider.Codex})
+	a, b := h.spawned(), h.spawned()
+	for _, p := range []*fakeProc{a, b} {
+		if m := p.next(t); m.Type != trayproto.TypeView || !reflect.DeepEqual(m.Panel, panel) {
+			t.Fatalf("%q got %+v", p.id, m)
+		}
+	}
+	same := *panel
+	h.sup.Show(items, icons, &same) // an equal panel: nothing
+	a.none(t)
+	b.none(t)
+	next := &trayproto.Panel{Serial: 2, Server: "Server not reachable", Sections: []trayproto.PanelSection{}}
+	h.sup.Show(items, icons, next)
+	for _, p := range []*fakeProc{a, b} {
+		if m := p.next(t); m.Panel == nil || m.Panel.Serial != 2 || m.Panel.Server != "Server not reachable" {
+			t.Fatalf("%q got %+v", p.id, m)
+		}
+	}
+	h.sup.Show(items, icons, nil) // no panel: a view without one
+	for _, p := range []*fakeProc{a, b} {
+		if m := p.next(t); m.Type != trayproto.TypeView || m.Panel != nil {
+			t.Fatalf("%q got %+v", p.id, m)
+		}
 	}
 }
 
@@ -686,9 +721,9 @@ func (h *harness) failUntilStopped(p *fakeProc) {
 	h.event(func(e Event) bool { return isExit(e) && e.RestartIn == stoppedFor })
 }
 
-func view(title string) ([]trayproto.Item, map[provider.ID]IconView) {
+func view(title string) ([]trayproto.Item, map[provider.ID]IconView, *trayproto.Panel) {
 	return []trayproto.Item{{ID: "quit", Text: "Quit", Enabled: true, Visible: true}},
-		map[provider.ID]IconView{provider.Claude: {Icon: trayproto.Icon{Provider: "claude", Level: "normal"}, Title: title}}
+		map[provider.ID]IconView{provider.Claude: {Icon: trayproto.Icon{Provider: "claude", Level: "normal"}, Title: title}}, nil
 }
 
 // A stopped helper is tried again when what it would show changes, at

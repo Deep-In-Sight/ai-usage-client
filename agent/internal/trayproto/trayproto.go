@@ -28,6 +28,7 @@ const (
 	ExitSessionLost  = 75 // the desktop session's connection went away (Linux: the session bus)
 	ExitSessionEnded = 76 // the session is ending (Windows: WM_ENDSESSION)
 	ExitDesktopBack  = 77 // standby: the desktop's tray came (back): try the icon again
+	ExitUnsupported  = 78 // the GNOME bridge: no supported GNOME Shell on this session bus (plan PR-10)
 )
 
 // EnvToken is the environment variable that hands a helper the one-time
@@ -40,7 +41,7 @@ const MaxLine = 64 << 10
 
 // Message types. Main to helper: hello (first line), view, notice, quit.
 // Helper to main: ready (the icon is up), waiting (it is not, and why),
-// click.
+// click, shell (the GNOME bridge: the panel extension attached or not).
 const (
 	TypeHello   = "hello"
 	TypeView    = "view"
@@ -49,7 +50,13 @@ const (
 	TypeReady   = "ready"
 	TypeWaiting = "waiting"
 	TypeClick   = "click"
+	TypeShell   = "shell"
 )
+
+// RoleShell is a hello's role for the GNOME bridge, the helper that serves
+// the usage panel to the GNOME Shell extension (design 6.4); "" is an icon
+// helper.
+const RoleShell = "shell"
 
 // Msg is one line.
 type Msg struct {
@@ -76,7 +83,76 @@ type Msg struct {
 	Items   []Item `json:"items,omitempty"`   // view: the menu, every item of ItemIDs in order
 	Text    string `json:"text,omitempty"`    // notice
 	ID      string `json:"id,omitempty"`      // click: the item's id
-	Why     string `json:"why,omitempty"`     // waiting: "no StatusNotifierWatcher", "no taskbar", …
+	// waiting: "no StatusNotifierWatcher", "no taskbar", …; shell: "detach",
+	// "ping", "owner", "unsupported 44.2", "no shell"
+	Why string `json:"why,omitempty"`
+	// Fields added after v0.9.0 (design 6.5); every one is left out when
+	// not set, so older lines read the same.
+	Role       string `json:"role,omitempty"`        // hello: "" an icon helper | RoleShell
+	EnableOnce bool   `json:"enable_once,omitempty"` // hello (shell): turn the panel extension on once
+	Panel      *Panel `json:"panel,omitempty"`       // view: the usage panel, the same for every helper
+	Attached   *bool  `json:"attached,omitempty"`    // shell: the panel extension attached (true) or went away (false)
+	Supported  *bool  `json:"supported,omitempty"`   // shell: false when the GNOME Shell is not one the panel supports
+	Enabled    bool   `json:"enabled,omitempty"`     // shell: turning the extension on succeeded
+}
+
+// Panel is the usage panel (design 6.1): the finished view the Windows and
+// macOS helpers draw and the GNOME extension reads (GetView, design 6.4).
+// Every text is finished here; a helper or the extension only draws it.
+// Every field is always sent; the JSON names never change (Global
+// Constraint 4: fields are only added).
+type Panel struct {
+	Serial     uint64         `json:"serial"`      // the main process's count of panels: +1 on every change
+	NewVersion string         `json:"new_version"` // "New version available: 0.9.2"; "": no line
+	Sections   []PanelSection `json:"sections"`    // never null; in the order Claude, Codex
+	Prompt     string         `json:"prompt"`      // nobody signed in: "Sign in to …" ("" otherwise)
+	Server     string         `json:"server"`      // the server line without "Updated …" (plan PR-8)
+	Actions    []PanelAction  `json:"actions"`     // dashboard, refresh, autostart, remove, quit (ids of ItemIDs)
+	Top        []PanelTop     `json:"top"`         // the numbers in the top bar (plan PR-5)
+}
+
+// PanelSection is one provider's group: a header, its problem line and its
+// limit rows.
+type PanelSection struct {
+	Provider string     `json:"provider"` // "claude" | "codex"
+	Name     string     `json:"name"`     // "Claude"
+	Account  string     `json:"account"`  // "team-a@… · 3 PCs" (Codex: " · Plus")
+	Updated  string     `json:"updated"`  // "Updated 18:52", never the stale mark; "" without numbers
+	Problem  string     `json:"problem"`  // the problem line ("" for none)
+	Stale    bool       `json:"stale"`    // the numbers are old: the group is drawn faded
+	Rows     []PanelRow `json:"rows"`     // never null
+}
+
+// PanelRow is one limit (or the "More limits" pointer); a click sends its
+// ID, the menu's item id ("r.claude.0").
+type PanelRow struct {
+	ID          string   `json:"id"`
+	Label       string   `json:"label"`        // "5-hour" | "More limits on the dashboard"
+	Percent     *float64 `json:"percent"`      // the bar's length: the shown percent, rounded (4.5 -> 5); null: no value
+	PercentText string   `json:"percent_text"` // "42%", "–%"
+	Detail      string   `json:"detail"`       // "Resets Fri 21:20 · in 2h 20m", "Blocked · resets …", ""
+	Level       string   `json:"level"`        // usage.Level: none | normal | warning | critical
+	More        bool     `json:"more"`         // the "More limits on the dashboard" row: no bar
+}
+
+// PanelAction is one of the action items, as the menu's item of that id.
+type PanelAction struct {
+	ID       string `json:"id"`
+	Text     string `json:"text"`
+	Enabled  bool   `json:"enabled"`
+	Visible  bool   `json:"visible"`
+	Checkbox bool   `json:"checkbox"`
+	Checked  bool   `json:"checked"`
+}
+
+// PanelTop is one number in the top bar: a provider in use (its icon's
+// title, level and raw percent), or the neutral "–%" when none is.
+type PanelTop struct {
+	Provider string   `json:"provider"` // "" for the neutral one
+	Text     string   `json:"text"`     // "42%", "42% ⚠", "–%"
+	Level    string   `json:"level"`
+	Percent  *float64 `json:"percent"` // as reported, not rounded (the icon's)
+	Stale    bool     `json:"stale"`
 }
 
 // StaleIcon names a Windows notification icon: its window and id.

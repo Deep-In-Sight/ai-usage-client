@@ -140,6 +140,48 @@ func rowsFor(id provider.ID) (rows int, more bool) {
 	return trayproto.RowsPerSection, false
 }
 
+// limitRow is one row of a section as the menu and the panel show it: the
+// provider's row, or (more) "More limits on the dashboard" in its place.
+type limitRow struct {
+	id   string // "r.<provider>.<n>"
+	row  provider.Row
+	more bool
+}
+
+// sectionRows are the rows of a provider's section: as many as rowsFor
+// has room for, the last one "More limits" when there are more.
+func sectionRows(id provider.ID, ps status.ProviderStatus) []limitRow {
+	room, more := rowsFor(id)
+	var out []limitRow
+	for i, r := range ps.Rows {
+		if i == room && !more {
+			break
+		}
+		out = append(out, limitRow{id: "r." + string(id) + "." + strconv.Itoa(i), row: r, more: i == room})
+		if i == room {
+			break // the rest are on the dashboard
+		}
+	}
+	return out
+}
+
+// rowLevel is the colour step of a row: as the provider stored it, from
+// the percent when an older status file has none; none without a value.
+func rowLevel(r provider.Row) usage.Level {
+	switch {
+	case r.Percent == nil:
+		return usage.LevelNone
+	case r.Level == "":
+		return usage.LevelOf(usage.Limit{Percent: r.Percent, Severity: "normal"})
+	}
+	return r.Level
+}
+
+// stale: the provider's numbers are too old to trust.
+func stale(ps status.ProviderStatus, now time.Time) bool {
+	return !ps.LatestFetchedAt.IsZero() && usage.Stale(ps.LatestFetchedAt, now)
+}
+
 // problem is the section's problem line ("" for none).
 func problem(id provider.ID, ps status.ProviderStatus, s status.Snapshot) string {
 	switch {
@@ -167,7 +209,13 @@ const maxLocal = 20
 
 // header is "<Provider> · <local>@… · <n> PCs" (Codex: " · <Plan>").
 func header(id provider.ID, ps status.ProviderStatus) string {
-	parts := []string{id.Name()}
+	return strings.Join(append([]string{id.Name()}, account(id, ps)...), text.Sep)
+}
+
+// account are the header's parts after the provider's name: "<local>@…",
+// "<n> PCs" and (Codex) the plan.
+func account(id provider.ID, ps status.ProviderStatus) []string {
+	var parts []string
 	if ps.AccountEmail != "" {
 		local, _, _ := strings.Cut(ps.AccountEmail, "@")
 		if r := []rune(local); len(r) > maxLocal {
@@ -184,7 +232,7 @@ func header(id provider.ID, ps status.ProviderStatus) string {
 	if id == provider.Codex && ps.Plan != "" {
 		parts = append(parts, strings.ToUpper(ps.Plan[:1])+ps.Plan[1:])
 	}
-	return strings.Join(parts, text.Sep)
+	return parts
 }
 
 // updated is the "Updated HH:MM" of the oldest numbers shown (with the
@@ -206,20 +254,26 @@ func updated(in MenuInputs, ids []provider.ID) string {
 	return u
 }
 
-// serverLine is the server row: connection, the numbers' age, and who
+// serverLine is the server row: connection, the numbers' age (only with
+// withUpdated: the usage panel has it in each header, plan PR-8), and who
 // fetches for each provider shown.
-func serverLine(in MenuInputs, ids []provider.ID) string {
+func serverLine(in MenuInputs, ids []provider.ID, withUpdated bool) string {
 	s := in.Snap
-	u := updated(in, ids)
+	have := updated(in, ids) // "" when there are no numbers yet
+	u := have
+	if !withUpdated {
+		u = ""
+	}
 	switch s.Mode {
 	case "coordinated":
 		parts := []string{text.Connected}
 		if len(ids) == 0 {
 			return text.Connected // no account: no numbers to speak of
 		}
-		if u != "" {
+		switch {
+		case u != "":
 			parts = append(parts, u)
-		} else {
+		case have == "":
 			parts = append(parts, text.NoUsageYet)
 		}
 		var mine, others []string
@@ -278,53 +332,30 @@ func BuildMenu(in MenuInputs) []trayproto.Item {
 	put := func(it trayproto.Item) { byID[it.ID] = it }
 	info := func(id, t string) { put(trayproto.Item{ID: id, Text: t, Visible: t != ""}) }
 
-	newer := version.Newer(s.ClientLatestVersion, in.Version)
-	put(trayproto.Item{ID: "newversion", Text: text.NewVersion + s.ClientLatestVersion, Visible: newer, Enabled: newer})
+	line, newer := newVersion(in)
+	put(trayproto.Item{ID: "newversion", Text: line, Visible: newer, Enabled: newer})
 
 	ids := SectionsShown(s)
 	for _, id := range ids {
 		ps := s.Providers[id]
 		p := string(id)
 		put(trayproto.Item{ID: "h." + p, Text: header(id, ps), Image: p, Visible: true})
-		room, more := rowsFor(id)
-		for i, r := range ps.Rows {
-			t := RowText(r, now)
-			if i == room {
-				if !more {
-					break
-				}
+		for _, r := range sectionRows(id, ps) {
+			t := RowText(r.row, now)
+			if r.more {
 				t = text.MoreLimits // the rest are on the dashboard
 			}
-			put(trayproto.Item{ID: "r." + p + "." + strconv.Itoa(i), Text: t, Visible: true, Enabled: true})
-			if i == room {
-				break
-			}
+			put(trayproto.Item{ID: r.id, Text: t, Visible: true, Enabled: true})
 		}
 		info("p."+p, problem(id, ps, s))
 	}
-	if len(ids) == 0 && len(s.Providers) > 0 {
-		// nobody signed in: the prompt in Claude's place
-		prompt := text.SignInClaude
-		if _, ok := s.Providers[provider.Codex]; ok {
-			prompt = text.SignInAny
-		}
-		info("p.claude", prompt)
+	if pr := prompt(s, ids); pr != "" {
+		info("p.claude", pr) // nobody signed in: the prompt in Claude's place
 	}
-	info("server", serverLine(in, ids))
-
-	put(trayproto.Item{ID: "dashboard", Text: text.Dashboard, Visible: true, Enabled: in.DashboardURL != ""})
-	refresh := trayproto.Item{ID: "refresh", Text: text.Refresh, Visible: true, Enabled: true}
-	if s.FreshPending {
-		refresh.Text, refresh.Enabled = text.Refreshing, false
+	info("server", serverLine(in, ids, true))
+	for _, a := range actions(in) {
+		put(a)
 	}
-	put(refresh)
-	put(trayproto.Item{ID: "autostart", Text: text.Autostart, Visible: in.HasToggle, Enabled: in.HasToggle, Checkbox: true, Checked: in.AutostartOn})
-	remove := trayproto.Item{ID: "remove", Text: text.Remove, Visible: true, Enabled: true}
-	if in.RemoveArmed {
-		remove.Text = text.RemoveArmed
-	}
-	put(remove)
-	put(trayproto.Item{ID: "quit", Text: text.Quit, Visible: true, Enabled: true})
 
 	out := make([]trayproto.Item, 0, len(trayproto.ItemIDs))
 	for _, id := range trayproto.ItemIDs {
@@ -335,6 +366,44 @@ func BuildMenu(in MenuInputs) []trayproto.Item {
 		out = append(out, it)
 	}
 	return out
+}
+
+// newVersion is the new-version line and whether it is shown (a newer
+// client is out).
+func newVersion(in MenuInputs) (line string, newer bool) {
+	return text.NewVersion + in.Snap.ClientLatestVersion, version.Newer(in.Snap.ClientLatestVersion, in.Version)
+}
+
+// prompt is the line when nobody is signed in ("" otherwise, and before
+// the first status).
+func prompt(s status.Snapshot, ids []provider.ID) string {
+	if len(ids) > 0 || len(s.Providers) == 0 {
+		return ""
+	}
+	if _, ok := s.Providers[provider.Codex]; ok {
+		return text.SignInAny
+	}
+	return text.SignInClaude
+}
+
+// actions are the action items, in menu order: dashboard, refresh,
+// autostart, remove, quit.
+func actions(in MenuInputs) []trayproto.Item {
+	refresh := trayproto.Item{ID: "refresh", Text: text.Refresh, Visible: true, Enabled: true}
+	if in.Snap.FreshPending {
+		refresh.Text, refresh.Enabled = text.Refreshing, false
+	}
+	remove := trayproto.Item{ID: "remove", Text: text.Remove, Visible: true, Enabled: true}
+	if in.RemoveArmed {
+		remove.Text = text.RemoveArmed
+	}
+	return []trayproto.Item{
+		{ID: "dashboard", Text: text.Dashboard, Visible: true, Enabled: in.DashboardURL != ""},
+		refresh,
+		{ID: "autostart", Text: text.Autostart, Visible: in.HasToggle, Enabled: in.HasToggle, Checkbox: true, Checked: in.AutostartOn},
+		remove,
+		{ID: "quit", Text: text.Quit, Visible: true, Enabled: true},
+	}
 }
 
 // shownRow is the row a provider's icon shows (design D7) and whether
@@ -361,26 +430,19 @@ func BuildIcon(p provider.ID, in MenuInputs) supervisor.IconView {
 	v.Icon.Provider = string(p)
 	tip[0] += text.Sep + p.Name()
 	r, have := shownRow(ps)
-	stale := !ps.LatestFetchedAt.IsZero() && usage.Stale(ps.LatestFetchedAt, in.Now)
-	v.Icon.Stale = stale
+	old := stale(ps, in.Now)
+	v.Icon.Stale = old
 	if have {
 		v.Icon.Percent = r.Percent
-		level := r.Level
-		switch {
-		case r.Percent == nil:
-			level = usage.LevelNone
-		case level == "":
-			level = usage.LevelOf(usage.Limit{Percent: r.Percent, Severity: "normal"})
-		}
-		v.Icon.Level = string(level)
+		v.Icon.Level = string(rowLevel(r))
 		pct := usage.FormatPercent(r.Percent)
-		if stale {
+		if old {
 			pct += text.StaleMark // as next to the icon (Windows shows only the tooltip)
 		}
 		tip = append(tip, r.Label+" "+pct+blocked(r)+resetPart(r, in.Now))
 	}
 	v.Title = usage.FormatPercent(v.Icon.Percent)
-	if stale {
+	if old {
 		v.Title += text.StaleMark
 	}
 	if pr := problem(p, ps, in.Snap); pr != "" {

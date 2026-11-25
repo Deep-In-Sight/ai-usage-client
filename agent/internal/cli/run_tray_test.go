@@ -546,11 +546,16 @@ func TestTwoHelpersShowOneMenu(t *testing.T) {
 	fs.waitFor(t, 5*time.Second, func(r []protocol.Request) bool { return len(r) >= 1 })
 	// both get the same menu (each change reaches both)
 	deadline := time.Now().Add(5 * time.Second)
-	for !reflect.DeepEqual(c.lastView().Items, n.lastView().Items) || itemText(n.lastView(), "server") == text.Connecting {
+	for !reflect.DeepEqual(c.lastView().Items, n.lastView().Items) || !reflect.DeepEqual(c.lastView().Panel, n.lastView().Panel) ||
+		itemText(n.lastView(), "server") == text.Connecting {
 		if time.Now().After(deadline) {
 			t.Fatalf("menus differ:\n%+v\n%+v", c.lastView().Items, n.lastView().Items)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	// and the same usage panel (design 6.5), numbered by the loop (PR-6)
+	if p := n.lastView().Panel; p == nil || p.Serial == 0 || len(p.Actions) != 5 || p.Server == "" {
+		t.Fatalf("panel %+v", p)
 	}
 	before := len(fs.requests())
 	c.click("refresh")
@@ -564,6 +569,28 @@ func TestTwoHelpersShowOneMenu(t *testing.T) {
 			t.Fatalf("helper %q still running", h.id)
 		}
 	}
+}
+
+// PR-6: the loop numbers the panels it sends, +1 whenever the panel (its
+// serial aside) differs from the last one; the first is 1.
+func TestPanelSerialIncrementsOnlyOnChange(t *testing.T) {
+	l := &trayLoop{}
+	a := trayproto.Panel{Server: "Server connected", Sections: []trayproto.PanelSection{}}
+	b := trayproto.Panel{Server: "Server not reachable", Sections: []trayproto.PanelSection{}}
+	for i, c := range []struct {
+		p    trayproto.Panel
+		want uint64
+	}{{a, 1}, {a, 1}, {b, 2}, {b, 2}, {a, 3}} {
+		got := l.numberPanel(c.p)
+		if got.Serial != c.want {
+			t.Fatalf("step %d: serial %d, want %d", i, got.Serial, c.want)
+		}
+		got.Serial = 0
+		eq(t, got, c.p)
+	}
+	// a serial already set (there is none from BuildPanel) does not count
+	a.Serial = 99
+	eq(t, l.numberPanel(a).Serial, uint64(3))
 }
 
 // asCIBuild makes testHelpers see a CI build for this test.

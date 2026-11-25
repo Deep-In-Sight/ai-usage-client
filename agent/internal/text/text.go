@@ -32,6 +32,18 @@ const (
 	Sep             = " · "
 )
 
+// A limit row's reset line in the usage panel (drawn-panel design 5.1):
+// "Resets Fri 21:20 · in 2h 20m", "Reset due Fri 18:00", "Blocked · resets
+// Fri 19:35 · in 35m", "Blocked · reset due Fri 18:00", "Blocked".
+const (
+	ResetsAt        = "Resets "    // + day and time
+	ResetsIn        = " · in "     // + time left
+	ResetDueAt      = "Reset due " // + day and time
+	BlockedResets   = "Blocked · resets "
+	BlockedResetDue = "Blocked · reset due "
+	BlockedAlone    = "Blocked" // blocked, no reset time reported
+)
+
 // Problem lines of a provider's section (design 6.5).
 const (
 	ClaudeExpired = "Sign-in expired: open Claude Code to renew it"

@@ -107,6 +107,7 @@ type Supervisor struct {
 	slots  map[provider.ID]*slot
 	items  []trayproto.Item
 	icons  map[provider.ID]IconView
+	panel  *trayproto.Panel
 	notice string
 	stop   bool
 	done   chan struct{} // closed by Stop: pending restarts end
@@ -128,6 +129,7 @@ type slot struct {
 	exited      chan struct{} // closed when the current process ended
 	sentItems   []trayproto.Item
 	sentIcon    IconView
+	sentPanel   *trayproto.Panel
 	sentView    bool
 	consecutive int         // failure exits in a row
 	failures    []time.Time // failure exits within failWindow
@@ -212,16 +214,18 @@ func (s *Supervisor) Want(ids []provider.ID) {
 	}
 }
 
-// Show sets the view: the same menu for every helper, and each helper's
+// Show sets the view: the same menu and usage panel for every helper
+// (design 6.5: a Linux icon helper ignores the panel), and each helper's
 // own icon, title and tooltip. Only what changed is sent. A change tries a
 // stopped helper again (at most once a minute): the user has no icon to
-// click.
-func (s *Supervisor) Show(items []trayproto.Item, icons map[provider.ID]IconView) {
+// click. panel (nil: none) is not changed after the call.
+func (s *Supervisor) Show(items []trayproto.Item, icons map[provider.ID]IconView, panel *trayproto.Panel) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	changed := !reflect.DeepEqual(items, s.items) || !reflect.DeepEqual(icons, s.icons)
+	changed := !reflect.DeepEqual(items, s.items) || !reflect.DeepEqual(icons, s.icons) || !reflect.DeepEqual(panel, s.panel)
 	s.items = slices.Clone(items)
 	s.icons = icons
+	s.panel = panel
 	for _, sl := range s.slots {
 		s.sendView(sl)
 		if changed {
@@ -620,13 +624,14 @@ func (s *Supervisor) sendView(sl *slot) {
 		return
 	}
 	icon := s.icons[sl.id]
-	if sl.sentView && reflect.DeepEqual(sl.sentItems, s.items) && reflect.DeepEqual(sl.sentIcon, icon) {
+	if sl.sentView && reflect.DeepEqual(sl.sentItems, s.items) && reflect.DeepEqual(sl.sentIcon, icon) &&
+		reflect.DeepEqual(sl.sentPanel, s.panel) {
 		return
 	}
 	ic := icon.Icon
 	sl.out.send(trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeView, Icon: &ic, Title: icon.Title,
-		Tooltip: icon.Tooltip, Items: s.items})
-	sl.sentItems, sl.sentIcon, sl.sentView = s.items, icon, true
+		Tooltip: icon.Tooltip, Items: s.items, Panel: s.panel})
+	sl.sentItems, sl.sentIcon, sl.sentPanel, sl.sentView = s.items, icon, s.panel, true
 }
 
 // sendNotice hands a pending notice to the first wanted helper.

@@ -3,8 +3,10 @@ package trayproto
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -97,6 +99,117 @@ func TestDecodeRejectsGarbage(t *testing.T) {
 	m, err := Decode(bufio.NewReader(strings.NewReader(`{"v":1,"type":"quit"}`)))
 	if err != nil || m.Type != TypeQuit {
 		t.Fatalf("%+v %v", m, err)
+	}
+}
+
+// The usage panel rides in the view line and comes back unchanged.
+func TestViewCarriesPanel(t *testing.T) {
+	yes, no := true, false
+	p := &Panel{Serial: 7, NewVersion: "New version available: 0.9.2", Sections: []PanelSection{{
+		Provider: "claude", Name: "Claude", Account: "team-a@… · 3 PCs", Updated: "Updated 18:52", Stale: true,
+		Rows: []PanelRow{
+			{ID: "r.claude.0", Label: "5-hour", Percent: pf(42), PercentText: "42%", Detail: "Resets Fri 21:20 · in 2h 20m", Level: "normal"},
+			{ID: "r.claude.1", Label: "More limits on the dashboard", Level: "none", More: true},
+		}}}, Prompt: "", Server: "Server connected",
+		Actions: []PanelAction{{ID: "autostart", Text: "Start at login", Enabled: true, Visible: true, Checkbox: true, Checked: true}},
+		Top:     []PanelTop{{Provider: "claude", Text: "42% ⚠", Level: "normal", Percent: pf(42.4), Stale: true}}}
+	msgs := []Msg{
+		{V: Version, Type: TypeView, Items: []Item{{ID: "quit", Text: "Quit", Visible: true}}, Panel: p},
+		{V: Version, Type: TypeHello, Token: "0123456789abcdef", Role: RoleShell, EnableOnce: true},
+		{V: Version, Type: TypeShell, Attached: &yes, Why: "detach"},
+		{V: Version, Type: TypeShell, Supported: &no, Why: "unsupported 44.2"},
+		{V: Version, Type: TypeShell, Enabled: true},
+	}
+	var b bytes.Buffer
+	for _, m := range msgs {
+		if err := Encode(&b, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := bufio.NewReader(&b)
+	for i, want := range msgs {
+		got, err := Decode(r)
+		if err != nil {
+			t.Fatalf("message %d: %v", i, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("message %d: got %+v, want %+v", i, got, want)
+		}
+	}
+	// the new fields stay out of the lines that do not use them
+	var q bytes.Buffer
+	if err := Encode(&q, Msg{V: Version, Type: TypeQuit}); err != nil {
+		t.Fatal(err)
+	}
+	eqs(t, q.String(), `{"v":1,"type":"quit"}`+"\n")
+	eqs(t, TypeShell, "shell")
+	eqs(t, RoleShell, "shell")
+	if ExitUnsupported != 78 {
+		t.Fatalf("ExitUnsupported = %d", ExitUnsupported)
+	}
+}
+
+func eqs(t *testing.T, got, want string) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// A helper of v0.9.0 (its Msg as it was) reads a line with the new fields
+// without an error: the fields are only added (Global Constraint 4).
+func TestOldHelperIgnoresNewFields(t *testing.T) {
+	type oldMsg struct { // trayproto.Msg of v0.9.0
+		V        int         `json:"v"`
+		Type     string      `json:"type"`
+		Token    string      `json:"token,omitempty"`
+		Provider string      `json:"provider,omitempty"`
+		UID      uint32      `json:"uid,omitempty"`
+		IconDir  string      `json:"icon_dir,omitempty"`
+		Standby  bool        `json:"standby,omitempty"`
+		Stale    []StaleIcon `json:"stale,omitempty"`
+		Window   uint64      `json:"window,omitempty"`
+		Icon     *Icon       `json:"icon,omitempty"`
+		Title    string      `json:"title,omitempty"`
+		Tooltip  string      `json:"tooltip,omitempty"`
+		Items    []Item      `json:"items,omitempty"`
+		Text     string      `json:"text,omitempty"`
+		ID       string      `json:"id,omitempty"`
+		Why      string      `json:"why,omitempty"`
+	}
+	yes := true
+	var b bytes.Buffer
+	if err := Encode(&b, Msg{V: Version, Type: TypeView, Title: "42%", Role: RoleShell, Attached: &yes,
+		Panel: &Panel{Serial: 1, Sections: []PanelSection{}, Actions: []PanelAction{}, Top: []PanelTop{}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{`"panel":`, `"role":`, `"attached":`} {
+		if !strings.Contains(b.String(), k) {
+			t.Fatalf("%s missing in %s", k, b.String())
+		}
+	}
+	var m oldMsg
+	if err := json.Unmarshal(b.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Type != TypeView || m.Title != "42%" {
+		t.Fatalf("%+v", m)
+	}
+}
+
+// The panel of the picture fixture (written by package tray's
+// TestPanelJSONNames) stays well inside a line: design 6.5 "under 4 KiB".
+func TestPanelFitsALine(t *testing.T) {
+	b, err := os.ReadFile("../tray/testdata/panel-combined.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) >= 4096 {
+		t.Fatalf("the fixture's panel is %d bytes", len(b))
+	}
+	var p Panel
+	if err := json.Unmarshal(b, &p); err != nil || len(p.Sections) != 2 {
+		t.Fatalf("%v %+v", err, p)
 	}
 }
 

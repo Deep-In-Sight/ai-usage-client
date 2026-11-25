@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -56,6 +57,10 @@ type trayLoop struct {
 	noticeQueued string
 	readyOnce    bool
 	waitLogged   string
+
+	// the last usage panel sent (its serial 0) and its serial (plan PR-6)
+	lastPanel   *trayproto.Panel
+	panelSerial uint64
 }
 
 // inUse: the provider's sign-in is there (an expired one too: the account
@@ -140,7 +145,22 @@ func (l *trayLoop) draw() {
 	}
 	items := tray.BuildMenu(in)
 	l.dumpView(items)
-	l.sup.Show(items, icons)
+	panel := l.numberPanel(tray.BuildPanel(in))
+	l.sup.Show(items, icons, &panel)
+}
+
+// numberPanel gives p its serial (plan PR-6): one more than the last
+// panel's when p differs from it (its serial aside), the same otherwise;
+// the first panel is 1. The GNOME extension redraws on a new serial.
+func (l *trayLoop) numberPanel(p trayproto.Panel) trayproto.Panel {
+	p.Serial = 0
+	if l.lastPanel == nil || !reflect.DeepEqual(*l.lastPanel, p) {
+		l.panelSerial++
+		last := p
+		l.lastPanel = &last
+	}
+	p.Serial = l.panelSerial
+	return p
 }
 
 // testDumpViewEnv names a file where a CI build (version 0.0.0-ci) writes
