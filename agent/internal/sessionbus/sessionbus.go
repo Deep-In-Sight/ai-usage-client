@@ -6,7 +6,7 @@ package sessionbus
 import (
 	"errors"
 	"net"
-	"path/filepath"
+	"path"
 	"strings"
 	"time"
 )
@@ -86,7 +86,7 @@ func Address(getenv func(string) string, reachable func(addr string) bool) (stri
 		return cur, nil
 	}
 	rt := getenv("XDG_RUNTIME_DIR")
-	if !filepath.IsAbs(rt) {
+	if !path.IsAbs(rt) { // a POSIX path whatever the OS
 		return "", ErrNoBus
 	}
 	runtimeBus := "unix:path=" + strings.TrimRight(rt, "/") + "/bus"
