@@ -25,8 +25,12 @@ func busID(t *testing.T, c *dbus.Conn) string {
 // DialSession (plan PR-14, ruling F26): the address it was given, the
 // runtime folder's bus instead when that address is dead, the runtime
 // folder's bus without an address, and otherwise an error: never a bus of
-// its own.
+// its own. A DialSession broken to use the D-Bus library's own lookup
+// would find this PC's user bus at /run/user/<uid>/bus when given no
+// address: those cases run on CI runners, in a container or a sandbox only
+// (fakeshell.UserBusHere), as TestBridgeNeverAutolaunches does.
 func TestDialSessionOrder(t *testing.T) {
+	live := !fakeshell.UserBusHere()
 	given := fakeshell.NewBus(t, "")
 	rt := fakeshell.ShortDir(t)
 	inRuntime := fakeshell.NewBus(t, fakeshell.SocketIn(rt))
@@ -50,6 +54,10 @@ func TestDialSessionOrder(t *testing.T) {
 		{dead, empty, ""},
 		{"", "", ""},
 	} {
+		if c.addr == "" && !live {
+			t.Logf("no address, runtime folder %q: left to CI runners (this PC has a user session bus)", c.rt)
+			continue
+		}
 		env := func(k string) string {
 			return map[string]string{"DBUS_SESSION_BUS_ADDRESS": c.addr, "XDG_RUNTIME_DIR": c.rt}[k]
 		}

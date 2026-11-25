@@ -122,6 +122,24 @@ func ShortDir(t testing.TB) string {
 	return d
 }
 
+// UserBusHere: this PC has a user session bus at /run/user/<uid>/bus and
+// is not a CI runner (GITHUB_ACTIONS=true). A test that dials with an
+// empty or dead address would, broken to use the D-Bus library's own
+// lookup, find that bus whatever XDG_RUNTIME_DIR says; such a test's live
+// part runs on CI runners, in a container or in a sandbox only.
+func UserBusHere() bool {
+	_, err := os.Stat(fmt.Sprintf("/run/user/%d/bus", os.Getuid()))
+	return err == nil && os.Getenv("GITHUB_ACTIONS") != "true"
+}
+
+// SkipOnAUserBus skips the test where UserBusHere.
+func SkipOnAUserBus(t testing.TB) {
+	t.Helper()
+	if UserBusHere() {
+		t.Skip("this PC has a user session bus: this test runs on CI runners only")
+	}
+}
+
 // NoBus prepares a test of a process without a session bus (plan RF3: an
 // SSH login, "su -", before the first GNOME login): no
 // DBUS_SESSION_BUS_ADDRESS, $XDG_RUNTIME_DIR an empty folder, and PATH
@@ -134,9 +152,7 @@ func ShortDir(t testing.TB) string {
 // GITHUB_ACTIONS=true (CI runners, a container and a sandbox run it).
 func NoBus(t testing.TB) (runtimeDir string, ran func(prog string) string) {
 	t.Helper()
-	if _, err := os.Stat(fmt.Sprintf("/run/user/%d/bus", os.Getuid())); err == nil && os.Getenv("GITHUB_ACTIONS") != "true" {
-		t.Skip("this PC has a user session bus: this test runs on CI runners only")
-	}
+	SkipOnAUserBus(t)
 	_, _ = lookDaemon() // before PATH is emptied
 	bin, rec := t.TempDir(), t.TempDir()
 	for _, prog := range []string{"dbus-launch", "gio"} {
@@ -175,6 +191,8 @@ type Shell struct {
 	locked    bool
 	notices   []string
 	gate      *ActiveGate // GetActive waits on it (nil: answers at once)
+	failing   int         // GetActive calls still to answer with an error
+	actives   int         // GetActive calls answered
 	onCall    func(call string)
 	disableEr bool
 }
@@ -340,6 +358,21 @@ func (s *Shell) call(c string) {
 
 type screenSaver struct{ s *Shell }
 
+// FailGetActive makes the next n GetActive calls answer an error (a busy
+// or failing shell), the later ones as before.
+func (s *Shell) FailGetActive(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failing = n
+}
+
+// GetActives is the number of GetActive calls answered so far.
+func (s *Shell) GetActives() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.actives
+}
+
 func (x screenSaver) GetActive() (bool, *dbus.Error) {
 	x.s.mu.Lock()
 	locked, g := x.s.locked, x.s.gate
@@ -349,6 +382,13 @@ func (x screenSaver) GetActive() (bool, *dbus.Error) {
 		g.pending++
 		g.mu.Unlock()
 		<-g.open
+	}
+	x.s.mu.Lock()
+	defer x.s.mu.Unlock()
+	x.s.actives++
+	if x.s.failing > 0 {
+		x.s.failing--
+		return false, dbus.NewError("org.freedesktop.DBus.Error.Failed", []any{"the screen shield is busy"})
 	}
 	return locked, nil
 }

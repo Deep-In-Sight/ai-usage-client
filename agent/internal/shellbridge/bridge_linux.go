@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"os"
@@ -56,13 +57,24 @@ const (
 	// (GNOME's screenShield.js), so a Detach whose first answer is "not
 	// active" waits this long for the lock before it is told.
 	lockSettle = 2 * time.Second
+	// lockTries: GetActive failing or unanswered this many times in a row
+	// tells a held detach (about lockRecheck × 2 + callTimeout after the
+	// first: review H2)
+	lockTries = 3
+	// dialRetry: a missing or dead session bus is dialled again this often
+	// (as the icon helpers do: trayhelper's hostRetry)
+	dialRetry = 2 * time.Second
 	// a newer agent's bridge took the name (the newest agent wins)
 	exitReplaced = trayproto.ExitRefused
 )
 
+// lockAskTimeout is how long GetActive may take (a variable for tests).
+var lockAskTimeout = callTimeout
+
 // Run serves the panel until quit or EOF (0), the loss of the session bus
-// (75) or an unsupported shell (78). in is the main process's lines after
-// the hello; out takes the bridge's lines.
+// it was on (75) or an unsupported shell (78); a bus that is not there yet
+// is waited for (dial). in is the main process's lines after the hello;
+// out takes the bridge's lines.
 func Run(ctx context.Context, in *bufio.Reader, out io.Writer, o Options) int {
 	if o.Getenv == nil {
 		o.Getenv = os.Getenv
@@ -70,7 +82,8 @@ func Run(ctx context.Context, in *bufio.Reader, out io.Writer, o Options) int {
 	if o.Clock == nil {
 		o.Clock = clock.Real{}
 	}
-	b := &bridge{o: o, out: out, reqs: make(chan func()), done: make(chan struct{}), locks: make(chan lockAnswer, 4)}
+	b := &bridge{o: o, out: out, reqs: make(chan func()), done: make(chan struct{}), locks: make(chan lockAnswer, 4),
+		askTimeout: lockAskTimeout}
 	defer close(b.done)
 	lines := make(chan trayproto.Msg, 16)
 	go func() {
@@ -87,14 +100,51 @@ func Run(ctx context.Context, in *bufio.Reader, out io.Writer, o Options) int {
 			}
 		}
 	}()
-	conn, err := gnomeext.DialSession(o.Getenv)
-	if err != nil {
-		log.Print(err)
-		return trayproto.ExitSessionLost
+	conn, code := b.dial(ctx, lines)
+	if conn == nil {
+		return code
 	}
 	defer conn.Close()
 	b.conn = conn
 	return b.run(ctx, lines)
+}
+
+// dial connects to the session bus. A missing or dead bus (a logout the
+// agent outlived, a start before the session's bus is up) is dialled again
+// every dialRetry in this process, as the icon helpers wait for theirs:
+// ending with 75 again and again would count as failures and stop the
+// bridge for minutes, so the next login's panel would wait for it (lost-bus
+// ruling, 4b re-review). Views and notices that come meanwhile are kept.
+// nil and the exit code when quit, the end of the input or ctx came first.
+func (b *bridge) dial(ctx context.Context, lines <-chan trayproto.Msg) (*dbus.Conn, int) {
+	conn, err := gnomeext.DialSession(b.o.Getenv)
+	if err == nil {
+		return conn, 0
+	}
+	log.Printf("%v: waiting for the session bus", err)
+	retry := b.o.Clock.After(dialRetry)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, trayproto.ExitOK
+		case m, ok := <-lines:
+			if !ok || m.Type == trayproto.TypeQuit {
+				return nil, trayproto.ExitOK
+			}
+			switch {
+			case m.Type == trayproto.TypeView && m.Panel != nil:
+				b.panel, b.serial = m.Panel, m.Panel.Serial // nobody to signal yet
+			case m.Type == trayproto.TypeNotice:
+				b.notices = append(b.notices, m.Text)
+			}
+		case <-retry:
+			if conn, err := gnomeext.DialSession(b.o.Getenv); err == nil {
+				log.Print("the session bus is there")
+				return conn, 0
+			}
+			retry = b.o.Clock.After(dialRetry)
+		}
+	}
 }
 
 // bridge is one run. The D-Bus methods hand their work to the loop (reqs);
@@ -106,30 +156,35 @@ type bridge struct {
 	reqs  chan func()
 	done  chan struct{}   // closed when Run ends
 	locks chan lockAnswer // GetActive's answers while a detach is held
+	// how long GetActive may take (read once: tests change lockAskTimeout)
+	askTimeout time.Duration
 
-	panel    *trayproto.Panel // the newest view (nil: none yet)
-	serial   uint64           // its serial, as signalled
-	owner    string           // the unique name that owns org.gnome.Shell ("": none)
-	saver    string           // the unique name that owns org.gnome.Shell.ScreenShield ("": none)
-	caller   string           // the attached extension's unique name ("": none)
-	lapsed   string           // the caller after a Ping lapse: its next Ping or GetView attaches it again (review I2)
-	lastSeen time.Time        // its last Ping or GetView
-	ping     <-chan time.Time // when its PingTimeout may have passed
-	told     bool             // what the main process heard last: attached
-	held     string           // a detach not told yet, while the screen is locked: its why
-	heldGen  int              // counts held detaches: an answer for an older one is void (review m2)
-	recheck  <-chan time.Time // when the held detach asks the screen saver again (review m3)
-	settle   <-chan time.Time // when a Detach answered "not active" at first is asked again (lockSettle)
-	settled  bool             // the held detach had its first answer
-	lockLog  int              // the held detach whose lock was logged
+	panel     *trayproto.Panel // the newest view (nil: none yet)
+	serial    uint64           // its serial, as signalled
+	notices   []string         // notices that came before the bus did
+	supported bool             // the main process heard that a supported shell answers
+	owner     string           // the unique name that owns org.gnome.Shell ("": none)
+	saver     string           // the unique name that owns org.gnome.Shell.ScreenShield ("": none)
+	caller    string           // the attached extension's unique name ("": none)
+	lapsed    string           // the caller after a Ping lapse: its next Ping or GetView attaches it again (review I2)
+	lastSeen  time.Time        // its last Ping or GetView
+	ping      <-chan time.Time // when its PingTimeout may have passed
+	told      bool             // what the main process heard last: attached
+	held      string           // a detach not told yet, while the screen is locked: its why
+	heldGen   int              // counts held detaches: an answer for an older one is void (review m2)
+	recheck   <-chan time.Time // when the held detach asks the screen saver again (review m3)
+	settle    <-chan time.Time // when a Detach answered "not active" at first is asked again (lockSettle)
+	settled   bool             // the held detach had its first answer
+	lockFails int              // GetActive failed this many times in a row for the held detach (review H2)
+	lockLog   int              // the held detach whose lock was logged
 }
 
-// lockAnswer is GetActive's answer for the held detach gen: locked is
-// false when the screen saver is not active or could not be asked.
+// lockAnswer is GetActive's answer for the held detach gen.
 type lockAnswer struct {
-	gen    int
-	locked bool
-	failed bool // GetActive was not answered
+	gen     int
+	locked  bool // the screen saver is active
+	failed  bool // GetActive was not answered in time, or answered an error
+	noOwner bool // nobody owns the screen saver's name: no lock (the shell left)
 }
 
 type version struct {
@@ -168,6 +223,10 @@ func (b *bridge) run(ctx context.Context, lines <-chan trayproto.Msg) int {
 	}
 	defer func() { _, _ = b.conn.ReleaseName(BusName) }()
 	b.owner, b.saver = b.nameOwner(shellName), b.nameOwner(screenShieldName)
+	for _, n := range b.notices {
+		go b.notify(n)
+	}
+	b.notices = nil
 
 	// until GNOME Shell's version is known: waiting
 	waiting, asking := true, false
@@ -240,20 +299,7 @@ func (b *bridge) run(ctx context.Context, lines <-chan trayproto.Msg) int {
 				b.send(trayproto.Msg{Type: trayproto.TypeShell, Enabled: true})
 			}
 		case a := <-b.locks:
-			if b.held == "" || a.gen != b.heldGen {
-				break // the extension attached again meanwhile, or a newer detach is held
-			}
-			first := !b.settled
-			b.settled = true
-			if !a.locked && first && !a.failed && b.held == "detach" {
-				b.settle = b.o.Clock.After(lockSettle) // the lock may be starting
-				break
-			}
-			if !a.locked {
-				b.tell(false, b.held)
-				break
-			}
-			b.lockHeld()
+			b.lockAnswer(a)
 		case <-b.settle:
 			b.settle = nil
 			if b.held != "" {
@@ -294,6 +340,7 @@ func (b *bridge) ready(major int, v string, enabled chan<- bool) {
 	}
 	t := true
 	b.send(trayproto.Msg{Type: trayproto.TypeShell, Supported: &t})
+	b.supported = true
 	if !b.o.EnableOnce {
 		return
 	}
@@ -350,12 +397,27 @@ func (b *bridge) signal(s *dbus.Signal) (code int, end bool) {
 		owner, _ := s.Body[2].(string)
 		switch s.Body[0] {
 		case shellName:
+			prev := b.owner
 			b.owner = owner
 			if b.lapsed != "" && b.owner != b.lapsed {
 				b.lapsed = "" // the lapsed extension left the bus: forgotten (review I2)
 			}
-			if b.caller != "" && b.owner != b.caller {
+			left := prev != "" && owner != prev
+			switch {
+			case b.caller != "" && b.owner != b.caller:
 				b.detach("owner") // the shell went away or was replaced
+			case left && b.held != "":
+				// a detach held for a lock is told, when it is, as the shell's
+				// leaving (review H1)
+				b.held = "owner"
+			case left && b.supported && !b.told:
+				// no extension attached (it detached before, or never did): the
+				// main process still learns that no supported shell answers now,
+				// so a logout does not remove the gnome-panel-attached marker
+				// (review H1; design 6.4)
+				log.Print("GNOME Shell left the session bus")
+				f := false
+				b.send(trayproto.Msg{Type: trayproto.TypeShell, Attached: &f, Why: "owner"})
 			}
 		case screenShieldName:
 			b.saver = owner
@@ -437,9 +499,45 @@ func (b *bridge) detach(why string) {
 	if !b.told {
 		return
 	}
-	b.held, b.recheck, b.settle, b.settled = why, nil, nil, false
+	b.held, b.recheck, b.settle, b.settled, b.lockFails = why, nil, nil, false, 0
 	b.heldGen++
 	b.askLocked()
+}
+
+// lockAnswer handles GetActive's answer for a held detach. The detach is
+// told only when the screen saver says it is not active, or nobody owns
+// it (the shell left); a failed or unanswered ask is not "unlocked" (a
+// busy shell during a real lock must not bring the icons up): it is asked
+// again at the next recheck, and lockTries failures in a row tell it
+// (review H2). A Detach first answered "not active" waits lockSettle for
+// a lock that is starting.
+func (b *bridge) lockAnswer(a lockAnswer) {
+	if b.held == "" || a.gen != b.heldGen {
+		return // the extension attached again meanwhile, or a newer detach is held
+	}
+	if a.failed && b.saver == "" {
+		a.failed, a.noOwner = false, true // its owner left (NameOwnerChanged came first)
+	}
+	first := !b.settled
+	b.settled = true
+	switch {
+	case a.failed:
+		b.lockFails++
+		if b.lockFails >= lockTries {
+			log.Printf("the screen saver did not answer %d times in a row: the panel's absence is told", lockTries)
+			b.tell(false, b.held)
+			return
+		}
+		b.recheck = b.o.Clock.After(lockRecheck)
+	case a.locked:
+		b.lockFails = 0
+		b.lockHeld()
+	case first && !a.noOwner && b.held == "detach":
+		b.lockFails = 0
+		b.settle = b.o.Clock.After(lockSettle) // the lock may be starting
+	default:
+		b.tell(false, b.held)
+	}
 }
 
 // lockHeld: the screen is locked; the held detach waits for the unlock,
@@ -459,16 +557,38 @@ func (b *bridge) lockHeld() {
 func (b *bridge) askLocked() {
 	gen := b.heldGen
 	go func() {
-		c, cancel := context.WithTimeout(context.Background(), callTimeout)
+		c, cancel := context.WithTimeout(context.Background(), b.askTimeout)
 		defer cancel()
 		var locked bool
 		err := b.conn.Object(screenShieldName, screenSaverPath).CallWithContext(c, screenSaverIface+".GetActive",
 			dbus.FlagNoAutoStart).Store(&locked)
+		a := lockAnswer{gen: gen, locked: err == nil && locked}
+		switch name := dbusErrorName(err); {
+		case err == nil:
+		case name == "org.freedesktop.DBus.Error.ServiceUnknown" || name == "org.freedesktop.DBus.Error.NameHasNoOwner":
+			a.noOwner = true
+		default:
+			a.failed = true
+		}
 		select {
-		case b.locks <- lockAnswer{gen, err == nil && locked, err != nil}:
+		case b.locks <- a:
 		case <-b.done:
 		}
 	}()
+}
+
+// dbusErrorName is the D-Bus error name of err ("": none, or not a D-Bus
+// error such as a timeout).
+func dbusErrorName(err error) string {
+	var de dbus.Error
+	if errors.As(err, &de) {
+		return de.Name
+	}
+	var pde *dbus.Error
+	if errors.As(err, &pde) && pde != nil {
+		return pde.Name
+	}
+	return ""
 }
 
 // tell sends the main process whether the extension is attached.

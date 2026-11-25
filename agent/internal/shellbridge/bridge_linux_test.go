@@ -7,8 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -208,14 +206,6 @@ func call(c *dbus.Conn, method string, args ...any) *dbus.Call {
 }
 
 func (r *rig) call(method string, args ...any) *dbus.Call { return call(r.shell.Conn, method, args...) }
-
-func dbusErrorName(err error) string {
-	var de dbus.Error
-	if errors.As(err, &de) {
-		return de.Name
-	}
-	return ""
-}
 
 func isAttached(t *testing.T, m trayproto.Msg, want bool, why string) {
 	t.Helper()
@@ -432,15 +422,30 @@ func TestBusLossExits75(t *testing.T) {
 	}
 }
 
-// RF3: no address and no bus in the runtime folder: exit 75, and no bus is
-// ever started (a dbus-launch first in PATH records any run).
+// waitsOn waits until something waits on clk.
+func waitsOn(t *testing.T, clk *clock.Fake) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := clk.Next(); ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("nothing waits on the clock")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// RF3: no address and no bus in the runtime folder: the bridge waits for a
+// bus (it dials again every dialRetry: the lost-bus ruling of the 4b
+// re-review), ends with 0 at the end of its input, and no bus is ever
+// started (a dbus-launch first in PATH records any run).
 func TestBridgeNeverAutolaunches(t *testing.T) {
 	// A bridge broken to use the D-Bus library's own lookup would also find
 	// the user's bus at /run/user/<uid>/bus, whatever XDG_RUNTIME_DIR says:
 	// on a PC with such a bus the live part is left to CI runners.
-	if _, err := os.Stat(fmt.Sprintf("/run/user/%d/bus", os.Getuid())); err == nil && os.Getenv("GITHUB_ACTIONS") != "true" {
-		t.Skip("this PC has a user session bus: the live part runs on CI runners only")
-	}
+	fakeshell.SkipOnAUserBus(t)
 	bin := t.TempDir()
 	rec := filepath.Join(t.TempDir(), "ran")
 	must(t, os.WriteFile(filepath.Join(bin, "dbus-launch"), []byte("#!/bin/sh\necho \"$@\" >> "+rec+"\nexit 1\n"), 0o755))
@@ -453,14 +458,26 @@ func TestBridgeNeverAutolaunches(t *testing.T) {
 		{"XDG_RUNTIME_DIR": rt, "DBUS_SESSION_BUS_ADDRESS": "autolaunch:"},
 		{},
 	} {
+		clk := clock.NewFake(time.Date(2026, 11, 27, 19, 0, 0, 0, time.UTC))
+		inR, inW := io.Pipe()
 		code := make(chan int, 1)
 		go func() {
-			code <- Run(context.Background(), bufio.NewReader(strings.NewReader("")), io.Discard,
-				Options{Getenv: func(k string) string { return env[k] }, Home: t.TempDir()})
+			code <- Run(context.Background(), bufio.NewReader(inR), io.Discard,
+				Options{Getenv: func(k string) string { return env[k] }, Home: t.TempDir(), Clock: clk})
 		}()
+		for range 3 {
+			waitsOn(t, clk)
+			clk.Advance(dialRetry)
+		}
 		select {
 		case c := <-code:
-			if c != trayproto.ExitSessionLost {
+			t.Fatalf("%v: ended with %d while waiting for a bus", env, c)
+		case <-time.After(50 * time.Millisecond):
+		}
+		inW.Close()
+		select {
+		case c := <-code:
+			if c != trayproto.ExitOK {
 				t.Fatalf("%v: exit %d", env, c)
 			}
 		case <-time.After(10 * time.Second):
@@ -761,7 +778,7 @@ func TestLapsedCallerThatLeftIsForgotten(t *testing.T) {
 	r.clk.Advance(PingTimeout)
 	isAttached(t, r.next(), false, "ping")
 	r.shell.Leave(t)
-	r.none()
+	isAttached(t, r.next(), false, "owner") // no supported shell answers now (review H1)
 	reply, err := r.shell.Conn.RequestName(fakeshell.ShellName, dbus.NameFlagDoNotQueue)
 	must(t, err)
 	if reply != dbus.RequestNameReplyPrimaryOwner {
@@ -963,4 +980,164 @@ func TestDetachWithoutALockIsToldAfterTheSettle(t *testing.T) {
 
 	r.shell.Leave(t)
 	isAttached(t, r.next(), false, "owner")
+}
+
+// Review H1: once the bridge said a supported shell answers, the shell
+// leaving the bus is told even with no extension attached (it detached
+// before, or never attached): the main process then knows that no
+// supported shell answers and keeps the gnome-panel-attached marker
+// (design 6.4: the marker is not removed when a session ends). Before
+// supported:true nothing is told.
+func TestShellLeavingIsToldWithoutACaller(t *testing.T) {
+	// the extension detached first (the user turned it off), then the
+	// shell went
+	r := newRig(t, rigOptions{shell: shell46()})
+	r.ready("gnome46")
+	r.attached()
+	must(t, r.call("Detach").Err)
+	r.timerAt(lockSettle)
+	r.clk.Advance(lockSettle)
+	isAttached(t, r.next(), false, "detach")
+	r.shell.Leave(t)
+	isAttached(t, r.next(), false, "owner")
+	r.none()
+	// never attached
+	r2 := newRig(t, rigOptions{shell: shell46()})
+	r2.ready("gnome46")
+	r2.shell.Leave(t)
+	isAttached(t, r2.next(), false, "owner")
+	// no version yet: not supported yet, nothing told
+	r3 := newRig(t, rigOptions{shell: &fakeshell.Options{}})
+	r3.owned()
+	r3.waiter()
+	r3.shell.Leave(t)
+	r3.none()
+}
+
+// Review H1: a detach held for a lock and told after the shell left (the
+// session ended during the lock) says why "owner".
+func TestHeldDetachAfterTheShellLeftSaysOwner(t *testing.T) {
+	r := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", Locked: true}})
+	r.ready("gnome46")
+	r.attached()
+	r.clk.Advance(7 * time.Second) // timers of their own (none ends at a recheck)
+	must(t, r.call("Detach").Err)
+	r.timerAt(lockRecheck)
+	r.none()
+	r.shell.Leave(t)
+	r.shell.Release(t, fakeshell.ScreenShieldName)
+	r.none()
+	r.clk.Advance(lockRecheck)
+	isAttached(t, r.next(), false, "owner")
+	r.none()
+}
+
+// Review H2: while a detach is held for a lock, a GetActive that fails is
+// not taken as "unlocked": it is asked again at the next recheck; an
+// answer starts the count again; three failures in a row tell the detach.
+func TestFailedLockAskIsAskedAgain(t *testing.T) {
+	r := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", Locked: true}})
+	r.ready("gnome46")
+	r.attached()
+	r.clk.Advance(7 * time.Second)
+	r.shell.FailGetActive(1) // the Detach's own ask fails
+	must(t, r.call("Detach").Err)
+	r.timerAt(lockRecheck)
+	r.none()
+	r.clk.Advance(lockRecheck) // locked
+	r.timerAt(lockRecheck)
+	r.none()
+	r.shell.FailGetActive(2)
+	for range 3 { // fails, fails, locked
+		r.clk.Advance(lockRecheck)
+		r.timerAt(lockRecheck)
+	}
+	r.none()
+	r.shell.FailGetActive(3)
+	for range 2 {
+		r.clk.Advance(lockRecheck)
+		r.timerAt(lockRecheck)
+	}
+	r.none()
+	r.clk.Advance(lockRecheck) // the third failure in a row
+	isAttached(t, r.next(), false, "detach")
+	if n := r.shell.GetActives(); n != 8 {
+		t.Fatalf("%d GetActive calls, want 8", n)
+	}
+}
+
+// Review H2: a GetActive that is not answered in time counts as a failed
+// ask too (a busy shell during a real lock).
+func TestUnansweredLockAskIsAskedAgain(t *testing.T) {
+	old := lockAskTimeout
+	lockAskTimeout = 100 * time.Millisecond // read once by Run, before its first line
+	r := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", Locked: true}})
+	r.ready("gnome46")
+	lockAskTimeout = old
+	r.attached()
+	r.clk.Advance(7 * time.Second)
+	g := r.shell.HoldGetActive(t)
+	must(t, r.call("Detach").Err)
+	waitPending(t, g, 1)
+	r.timerAt(lockRecheck) // timed out: asked again then
+	r.none()
+	r.clk.Advance(lockRecheck)
+	waitPending(t, g, 2)
+	r.timerAt(lockRecheck)
+	r.none()
+	r.clk.Advance(lockRecheck)
+	waitPending(t, g, 3)
+	isAttached(t, r.next(), false, "detach")
+}
+
+// Review H4: a Detach from the extension whose Pings lapsed forgets it:
+// its later Ping or GetView attaches nothing; its Attach does.
+func TestDetachFromALapsedCallerForgetsIt(t *testing.T) {
+	r := newRig(t, rigOptions{shell: shell46()})
+	r.ready("gnome46")
+	r.attached()
+	r.clk.Advance(PingTimeout)
+	isAttached(t, r.next(), false, "ping")
+	must(t, r.call("Detach").Err)
+	must(t, r.call("Ping").Err)
+	must(t, r.call("GetView").Err)
+	r.none()
+	r.attached()
+}
+
+// Lost-bus ruling (4b re-review): a bridge started while its session bus
+// is gone (a logout the agent outlived) waits for it in the process, as
+// the icon helpers do, instead of ending with 75 again and again (five of
+// those stop it for minutes): it dials again every dialRetry, keeps the
+// views it gets meanwhile, and serves the bus that comes back at its
+// address.
+func TestBridgeWaitsForItsBus(t *testing.T) {
+	fakeshell.SkipOnAUserBus(t) // a broken dial would find the user's bus
+	addr := fakeshell.SocketIn(fakeshell.ShortDir(t))
+	r := &rig{t: t, clk: clock.NewFake(time.Date(2026, 11, 27, 19, 0, 0, 0, time.UTC)),
+		lines: make(chan trayproto.Msg, 64), code: make(chan int, 1), data: t.TempDir()}
+	r.env = map[string]string{"DBUS_SESSION_BUS_ADDRESS": addr, "XDG_RUNTIME_DIR": fakeshell.ShortDir(t), "XDG_DATA_HOME": r.data}
+	r.run(Options{Getenv: func(k string) string { return r.env[k] }, Home: t.TempDir(), Clock: r.clk})
+	for range 5 {
+		r.waiter()
+		r.clk.Advance(dialRetry)
+	}
+	r.none()
+	select {
+	case c := <-r.code:
+		t.Fatalf("ended with %d while waiting for its bus", c)
+	default:
+	}
+	r.say(trayproto.Msg{Type: trayproto.TypeView, Panel: combinedPanel()})
+	r.bus = fakeshell.NewBus(t, addr)
+	r.shell = fakeshell.Start(t, addr, *shell46())
+	r.waiter()
+	r.clk.Advance(dialRetry)
+	r.ready("gnome46")
+	var view string
+	must(t, r.call("GetView").Store(&view))
+	if !strings.HasPrefix(view, `{"serial":1,`) {
+		t.Fatalf("the view got while waiting: %s", view)
+	}
+	r.attached()
 }
