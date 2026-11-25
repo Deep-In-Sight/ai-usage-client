@@ -167,6 +167,8 @@ type Shell struct {
 	locked    bool
 	notices   []string
 	gate      *ActiveGate // GetActive waits on it (nil: answers at once)
+	onCall    func(call string)
+	disableEr bool
 }
 
 // Options say how the shell answers.
@@ -177,6 +179,12 @@ type Options struct {
 	Locked    bool   // what GetActive answers at first
 	// Names it owns (nil: all four)
 	Names []string
+	// OnCall, when set, is called with each extension call as it comes
+	// ("DisableExtension uuid"), before it is answered.
+	OnCall func(call string)
+	// DisableFails: DisableExtension answers an error, as GNOME 46 once
+	// did although it had turned the extension off (stage 0, Z3).
+	DisableFails bool
 }
 
 // Start connects a shell to the bus at addr; it leaves the bus when the
@@ -188,7 +196,7 @@ func Start(t testing.TB, addr string, o Options) *Shell {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	s := &Shell{Conn: conn, enableOK: o.EnableOK, disableOK: o.DisableOK, locked: o.Locked}
+	s := &Shell{Conn: conn, enableOK: o.EnableOK, disableOK: o.DisableOK, locked: o.Locked, onCall: o.OnCall, disableEr: o.DisableFails}
 	must := func(err error) {
 		t.Helper()
 		if err != nil {
@@ -296,17 +304,30 @@ func (g *ActiveGate) Open() { g.once.Do(func() { close(g.open) }) }
 type extensions struct{ s *Shell }
 
 func (e extensions) EnableExtension(uuid string) (bool, *dbus.Error) {
+	e.s.call("EnableExtension " + uuid)
 	e.s.mu.Lock()
 	defer e.s.mu.Unlock()
-	e.s.calls = append(e.s.calls, "EnableExtension "+uuid)
 	return e.s.enableOK, nil
 }
 
 func (e extensions) DisableExtension(uuid string) (bool, *dbus.Error) {
+	e.s.call("DisableExtension " + uuid)
 	e.s.mu.Lock()
 	defer e.s.mu.Unlock()
-	e.s.calls = append(e.s.calls, "DisableExtension "+uuid)
+	if e.s.disableEr {
+		return false, dbus.NewError("org.freedesktop.DBus.Error.NoReply", []any{"Message recipient disconnected from message bus without replying"})
+	}
 	return e.s.disableOK, nil
+}
+
+func (s *Shell) call(c string) {
+	s.mu.Lock()
+	s.calls = append(s.calls, c)
+	f := s.onCall
+	s.mu.Unlock()
+	if f != nil {
+		f(c)
+	}
 }
 
 type screenSaver struct{ s *Shell }

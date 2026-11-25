@@ -228,6 +228,14 @@ func install(env Env, args []string) (int, string) {
 		fmt.Fprintln(env.Stderr, "ai-usage install: notice marker:", err)
 	}
 
+	// 6b: the usage panel's GNOME extension, for a shell that answers now
+	// (design 6.6), before the new agent (and its bridge, which writes it
+	// too) starts.
+	panelFirst := false
+	if goos == "linux" && !headless {
+		panelFirst = installPanelExtension(env)
+	}
+
 	// 7: autostart and start.
 	code := exitOK
 	registered := false
@@ -327,6 +335,9 @@ func install(env Env, args []string) (int, string) {
 	}
 	if line := text.Installed(goos, headless); line != "" {
 		fmt.Fprintln(env.Stdout, line)
+	}
+	if panelFirst {
+		fmt.Fprintln(env.Stdout, text.PanelAfterRelogin)
 	}
 	if goos == "linux" {
 		ext := filepath.Join(env.Dirs.Home, ".local", "share", "gnome-shell", "extensions", "claude-usage@localhost")

@@ -42,9 +42,11 @@ func removalSteps(goos string, inProcess bool) []string {
 		// bootout ends this process, so it comes last.
 		return []string{"stop-helpers", "stop-engine", "notify-server", "unlock", "remove-plist", "remove-data", "bootout-self"}
 	case !inProcess:
-		return []string{"stop", "kill", "notify-server", "unregister-autostart", "remove-exe", "remove-data"}
+		return []string{"stop", "kill", "notify-server", "unregister-autostart", "remove-exe", "remove-gnome-extension", "remove-data"}
 	}
-	return []string{"stop-helpers", "stop-engine", "notify-server", "unlock", "unregister-autostart", "remove-exe", "remove-data"}
+	// Linux: the usage panel's GNOME extension goes before the data folder
+	// (drawn-panel design 6.6).
+	return []string{"stop-helpers", "stop-engine", "notify-server", "unlock", "unregister-autostart", "remove-exe", "remove-gnome-extension", "remove-data"}
 }
 
 // notifyTimeout bounds the uninstall sync: removal waits for it this long
@@ -164,6 +166,8 @@ func (r *remover) step(name string) error {
 		}
 	case "remove-install-dir":
 		_ = os.Remove(filepath.Dir(env.Dirs.InstallExe)) // only when empty
+	case "remove-gnome-extension":
+		return removePanelExtension(env)
 	case "remove-data":
 		// Only ever remove our own folder.
 		switch filepath.Base(env.Dirs.Data) {

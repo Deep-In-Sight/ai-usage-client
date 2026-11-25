@@ -18,6 +18,11 @@ exe="$HOME/.local/bin/ai-usage"
 data="$HOME/.config/ai-usage"
 unit="$HOME/.config/systemd/user/ai-usage.service"
 desktop="$HOME/.config/autostart/ai-usage.desktop"
+# the usage panel's GNOME extension (drawn-panel design 6.6) and its
+# staging folders: nothing writes them on these sessions without GNOME
+# Shell, so the uninstall check plants a copy for removal to delete
+gshell="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell"
+panel_dir="$gshell/extensions/ai-usage-panel@localhost"
 oneliner() { timeout 180 sh -c "wget -qO- $BASE/files/install-ci.sh | sh"; }
 agent_count() { pgrep -f "^$exe run" | wc -l; }
 main_pid() { systemctl --user show -p MainPID --value ai-usage.service 2>/dev/null; }
@@ -100,14 +105,17 @@ else
   fail upgrade.in_place "rc=$rc pid $pid -> $pid2 processes=$n device_same=$([ "$device2" = "$device" ] && echo yes || echo no) syncs $before -> $(dev "$device" syncs)"
 fi
 
-# uninstall
+# uninstall (also of a panel extension left from a GNOME session, with a
+# staging folder of an interrupted write)
+mkdir -p "$panel_dir" "$gshell/.ai-usage-panel.new-4242"
+printf '{"uuid": "ai-usage-panel@localhost"}\n' > "$panel_dir/metadata.json"
 "$exe" uninstall > "$out/uninstall.log" 2>&1
 rc=$?
 sleep 2
 n=$(agent_count)
 ev=$(dev "$device" uninstall_events)
-if [ $rc -eq 0 ] && [ ! -e "$unit" ] && [ ! -e "$exe" ] && [ ! -e "$data" ] && [ "$n" -eq 0 ] && [ "$ev" = 1 ]; then pass uninstall "rc=0, server told once"
-else fail uninstall "rc=$rc unit=$([ -e "$unit" ] && echo left) exe=$([ -e "$exe" ] && echo left) data=$([ -e "$data" ] && echo left) processes=$n uninstall_events=$ev"; fi
+if [ $rc -eq 0 ] && [ ! -e "$unit" ] && [ ! -e "$exe" ] && [ ! -e "$data" ] && [ ! -e "$panel_dir" ] && [ ! -e "$gshell/.ai-usage-panel.new-4242" ] && [ "$n" -eq 0 ] && [ "$ev" = 1 ]; then pass uninstall "rc=0, server told once, panel extension removed"
+else fail uninstall "rc=$rc unit=$([ -e "$unit" ] && echo left) exe=$([ -e "$exe" ] && echo left) data=$([ -e "$data" ] && echo left) panel=$([ -e "$panel_dir" ] && echo left) staging=$([ -e "$gshell/.ai-usage-panel.new-4242" ] && echo left) processes=$n uninstall_events=$ev"; fi
 
 # desktop.fallback_headless: a desktop session whose bus is gone
 XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=GNOME DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent oneliner > "$out/install-desktop.log" 2>&1
@@ -126,6 +134,7 @@ headless_now || problems="$problems mode=$(dev "$device3" last_mode)"
 "$exe" uninstall > "$out/uninstall-desktop.log" 2>&1 || problems="$problems uninstall_rc=$?"
 sleep 2
 [ ! -e "$desktop" ] || problems="$problems desktop_file_left"
+[ ! -e "$panel_dir" ] || problems="$problems panel_extension_left"
 [ "$(agent_count)" -eq 0 ] || problems="$problems processes_after_uninstall=$(agent_count)"
 if [ -z "$problems" ]; then pass desktop.fallback_headless "xdg-autostart, headless"; else fail desktop.fallback_headless "$problems"; fi
 

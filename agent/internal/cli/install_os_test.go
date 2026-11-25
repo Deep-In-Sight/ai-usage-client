@@ -254,8 +254,10 @@ func TestRemovalSteps(t *testing.T) {
 		{"windows", true, []string{"stop-helpers", "stop-engine", "notify-server", "unlock", "unregister-autostart", "unregister-app", "remove-exe", "remove-install-dir", "remove-data"}},
 		{"darwin", false, []string{"stop", "kill", "notify-server", "unregister-autostart", "remove-data"}},
 		{"darwin", true, []string{"stop-helpers", "stop-engine", "notify-server", "unlock", "remove-plist", "remove-data", "bootout-self"}},
-		{"linux", false, []string{"stop", "kill", "notify-server", "unregister-autostart", "remove-exe", "remove-data"}},
-		{"linux", true, []string{"stop-helpers", "stop-engine", "notify-server", "unlock", "unregister-autostart", "remove-exe", "remove-data"}},
+		// Linux: the GNOME panel extension is turned off and deleted
+		// before the data folder goes (drawn-panel design 6.6)
+		{"linux", false, []string{"stop", "kill", "notify-server", "unregister-autostart", "remove-exe", "remove-gnome-extension", "remove-data"}},
+		{"linux", true, []string{"stop-helpers", "stop-engine", "notify-server", "unlock", "unregister-autostart", "remove-exe", "remove-gnome-extension", "remove-data"}},
 	}
 	for _, c := range cases {
 		eq(t, removalSteps(c.goos, c.inProcess), c.want)
