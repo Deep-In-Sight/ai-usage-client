@@ -118,7 +118,7 @@ func TestPanelRowsMatchMenu(t *testing.T) {
 	for name, change := range map[string]func(*tray.MenuInputs){
 		"combined": func(*tray.MenuInputs) {}, "no 5-hour": noFive, "no Fable": noFable,
 		"no 5-hour, no Fable": func(in *tray.MenuInputs) { noFable(in); noFive(in) },
-		"codex 3": codexRows(3), "codex 4": codexRows(4), "codex 6": codexRows(6), "claude expired": expired,
+		"codex 3":             codexRows(3), "codex 4": codexRows(4), "codex 6": codexRows(6), "claude expired": expired,
 	} {
 		t.Run(name, func(t *testing.T) {
 			in := panelfixture.Combined()

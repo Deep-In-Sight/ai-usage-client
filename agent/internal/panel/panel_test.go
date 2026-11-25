@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"bytes"
 	"encoding/json"
 	"image/color"
 	"os"
@@ -163,6 +164,27 @@ func TestBarPixels(t *testing.T) {
 	}
 }
 
+// A bar without width or height is an empty picture (review m2: one
+// negative side used to panic in make).
+func TestBarPixelsEmpty(t *testing.T) {
+	for _, wh := range [][2]int{{0, 8}, {300, 0}, {-1, 8}, {300, -1}, {-1, -1}, {0, 0}} {
+		if b := BarPixels(wh[0], wh[1], 4, Normal, Track); len(b) != 0 {
+			t.Fatalf("BarPixels(%d, %d) has %d bytes", wh[0], wh[1], len(b))
+		}
+	}
+}
+
+// A fill outside [0, w] is clamped: below 0 it is none, past w the whole
+// bar (review m5).
+func TestBarPixelsClampsTheFill(t *testing.T) {
+	const w, h = 300, 8
+	for _, c := range [][2]int{{-5, 0}, {w + 40, w}} {
+		if !bytes.Equal(BarPixels(w, h, c[0], Normal, Track), BarPixels(w, h, c[1], Normal, Track)) {
+			t.Fatalf("fill %d is not drawn as fill %d", c[0], c[1])
+		}
+	}
+}
+
 func TestDim(t *testing.T) {
 	white := color.NRGBA{0xff, 0xff, 0xff, 0xff}
 	got := Dim(white, color.NRGBA{0x2b, 0x2b, 0x2b, 0xff})
@@ -231,6 +253,10 @@ func TestMetricsScale(t *testing.T) {
 		120: {Width: 400, Header: 40, Problem: 35, Row: 80, Pad: 15, Bar: 10},
 		144: {Width: 480, Header: 48, Problem: 42, Row: 96, Pad: 18, Bar: 12},
 		192: {Width: 640, Header: 64, Problem: 56, Row: 128, Pad: 24, Bar: 16},
+		// DPIs that do not scale every value exactly: halves round up,
+		// the rest to the nearest (review m4)
+		108: {Width: 360, Header: 36, Problem: 32, Row: 72, Pad: 14, Bar: 9}, // 31.5, 13.5
+		100: {Width: 333, Header: 33, Problem: 29, Row: 67, Pad: 13, Bar: 8}, // 333.3, 29.2, 66.7, 12.5, 8.3
 	} {
 		if got := MetricsAt(dpi); got != want {
 			t.Fatalf("MetricsAt(%d) = %+v, want %+v", dpi, got, want)

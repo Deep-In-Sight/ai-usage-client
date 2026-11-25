@@ -549,7 +549,7 @@ func TestTwoHelpersShowOneMenu(t *testing.T) {
 	for !reflect.DeepEqual(c.lastView().Items, n.lastView().Items) || !reflect.DeepEqual(c.lastView().Panel, n.lastView().Panel) ||
 		itemText(n.lastView(), "server") == text.Connecting {
 		if time.Now().After(deadline) {
-			t.Fatalf("menus differ:\n%+v\n%+v", c.lastView().Items, n.lastView().Items)
+			t.Fatalf("menus differ:\n%+v\n%+v\npanels:\n%+v\n%+v", c.lastView().Items, n.lastView().Items, c.lastView().Panel, n.lastView().Panel)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

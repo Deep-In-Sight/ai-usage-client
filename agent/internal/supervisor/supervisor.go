@@ -218,20 +218,51 @@ func (s *Supervisor) Want(ids []provider.ID) {
 // (design 6.5: a Linux icon helper ignores the panel), and each helper's
 // own icon, title and tooltip. Only what changed is sent. A change tries a
 // stopped helper again (at most once a minute): the user has no icon to
-// click. panel (nil: none) is not changed after the call.
+// click. panel (nil: none) is copied: the caller may change its own
+// afterwards.
 func (s *Supervisor) Show(items []trayproto.Item, icons map[provider.ID]IconView, panel *trayproto.Panel) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	changed := !reflect.DeepEqual(items, s.items) || !reflect.DeepEqual(icons, s.icons) || !reflect.DeepEqual(panel, s.panel)
 	s.items = slices.Clone(items)
 	s.icons = icons
-	s.panel = panel
+	s.panel = clonePanel(panel)
 	for _, sl := range s.slots {
 		s.sendView(sl)
 		if changed {
 			s.probe(sl, "what it shows changed")
 		}
 	}
+}
+
+// clonePanel is a deep copy of p (nil stays nil, an empty list stays
+// empty): nothing in it is shared with p.
+func clonePanel(p *trayproto.Panel) *trayproto.Panel {
+	if p == nil {
+		return nil
+	}
+	c := *p
+	c.Sections = slices.Clone(p.Sections)
+	for i := range c.Sections {
+		c.Sections[i].Rows = slices.Clone(c.Sections[i].Rows)
+		for j := range c.Sections[i].Rows {
+			c.Sections[i].Rows[j].Percent = cloneFloat(c.Sections[i].Rows[j].Percent)
+		}
+	}
+	c.Actions = slices.Clone(p.Actions)
+	c.Top = slices.Clone(p.Top)
+	for i := range c.Top {
+		c.Top[i].Percent = cloneFloat(c.Top[i].Percent)
+	}
+	return &c
+}
+
+func cloneFloat(f *float64) *float64 {
+	if f == nil {
+		return nil
+	}
+	v := *f
+	return &v
 }
 
 // Notice is shown once, by the first helper (when its icon is up).

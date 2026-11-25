@@ -47,8 +47,12 @@ func covered(x, y, length, h int) int {
 // premultiplied blue, green, red, alpha, the top row first (a Windows
 // AlphaBlend source; macOS and the tests read it the same way). Both the
 // track and the fill have fully rounded ends (radius h/2); an edge pixel's
-// alpha is the share of it covered.
+// alpha is the share of it covered. A bar without width or height is an
+// empty picture.
 func BarPixels(w, h, fill int, bar, track color.NRGBA) []byte {
+	if w <= 0 || h <= 0 {
+		return []byte{}
+	}
 	out := make([]byte, w*h*4)
 	fill = min(max(fill, 0), w)
 	const all = sub * sub

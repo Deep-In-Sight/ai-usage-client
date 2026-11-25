@@ -507,6 +507,49 @@ func TestPanelGoesIntoEveryView(t *testing.T) {
 	}
 }
 
+// Show keeps its own copy of the panel: a caller that changes its panel
+// afterwards and shows it again has the change sent (review m7).
+func TestShowKeepsItsOwnPanel(t *testing.T) {
+	h := newHarness(t)
+	items := []trayproto.Item{{ID: "quit", Text: "Quit", Enabled: true, Visible: true}}
+	icons := map[provider.ID]IconView{provider.Claude: {Title: "42%"}}
+	pc := func(v float64) *float64 { return &v }
+	panel := &trayproto.Panel{Serial: 1, Server: "Server connected", Sections: []trayproto.PanelSection{
+		{Provider: "claude", Rows: []trayproto.PanelRow{{ID: "r.claude.0", Percent: pc(42)}}}}}
+	h.sup.Show(items, icons, panel)
+	h.sup.Want([]provider.ID{provider.Claude})
+	a := h.spawned()
+	if m := a.next(t); m.Panel == nil || m.Panel.Server != "Server connected" {
+		t.Fatalf("got %+v", m)
+	}
+	*panel.Sections[0].Rows[0].Percent = 43 // the caller's own panel, deep inside
+	h.sup.Show(items, icons, panel)
+	if m := a.next(t); m.Panel == nil || *m.Panel.Sections[0].Rows[0].Percent != 43 {
+		t.Fatalf("got %+v", m)
+	}
+	panel.Server = "Server not reachable"
+	h.sup.Show(items, icons, panel)
+	if m := a.next(t); m.Panel == nil || m.Panel.Server != "Server not reachable" {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+// A stopped helper is tried again when only the panel changed (the
+// panel's part of "what it shows changed", review m6).
+func TestStoppedHelperRetriesWhenOnlyThePanelChanges(t *testing.T) {
+	h := newHarness(t)
+	items := []trayproto.Item{{ID: "quit", Text: "Quit", Enabled: true, Visible: true}}
+	icons := map[provider.ID]IconView{provider.Claude: {Title: "42%"}}
+	h.sup.Show(items, icons, &trayproto.Panel{Serial: 1, Server: "Server connected"})
+	h.sup.Want([]provider.ID{provider.Claude})
+	h.failUntilStopped(h.spawned())
+	h.clk.Advance(time.Minute)
+	h.sup.Show(items, icons, &trayproto.Panel{Serial: 1, Server: "Server connected"}) // equal: nothing
+	h.noSpawn()
+	h.sup.Show(items, icons, &trayproto.Panel{Serial: 2, Server: "Server not reachable"})
+	_ = h.spawned()
+}
+
 func TestEventsAndAnyReady(t *testing.T) {
 	h := newHarness(t)
 	h.sup.Want([]provider.ID{provider.Claude, provider.Codex})

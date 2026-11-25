@@ -30,6 +30,23 @@ jobs:
           cache-dependency-path: agent/go.sum
       - name: vet
         run: go vet ./...
+      - name: gofmt
+        # Every Go file under agent/ is as gofmt writes it, except the
+        # systray copy, which stays byte for byte upstream plus its patch
+        # and is never formatted. Each file that is not becomes an
+        # annotation with gofmt's diff (readable without a token).
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          bad=$(find . -path ./third_party -prune -o -name '*.go' -print | sort | xargs gofmt -l)
+          [ -z "$bad" ] && exit 0
+          echo "::error title=gofmt::$(echo "$bad" | wc -l) file(s) not formatted"
+          for f in $bad; do
+            d=$(gofmt -d "$f" | head -80 || true) # gofmt -d exits 1 on a difference
+            d=${d//'%'/'%25'}; d=${d//$'\r'/'%0D'}; d=${d//$'\n'/'%0A'}
+            echo "::error file=agent/${f#./},title=gofmt::$d"
+          done
+          exit 1
       - name: test
         shell: bash
         run: |
