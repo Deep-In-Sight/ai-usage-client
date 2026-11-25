@@ -47,8 +47,12 @@
 #   panel.session_end      what the bridge sees when the session ends: the
 #                          shell ended (SIGTERM) and 5 s later the bus
 # PHASE 2 (the next session, same folders):
-#   panel.relogin          the agent of the last session logs in again: no
-#                          icon helper before the panel attaches
+#   panel.relogin_same_agent the agent of the last session, its bus gone:
+#                          its bridge finds the new bus and the panel
+#                          attaches within 15 s of the shell (lost-bus
+#                          ruling, 4b fix round 2)
+#   panel.relogin          a new agent logs in again (autostart): no icon
+#                          helper before the panel attaches
 #   panel.remove           uninstall: the shell turns it off, the folder
 #                          goes, nothing of the agent is left
 # Each verdict is a line of out/panel-results.txt (the workflow's
@@ -691,7 +695,21 @@ fi
 # session is still running (its bus is gone), autostart starts another
 end=$(cat "$out/end-$LABEL.t0" 2>/dev/null)
 res "panel.session_end fact ($LABEL): the bridge in agent.log since: $(awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\]|usage panel' | head -n 8 | cut -c12- | tr '\n' ';' | cut -c1-700)"
+a0=$(attaches)
 start_shell || { verdict panel.relogin " shell_did_not_start" ""; finish; exit 1; }
+# the agent of the last session: its bridge has waited for a bus since its
+# own went (it dials again every 2 s); this session's bus is at the runtime
+# folder's address, where it looks
+t0=$(now)
+same=$(pgrep -f "^$exe run" | tr '\n' ' ')
+again() { [ "$(attaches)" -gt "$a0" ] && [ "$(state)" = "1|" ] && is_visible; }
+wait_ms 30 again
+ts=$(since "$t0")
+p=""
+[ -n "$same" ] || p=" no_agent_of_the_last_session"
+again || p="$p not_attached"
+python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) <= 15 else 1)" "$ts" || p="$p after_${ts}s"
+verdict panel.relogin_same_agent "$p" "the agent of the last session (pid $(echo $same)) attached ${ts}s after the shell answered; its bridge: $(awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\] (.*waiting for the session bus|the session bus is there|GNOME Shell [0-9]|the panel extension attached)' | head -n 4 | cut -c12- | tr '\n' ';' | cut -c1-500)"
 : > "$out/relogin-icons-$LABEL.txt"
 old=" $(pgrep -f "^$exe run" | tr '\n' ' ') "
 t0=$(now)

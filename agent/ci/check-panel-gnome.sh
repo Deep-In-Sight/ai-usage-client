@@ -97,16 +97,28 @@ work=$(mktemp -d "$RUNNER_TEMP/gp.XXXXXX")
 phome="$work/h"
 mkdir -p "$phome" "$work/config" "$work/cache" "$work/data" "$work/run"
 chmod 700 "$work/run"
-# phase 1: one session; phase 2: the next one (same folders, a new bus)
-session() {
+# phase 1: one session; phase 2: the next one (same folders, a new bus).
+# Phase 1's bus is dbus-run-session's; phase 2's is at the runtime
+# folder's address ($XDG_RUNTIME_DIR/bus, where systemd puts the user's
+# bus), where the agent of phase 1, whose own address died with its bus,
+# finds it (sessionbus.Address), as at a next login on a real PC.
+bus2=""
+# the private session's environment (phase 2's bus is started in it too:
+# the services it starts on demand, such as dconf, see these folders)
+senv() {
   env -i HOME="$phome" USER="$(id -un)" LANG=C.UTF-8 PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin \
     XDG_CONFIG_HOME="$work/config" XDG_DATA_HOME="$work/data" XDG_RUNTIME_DIR="$work/run" XDG_CACHE_HOME="$work/cache" \
     XDG_DATA_DIRS=/usr/share/ubuntu:/usr/share/gnome:/usr/local/share:/usr/share \
     XDG_CURRENT_DESKTOP=ubuntu:GNOME XDG_SESSION_TYPE=wayland ${sid:+XDG_SESSION_ID="$sid"} \
-    GITHUB_ACTIONS=true RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}" \
-    CI_DIST="$CI_DIST" CI_BIN="$CI_BIN" CI_SCRIPTS="$CI_SCRIPTS" PANEL_PRIVATE=1 PHASE="$1" FAKEGDM_PID="$gdm_pid" \
+    ${bus2:+DBUS_SESSION_BUS_ADDRESS="$bus2"} \
+    GITHUB_ACTIONS=true RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}" "$@"
+}
+session() {
+  local run=(dbus-run-session --)
+  [ -n "$bus2" ] && run=()
+  senv CI_DIST="$CI_DIST" CI_BIN="$CI_BIN" CI_SCRIPTS="$CI_SCRIPTS" PANEL_PRIVATE=1 PHASE="$1" FAKEGDM_PID="$gdm_pid" \
     LABEL="$label" MAJOR="$major" FORM="$form" FLAGS="$flags" APPIND="$appind" SHELL_VERSION="$ver" \
-    timeout 1800 dbus-run-session -- bash "$here/panel-session.sh" > "$out/session-$1.log" 2>&1
+    timeout 1800 "${run[@]}" bash "$here/panel-session.sh" > "$out/session-$1.log" 2>&1
 }
 session 1
 # phase 1 ends its bus itself (what the bridge sees of a session's end):
@@ -117,9 +129,18 @@ rc1=$(cat "$out/phase1.status" 2>/dev/null || echo 1)
 grep -E '^::(error|notice)' "$out/session-1.log"
 rc2=1
 if [ -e "$out/phase1.done" ]; then
-  session 2
-  rc2=$?
-  grep -E '^::(error|notice)' "$out/session-2.log"
+  rm -f "$work/run/bus"
+  senv dbus-daemon --session --nofork --address="unix:path=$work/run/bus" > "$out/bus-2.log" 2>&1 &
+  bus2_pid=$!
+  if wait_for 10 test -S "$work/run/bus"; then
+    bus2="unix:path=$work/run/bus"
+    session 2
+    rc2=$?
+    grep -E '^::(error|notice)' "$out/session-2.log"
+  else
+    echo "::error title=panel-gnome::phase 2's session bus did not start ($(head -c 300 "$out/bus-2.log"))"
+  fi
+  kill "$bus2_pid" 2>/dev/null
 fi
 # nothing of the sessions may outlive them: the agent, its helpers, the shell
 pkill -f "^$phome/.local/bin/ai-usage" 2>/dev/null

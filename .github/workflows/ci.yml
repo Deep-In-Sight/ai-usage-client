@@ -83,6 +83,9 @@ jobs:
             exit 1
           }
       - name: test
+        # Linux runs the whole module under the race detector instead (the
+        # next step).
+        if: runner.os != 'Linux'
         shell: bash
         run: |
           # Failures also become annotations, which can be read without a token.
@@ -92,29 +95,30 @@ jobs:
               head -10 | sed -E 's/^[[:space:]]*/::error title=go test::/'
             exit 1
           }
-      - name: session bus tests (-race)
-        # The packages whose tests start a private dbus-daemon (the GNOME
-        # bridge, the shell calls, the tray helper's bus watch, notifications, the fake
-        # panel) under the race detector (review I3). On CI a missing
-        # dbus-daemon fails them instead of skipping (fakeshell.Daemon).
-        # The counts become a notice, failures annotations: both readable
+      - name: test (-race)
+        # The whole module under the race detector, with the tests that
+        # start a private dbus-daemon (the GNOME bridge, the shell calls,
+        # the tray helper's bus watch, notifications, the install's GNOME
+        # steps, the fake panel and display manager): reviews I3 and 4b
+        # fix round 2. On CI a missing dbus-daemon fails those tests
+        # instead of skipping (fakeshell.Daemon). The counts (top-level
+        # tests) become a notice, failures annotations: both readable
         # without a token.
         if: runner.os == 'Linux'
         shell: bash
         run: |
           rc=0
-          go test -race -count=1 -v ./internal/shellbridge ./internal/gnomeext ./internal/fakeshell \
-            ./internal/trayhelper ./internal/notify ./tools/fakepanel > "$RUNNER_TEMP/bus-race.log" 2>&1 || rc=$?
-          pass=$(grep -c -E '^--- PASS' "$RUNNER_TEMP/bus-race.log" || true)
-          fail=$(grep -c -E '^--- FAIL' "$RUNNER_TEMP/bus-race.log" || true)
-          skip=$(grep -c -E '^--- SKIP' "$RUNNER_TEMP/bus-race.log" || true)
-          races=$(grep -c 'WARNING: DATA RACE' "$RUNNER_TEMP/bus-race.log" || true)
-          echo "::notice title=session bus tests (-race)::$((pass + fail)) run, $pass passed, $fail failed, $skip skipped, $races data races"
-          grep -B1 -E -- '^--- SKIP' "$RUNNER_TEMP/bus-race.log" | grep -E '_test\.go:[0-9]+:' | head -5 | sed -E 's/^[[:space:]]*/::notice title=skipped::/' || true
+          go test -race -count=1 -v ./... > "$RUNNER_TEMP/race.log" 2>&1 || rc=$?
+          pass=$(grep -c -E '^--- PASS' "$RUNNER_TEMP/race.log" || true)
+          fail=$(grep -c -E '^--- FAIL' "$RUNNER_TEMP/race.log" || true)
+          skip=$(grep -c -E '^--- SKIP' "$RUNNER_TEMP/race.log" || true)
+          races=$(grep -c 'WARNING: DATA RACE' "$RUNNER_TEMP/race.log" || true)
+          echo "::notice title=test (-race)::$((pass + fail)) run, $pass passed, $fail failed, $skip skipped, $races data races"
+          grep -B1 -E -- '^--- SKIP' "$RUNNER_TEMP/race.log" | grep -E '_test\.go:[0-9]+:' | head -8 | sed -E 's/^[[:space:]]*/::notice title=skipped::/' || true
           if [ "$rc" -ne 0 ]; then
-            grep -E -- '^[[:space:]]*(--- FAIL|panic:)|_test\.go:[0-9]+:|WARNING: DATA RACE' "$RUNNER_TEMP/bus-race.log" |
-              head -10 | sed -E 's/^[[:space:]]*/::error title=session bus tests::/'
-            tail -30 "$RUNNER_TEMP/bus-race.log"
+            grep -E -- '^[[:space:]]*(--- FAIL|panic:)|_test\.go:[0-9]+:|WARNING: DATA RACE|^FAIL' "$RUNNER_TEMP/race.log" |
+              head -10 | sed -E 's/^[[:space:]]*/::error title=go test -race::/'
+            tail -30 "$RUNNER_TEMP/race.log"
             exit 1
           fi
       - name: patched systray copy
