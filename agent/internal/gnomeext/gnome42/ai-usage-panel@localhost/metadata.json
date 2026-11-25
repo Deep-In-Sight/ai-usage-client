@@ -1,0 +1,6 @@
+{
+  "uuid": "ai-usage-panel@localhost",
+  "name": "AI Usage Panel",
+  "description": "Shows the AI Usage agent's usage panel in the top bar. The numbers come from the AI Usage agent on this PC; this extension makes no requests.",
+  "shell-version": ["42"]
+}

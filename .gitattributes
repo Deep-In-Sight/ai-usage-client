@@ -11,3 +11,5 @@ agent/internal/tray/testdata/** -text
 # The usage panel's GNOME extension: tools/mkext generates the agent's
 # embedded copies from it, which are compared byte for byte.
 gnome-extension/** -text
+agent/internal/gnomeext/gnome42/** -text
+agent/internal/gnomeext/gnome46/** -text

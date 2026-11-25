@@ -7,7 +7,7 @@
 import GLib from 'gi://GLib';
 
 import {
-    PROTOCOL, clickable, fillWidth, isDarkBackground, levelClass, parseView, useOrientation,
+    PROTOCOL, clickable, fillWidth, isDarkBackground, isEmpty, levelClass, parseView, useOrientation,
 } from '../ai-usage-panel@localhost/view.js';
 
 const here = GLib.path_get_dirname(GLib.filename_from_uri(import.meta.url)[0]);
@@ -119,6 +119,18 @@ equal(PROTOCOL, 1, 'protocol');
         {provider: '', text: '', percent: null, level: 'none', stale: false},
     ], 'top');
     equal(parseView('{"sections": [{"rows": [{"percent": 50}]}]}').sections[0].rows[0].percent, 50, 'a number stays');
+}
+
+// -- isEmpty: the bridge's panel before the agent's first view
+{
+    equal(isEmpty(parseView('{}')), true, 'an empty object');
+    // what Go's json.Marshal of an empty trayproto.Panel gives
+    equal(isEmpty(parseView('{"serial":0,"new_version":"","sections":null,"prompt":"","server":"","actions":null,"top":null}')),
+        true, 'an empty panel');
+    equal(isEmpty(parseView(golden)), false, 'the golden view');
+    equal(isEmpty(parseView('{"prompt": "Sign in to Claude Code or Codex"}')), false, 'a prompt alone');
+    equal(isEmpty(parseView('{"sections": [{"provider": "claude"}], "actions": null}')), false, 'a section without actions');
+    equal(isEmpty(parseView('{"actions": [{"id": "quit", "text": "Quit"}]}')), false, 'actions alone');
 }
 
 // -- fillWidth: the table the Go test reads (plan PR-18, pre-flight F12)

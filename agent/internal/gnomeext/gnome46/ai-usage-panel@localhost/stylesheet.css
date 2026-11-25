@@ -1,0 +1,77 @@
+/* AI Usage Panel. Sizes and colours from the original extension
+   (claude-usage@localhost/stylesheet.css), class names prefixed ai-usage-. */
+
+/* Top bar: [Clawd] 42%  [ring] 100% */
+.ai-usage-top {
+    spacing: 10px;
+}
+
+.ai-usage-pill {
+    spacing: 4px;
+}
+
+/* The panel: a header per provider, then its limit rows */
+.ai-usage-section {
+    spacing: 4px;
+}
+
+.ai-usage-header {
+    spacing: 8px;
+}
+
+.ai-usage-name {
+    font-weight: bold;
+}
+
+.ai-usage-small {
+    font-size: 0.88em;
+}
+
+/* the problem line: amber on a dark menu, dark amber on a light one */
+.ai-usage-problem {
+    color: #f5c211;
+    max-width: 300px;   /* wraps at the bars' width */
+}
+
+.ai-usage-problem.ai-usage-on-light {
+    color: #9a6700;
+}
+
+.ai-usage-row {
+    spacing: 4px;
+}
+
+.ai-usage-label {
+    font-weight: 500;
+}
+
+.ai-usage-percent {
+    font-weight: bold;
+}
+
+.ai-usage-percent.ai-usage-critical {
+    color: #f66151;
+}
+
+.ai-usage-track {
+    height: 8px;
+    border-radius: 4px;
+    background-color: rgba(128, 128, 128, 0.32);
+}
+
+.ai-usage-fill {
+    height: 8px;
+    border-radius: 4px;
+}
+
+.ai-usage-fill-normal {
+    background-color: #d97757;
+}
+
+.ai-usage-fill-warning {
+    background-color: #f5c211;
+}
+
+.ai-usage-fill-critical {
+    background-color: #f66151;
+}

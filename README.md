@@ -411,9 +411,12 @@ so is the plain ring the Codex tray icon shows: OpenAI's brand guidelines
 ask that its logo be used exactly as provided, so the agent does not
 reduce it to a tray-sized grid. These files show other companies' marks:
 
-- **Clawd.** `claude-usage@localhost/clawd.svg`, its copy
+- **Clawd.** `claude-usage@localhost/clawd.svg`, its copies
   `gnome-extension/ai-usage-panel@localhost/clawd.svg` (the usage panel's
-  GNOME Shell extension shows it in the top bar) and its rasterised
+  GNOME Shell extension shows it in the top bar),
+  `agent/internal/gnomeext/gnome42/ai-usage-panel@localhost/clawd.svg` and
+  `agent/internal/gnomeext/gnome46/ai-usage-panel@localhost/clawd.svg` (the
+  same extension as the Linux agent carries it) and its rasterised
   derivatives depict the Claude Code mascot, © Anthropic PBC. They are not
   covered by this project's licence, no licence from Anthropic is claimed,
   and they will be removed on request. The derivatives are the pixel grid

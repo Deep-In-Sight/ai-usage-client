@@ -66,6 +66,20 @@ jobs:
             exit 1
           }
           tail -1 "$RUNNER_TEMP/gjs.log" | sed 's/^/::notice title=gjs::/'
+      - name: extension forms are current
+        # internal/gnomeext's GNOME 42 and 46/50 forms are what tools/mkext
+        # makes from gnome-extension/ai-usage-panel@localhost now
+        # (go run ./tools/mkext --write writes them again).
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          go run ./tools/mkext > "$RUNNER_TEMP/mkext.log" 2>&1 || {
+            cat "$RUNNER_TEMP/mkext.log"
+            d=$(head -45 "$RUNNER_TEMP/mkext.log")
+            d=${d//'%'/'%25'}; d=${d//$'\r'/'%0D'}; d=${d//$'\n'/'%0A'}
+            echo "::error title=mkext::$d"
+            exit 1
+          }
       - name: test
         shell: bash
         run: |

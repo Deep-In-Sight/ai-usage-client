@@ -27,7 +27,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-import {PROTOCOL, clickable, fillWidth, isDarkBackground, levelClass, parseView, useOrientation} from './view.js';
+import {PROTOCOL, clickable, fillWidth, isDarkBackground, isEmpty, levelClass, parseView, useOrientation} from './view.js';
 
 const BUS_NAME = 'local.AIUsage.Panel';
 const OBJECT_PATH = '/local/AIUsage/Panel';
@@ -387,6 +387,12 @@ class PanelClient {
             const view = parseView(result[0]);
             if (view === null)
                 throw new Error('GetView did not return a view');
+            if (isEmpty(view)) {
+                // The agent has no panel yet: wait for its ViewChanged.
+                if (this._view === null)
+                    this._setShown(false);
+                return;
+            }
             this._button.render(view);
             this._view = view;
             this._setShown(true);

@@ -109,6 +109,15 @@ export function parseView(json) {
     };
 }
 
+// isEmpty: view has nothing to draw: no section, prompt, server line,
+// action or top-bar number. The agent's bridge answers such a panel before
+// the agent's first view; the extension waits for ViewChanged instead of
+// showing it and attaching.
+export function isEmpty(view) {
+    return view.sections.length === 0 && view.prompt === '' && view.server === '' &&
+        view.new_version === '' && view.actions.length === 0 && view.top.length === 0;
+}
+
 // fillWidth is how much of a track of width track the bar fills for the
 // shown percent (the agent's panel.FillWidth, one table for both:
 // agent/internal/panel/testdata/fillwidth.json): none for no value or 0 %,
