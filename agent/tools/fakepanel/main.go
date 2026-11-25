@@ -6,7 +6,7 @@
 // extension calls as the bridge does (design 6.4; without the bridge's
 // check that the caller is the shell). Not shipped.
 //
-//	fakepanel -view fixture:combined|fixture:states|FILE -mode MODE [-log FILE]
+//	fakepanel -view fixture:combined|fixture:states|FILE -mode MODE [-log FILE] [-next VIEW]
 //
 // The view is the usage panel of a picture fixture (internal/tray/
 // panelfixture, serial 1) or a file's JSON as it is. MODE:
@@ -24,7 +24,8 @@
 // answers local.AIUsage.Panel1.Error.UnknownItem as the bridge would),
 // "Ping"; also "owns local.AIUsage.Panel" once it does, "released …" and
 // "owns … again" (vanish) and "ViewChanged N". SIGUSR1 raises the view's
-// serial by one and emits ViewChanged with it.
+// serial by one and emits ViewChanged with it; SIGUSR2 puts the -next view
+// (as -view) in place with the next serial and emits ViewChanged.
 package main
 
 import (
@@ -306,6 +307,21 @@ func (p *panel) changed() error {
 	return nil
 }
 
+// switchTo puts view in place with the next serial and emits ViewChanged
+// with it (SIGUSR2, -next).
+func (p *panel) switchTo(view []byte) error {
+	p.mu.Lock()
+	p.serial++
+	n := p.serial
+	p.view = withSerial(view, n)
+	p.mu.Unlock()
+	if err := p.conn.Emit(objectPath, iface+".ViewChanged", n); err != nil {
+		return err
+	}
+	p.logf("ViewChanged %d", n)
+	return nil
+}
+
 func (p *panel) vanish(after, away time.Duration) {
 	time.Sleep(after)
 	if _, err := p.conn.ReleaseName(busName); err != nil {
@@ -351,6 +367,7 @@ func main() {
 	viewSpec := flag.String("view", "fixture:combined", "fixture:combined, fixture:states or a JSON file")
 	mode := flag.String("mode", "ok", strings.Join(modes, "|"))
 	logPath := flag.String("log", "", "call log (default: standard output)")
+	nextSpec := flag.String("next", "", "the view SIGUSR2 puts in place (as -view)")
 	flag.Parse()
 	fail := func(err error) {
 		fmt.Fprintln(os.Stderr, "fakepanel:", err)
@@ -367,6 +384,12 @@ func main() {
 	view, err := loadView(*viewSpec)
 	if err != nil {
 		fail(err)
+	}
+	var next []byte
+	if *nextSpec != "" {
+		if next, err = loadView(*nextSpec); err != nil {
+			fail(err)
+		}
 	}
 	out := io.Writer(os.Stdout)
 	if *logPath != "" {
@@ -395,12 +418,22 @@ func main() {
 	}
 	p.logf("owns %s", busName)
 	sigs := make(chan os.Signal, 4)
-	signal.Notify(sigs, syscall.SIGUSR1, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigs, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGINT, syscall.SIGTERM)
+loop:
 	for s := range sigs {
-		if s != syscall.SIGUSR1 {
-			break
+		var err error
+		switch s {
+		case syscall.SIGUSR1:
+			err = p.changed()
+		case syscall.SIGUSR2:
+			if next == nil {
+				continue
+			}
+			err = p.switchTo(next)
+		default:
+			break loop
 		}
-		if err := p.changed(); err != nil {
+		if err != nil {
 			p.logf("emit failed: %v", err)
 		}
 	}

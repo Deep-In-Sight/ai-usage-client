@@ -283,3 +283,54 @@ func TestOnAPrivateBus(t *testing.T) {
 		t.Fatalf("log:\n%s\nwant:\n%s", log.String(), want)
 	}
 }
+
+// -next: SIGUSR2 puts the other view in place with the next serial and
+// signals it (a view whose items differ, while the extension's menu is
+// open: Task 15's click-while-a-rebuild-is-pending check); a click on an
+// item only the old view had is refused from then on.
+func TestSwitchToTheNextView(t *testing.T) {
+	addr := privateBus(t)
+	server, err := dbus.Connect(addr)
+	must(t, err)
+	defer server.Close()
+	var log syncBuffer
+	p := newPanel(server, combinedJSON(t), "ok", &log)
+	must(t, export(server, p))
+	must(t, own(server))
+	client, err := dbus.Connect(addr)
+	must(t, err)
+	defer client.Close()
+	must(t, client.AddMatchSignal(dbus.WithMatchInterface(iface), dbus.WithMatchMember("ViewChanged")))
+	sigs := make(chan *dbus.Signal, 4)
+	client.Signal(sigs)
+
+	var next trayproto.Panel
+	must(t, json.Unmarshal(combinedJSON(t), &next))
+	next.Sections[1].Rows = next.Sections[1].Rows[:1] // r.codex.1 gone
+	nb, err := json.Marshal(next)
+	must(t, err)
+	must(t, p.switchTo(nb))
+	select {
+	case s := <-sigs:
+		if len(s.Body) != 1 || s.Body[0] != uint64(2) {
+			t.Fatalf("signal %+v", s)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no ViewChanged")
+	}
+	obj := client.Object(busName, objectPath)
+	var view string
+	must(t, obj.Call(iface+".GetView", 0).Store(&view))
+	var got trayproto.Panel
+	must(t, json.Unmarshal([]byte(view), &got))
+	if got.Serial != 2 || len(got.Sections[1].Rows) != 1 {
+		t.Fatalf("after the switch: %+v", got)
+	}
+	if err := obj.Call(iface+".Click", 0, "r.codex.1").Err; err == nil {
+		t.Fatal("a click on a gone row was taken")
+	}
+	must(t, obj.Call(iface+".Click", 0, "r.claude.0").Err)
+	if want := "ViewChanged 2\nGetView\nClick r.codex.1 refused\nClick r.claude.0\n"; log.String() != want {
+		t.Fatalf("log:\n%s\nwant:\n%s", log.String(), want)
+	}
+}

@@ -35,7 +35,7 @@ func TestCIScriptsRefuseOutsideARunner(t *testing.T) {
 		}
 		runs = append(runs, run{"check-windows.ps1", []string{pwsh, "-NoProfile", "-NonInteractive", "-File", filepath.Join(ciDir, "check-windows.ps1")}})
 	} else {
-		for _, s := range []string{"check-linux.sh", "check-macos.sh"} {
+		for _, s := range []string{"check-linux.sh", "check-macos.sh", "check-panel-gnome.sh", "panel-session.sh"} {
 			runs = append(runs, run{s, []string{"bash", filepath.Join(ciDir, s)}})
 		}
 	}
@@ -89,6 +89,33 @@ func TestCIScriptsRefuseOutsideARunner(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		if after, _ := os.ReadFile(hostsFile); !bytes.Equal(after, hostsBefore) {
 			t.Fatal("the hosts file changed")
+		}
+	}
+}
+
+// panel-session.sh drives a GNOME Shell and installs the agent on the
+// session bus it finds: even on a runner it runs only inside
+// check-panel-gnome.sh's private session (PANEL_PRIVATE=1), never on the
+// runner's own session.
+func TestPanelSessionRunsOnlyInItsSession(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a Linux script")
+	}
+	ciDir, err := filepath.Abs("../ci")
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, wd := t.TempDir(), t.TempDir()
+	cmd := exec.Command("bash", filepath.Join(ciDir, "panel-session.sh"))
+	cmd.Dir = wd
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GITHUB_ACTIONS=true", "RUNNER_TEMP=" + t.TempDir(), "GITHUB_WORKSPACE=" + wd}
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "refusing to run") {
+		t.Fatalf("ran: %v\n%s", err, out)
+	}
+	for _, d := range []string{home, wd} {
+		if ents, _ := os.ReadDir(d); len(ents) > 0 {
+			t.Fatalf("wrote into %s: %v", d, ents)
 		}
 	}
 }

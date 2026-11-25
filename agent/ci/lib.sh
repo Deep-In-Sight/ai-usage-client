@@ -37,6 +37,17 @@ finish() {
   [ "$passed" -eq "$required" ]
 }
 
+# notices FILE FROM TITLE: lines FROM..FROM+9 of FILE as notices (a step
+# keeps at most 10 of each kind, so a longer file takes several steps):
+# results read without a token.
+notices() {
+  [ -f "$1" ] || return 0
+  grep -v '^$' "$1" | sed -n "${2},$(($2 + 9))p" | while IFS= read -r l; do
+    l=${l//'%'/'%25'}; l=${l//$'\r'/ }
+    echo "::notice title=$3::${l:0:1000}"
+  done
+}
+
 # jget FILE|- KEY...: a value from JSON ("" when missing).
 jget() {
   python3 -c 'import json,sys
