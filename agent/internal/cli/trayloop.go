@@ -3,7 +3,10 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"log"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -26,6 +29,9 @@ const (
 	removeArmFor = 10 * time.Second // the second click on Remove must come within this
 	titleNotice  = 20 * time.Second // macOS shows the notice as the menu bar title this long
 	firstStatus  = 5 * time.Second  // a fresh install waits this long for the first status before it shows the neutral icon
+	// the GNOME usage panel (drawn-panel design 6.4; plan PR-11)
+	attachWait  = 10 * time.Second // with the gnome-panel-attached marker the icons wait this long for the panel
+	detachGrace = 10 * time.Second // after the panel went away the icons wait this long for it to come back
 )
 
 // trayLoop shows the agent through its tray helpers (design 6.4): it keeps
@@ -61,6 +67,32 @@ type trayLoop struct {
 	// the last usage panel sent (its serial 0) and its serial (plan PR-6)
 	lastPanel   *trayproto.Panel
 	panelSerial uint64
+
+	// The GNOME usage panel (design 6.4, 6.7): the bridge is wanted; the
+	// icon helpers are held back (Supervisor.SetPanelAttached); the bridge
+	// says the extension is attached; hold ends an attach wait or a detach
+	// grace (the icons come then).
+	bridge  bool
+	held    bool
+	panelOn bool
+	hold    <-chan time.Time
+	// tests: called once an event has been handled
+	handled func(supervisor.Event)
+}
+
+// wantsBridge: the GNOME bridge runs in a GNOME session on Linux (design
+// 6.4: the session decides, not whether the extension's files are there);
+// XDG_CURRENT_DESKTOP is a list such as "ubuntu:GNOME".
+func wantsBridge(goos string, getenv func(string) string) bool {
+	return goos == "linux" && strings.Contains(strings.ToUpper(getenv("XDG_CURRENT_DESKTOP")), "GNOME")
+}
+
+// panelEnableOnce: the bridge may turn the panel extension on, because no
+// bridge has done so yet (no gnome-panel-enabled marker; design 6.6). Asked
+// at each start of the bridge (ruling F15).
+func (env Env) panelEnableOnce() bool {
+	_, err := os.Stat(env.Dirs.File(paths.PanelEnabledFile))
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // inUse: the provider's sign-in is there (an expired one too: the account
@@ -202,6 +234,14 @@ func (l *trayLoop) run(ctx context.Context, notice string) {
 	defer l.sup.Stop()
 	l.unused = map[provider.ID]int{}
 	l.noticeQueued = notice
+	if l.bridge {
+		// the panel was attached in the session before: the icons wait for
+		// it a while instead of flashing up (design 6.4)
+		if l.marked() {
+			l.holdIcons(attachWait)
+		}
+		l.sup.WantBridge(true, true)
+	}
 	s := l.ctrl.Snapshot()
 	var wait <-chan time.Time
 	if len(s.Providers) > 0 {
@@ -216,6 +256,7 @@ func (l *trayLoop) run(ctx context.Context, notice string) {
 	l.draw()
 	tick := l.env.Clock.After(redrawEvery)
 	for {
+		var ev *supervisor.Event
 		select {
 		case <-ctx.Done():
 			return
@@ -235,24 +276,35 @@ func (l *trayLoop) run(ctx context.Context, notice string) {
 			l.title, l.noticeTimer = "", nil
 		case <-l.armTimer:
 			l.armed, l.armTimer = false, nil
+		case <-l.hold:
+			l.hold = nil
+			if !l.panelOn {
+				l.log.Print("usage panel: not attached; showing the tray icon")
+				l.release()
+			}
 		case e := <-l.sup.Events():
 			if done := l.event(e); done {
 				return
 			}
+			ev = &e
 		}
 		l.draw()
+		if ev != nil && l.handled != nil {
+			l.handled(*ev)
+		}
 	}
 }
 
 // event handles one helper event; true when the agent is to stop.
 func (l *trayLoop) event(e supervisor.Event) bool {
+	if e.Provider == supervisor.BridgeSlot && e.Click == "" {
+		l.bridgeEvent(e)
+		l.setMode(l.mode())
+		return false
+	}
 	switch {
 	case e.Ready, e.Waiting != "", e.Exit != nil:
-		mode := "headless"
-		if l.sup.AnyReady() {
-			mode = "tray"
-		}
-		l.setMode(mode)
+		l.setMode(l.mode())
 		if e.Waiting != "" && e.Waiting != l.waitLogged {
 			l.log.Printf("no tray (%s): running without an icon", e.Waiting)
 			l.waitLogged = e.Waiting
@@ -274,6 +326,118 @@ func (l *trayLoop) event(e supervisor.Event) bool {
 		return l.click(e.Click)
 	}
 	return false
+}
+
+// mode is client.mode: "tray" while the panel is attached or an icon is
+// up (design 6.4).
+func (l *trayLoop) mode() string {
+	if l.panelOn || l.sup.AnyReady() {
+		return "tray"
+	}
+	return "headless"
+}
+
+// bridgeEvent follows the bridge (design 6.4, 6.7; plan PR-11): attached,
+// the icons go; gone after a Ping lapse, or the bridge stopped after
+// repeated failures or on an unsupported shell, they come at once; gone
+// otherwise (a Detach, the shell's owner left, the bridge ended), they
+// come after detachGrace unless it attaches again; the bridge ending with
+// a lost session bus while the panel was attached holds them anew for
+// attachWait (the next login).
+func (l *trayLoop) bridgeEvent(e supervisor.Event) {
+	switch {
+	case e.Enabled:
+		l.markEnabled()
+	case e.Attached != nil && *e.Attached:
+		if !l.panelOn {
+			l.log.Print("usage panel attached: no tray icon")
+		}
+		l.panelOn, l.hold = true, nil
+		if !l.held {
+			l.held = true
+			l.sup.SetPanelAttached(true)
+		}
+		l.mark()
+	case e.Attached != nil:
+		l.panelOn = false
+		if e.Why == "ping" {
+			l.log.Print("usage panel: the extension stopped answering; showing the tray icon")
+			l.release()
+			return
+		}
+		l.log.Printf("usage panel went away (%s)", e.Why)
+		l.grace()
+	case e.Supported != nil && !*e.Supported:
+		l.log.Printf("usage panel: not on this desktop (%s)", e.Why)
+		l.panelOn = false
+		l.release()
+	case e.Exit != nil:
+		l.panelOn = false
+		switch {
+		case *e.Exit == trayproto.ExitSessionLost && l.marked():
+			l.holdIcons(attachWait)
+		case e.Stopped:
+			l.release()
+		default:
+			l.grace()
+		}
+	}
+}
+
+// holdIcons holds the icon helpers back for at most d.
+func (l *trayLoop) holdIcons(d time.Duration) {
+	if !l.held {
+		l.held = true
+		l.sup.SetPanelAttached(true)
+	}
+	l.hold = l.env.Clock.After(d)
+}
+
+// grace gives a panel that went away detachGrace to come back.
+func (l *trayLoop) grace() {
+	if l.held && l.hold == nil {
+		l.hold = l.env.Clock.After(detachGrace)
+	}
+}
+
+// release shows the icons again and forgets that the panel was attached.
+func (l *trayLoop) release() {
+	l.hold = nil
+	if l.held {
+		l.held = false
+		l.sup.SetPanelAttached(false)
+	}
+	if err := os.Remove(l.env.Dirs.File(paths.PanelAttachedFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		l.log.Printf("usage panel: %v", err)
+	}
+}
+
+// marked: the gnome-panel-attached marker is there.
+func (l *trayLoop) marked() bool {
+	_, err := os.Stat(l.env.Dirs.File(paths.PanelAttachedFile))
+	return err == nil
+}
+
+func (l *trayLoop) mark() {
+	if l.marked() {
+		return
+	}
+	if err := os.WriteFile(l.env.Dirs.File(paths.PanelAttachedFile), nil, 0o600); err != nil {
+		l.log.Printf("usage panel: %v", err)
+	}
+}
+
+// markEnabled writes the gnome-panel-enabled marker once: no bridge turns
+// the extension on again (design 6.6).
+func (l *trayLoop) markEnabled() {
+	p := l.env.Dirs.File(paths.PanelEnabledFile)
+	if _, err := os.Stat(p); !errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	l.log.Print("usage panel: the extension was turned on")
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		l.log.Printf("usage panel: %v", err)
+	}
 }
 
 func (l *trayLoop) open(u string) {

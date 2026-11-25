@@ -85,6 +85,10 @@ func TestNoSpawnLoop(t *testing.T) {
 		{name: "killed", exitCode: -1, exitAfter: -1},
 		{name: "75-after-10s", exitCode: trayproto.ExitSessionLost, exitAfter: quickLoss},
 		{name: "1-after-10min", exitCode: 1, exitAfter: healthyAfter},
+		{name: "exits-78", exitCode: trayproto.ExitUnsupported, exitAfter: -1},
+		// every icon helper's 75 starts a parked bridge again, which parks
+		// again at once
+		{name: "icons-75-bridge-78", exitCode: trayproto.ExitSessionLost, exitAfter: -1, bridgeExit: trayproto.ExitUnsupported},
 	}
 	spawns := map[string]func(n int) bool{
 		"ok":           func(int) bool { return false },
@@ -94,12 +98,17 @@ func TestNoSpawnLoop(t *testing.T) {
 	}
 	A, B := provider.Claude, provider.Codex
 	scripts := map[string][]want{
-		"steady":       {{0, []provider.ID{A}, ""}},
-		"requit":       {{0, []provider.ID{A}, ""}, {0, nil, ""}, {0, []provider.ID{A}, ""}},
-		"requit-later": {{0, []provider.ID{A}, ""}, {time.Second, nil, ""}, {time.Second, []provider.ID{A}, ""}, {3 * time.Second, nil, ""}, {4 * time.Second, []provider.ID{A}, ""}},
-		"two":          {{0, []provider.ID{A, B}, ""}, {30 * time.Second, []provider.ID{A}, ""}, {30 * time.Second, []provider.ID{A, B}, ""}, {2 * time.Minute, nil, ""}, {2 * time.Minute, []provider.ID{B, A}, ""}},
+		"steady":       {{at: 0, ids: []provider.ID{A}}},
+		"requit":       {{at: 0, ids: []provider.ID{A}}, {at: 0, ids: nil}, {at: 0, ids: []provider.ID{A}}},
+		"requit-later": {{at: 0, ids: []provider.ID{A}}, {at: time.Second, ids: nil}, {at: time.Second, ids: []provider.ID{A}}, {at: 3 * time.Second, ids: nil}, {at: 4 * time.Second, ids: []provider.ID{A}}},
+		"two":          {{at: 0, ids: []provider.ID{A, B}}, {at: 30 * time.Second, ids: []provider.ID{A}}, {at: 30 * time.Second, ids: []provider.ID{A, B}}, {at: 2 * time.Minute, ids: nil}, {at: 2 * time.Minute, ids: []provider.ID{B, A}}},
 		"toggle":       toggles(7*time.Second, 10*time.Minute, []provider.ID{A}, nil),
 		"views":        views(10*time.Second, 20*time.Minute, []provider.ID{A}),
+		// the GNOME bridge in its own slot (plan PR-9), the panel attaching
+		// and going away, the bridge wanted and not
+		"bridge-attach": append([]want{{at: 0, ids: []provider.ID{A, B}}, {at: 0, bridge: on(true)}},
+			attaches(7*time.Second, 10*time.Minute)...),
+		"bridge-toggle": append([]want{{at: 0, ids: []provider.ID{A}}}, bridgeToggles(5*time.Second, 10*time.Minute)...),
 	}
 	const simFor = 40 * time.Minute
 	for _, b := range behaviours {
@@ -125,7 +134,27 @@ func toggles(gap, d time.Duration, a, b []provider.ID) []want {
 		if i%2 == 1 {
 			ids = b
 		}
-		out = append(out, want{at, ids, ""})
+		out = append(out, want{at: at, ids: ids})
+	}
+	return out
+}
+
+func on(b bool) *bool { return &b }
+
+// attaches attaches the panel, then detaches it, every gap for d.
+func attaches(gap, d time.Duration) []want {
+	var out []want
+	for at, i := gap, 0; at <= d; at, i = at+gap, i+1 {
+		out = append(out, want{at: at, attach: on(i%2 == 0)})
+	}
+	return out
+}
+
+// bridgeToggles wants the bridge, then not, every gap for d.
+func bridgeToggles(gap, d time.Duration) []want {
+	var out []want
+	for at, i := time.Duration(0), 0; at <= d; at, i = at+gap, i+1 {
+		out = append(out, want{at: at, bridge: on(i%2 == 0)})
 	}
 	return out
 }
@@ -133,18 +162,21 @@ func toggles(gap, d time.Duration, a, b []provider.ID) []want {
 // views wants ids, then shows a new view every gap for d (a stopped
 // helper is tried again when the view changes).
 func views(gap, d time.Duration, ids []provider.ID) []want {
-	out := []want{{0, ids, ""}}
+	out := []want{{at: 0, ids: ids}}
 	for at, i := gap, 0; at <= d; at, i = at+gap, i+1 {
-		out = append(out, want{at, nil, fmt.Sprintf("%d%%", i)})
+		out = append(out, want{at: at, view: fmt.Sprintf("%d%%", i)})
 	}
 	return out
 }
 
-// want is a change of the wanted helpers, or (view set) a new view.
+// want is a change of the wanted helpers, or (view set) a new view, or
+// (bridge set) WantBridge, or (attach set) SetPanelAttached.
 type want struct {
-	at   time.Duration
-	ids  []provider.ID
-	view string
+	at     time.Duration
+	ids    []provider.ID
+	view   string
+	bridge *bool
+	attach *bool
 }
 
 // behaviour is what a started helper does.
@@ -157,6 +189,8 @@ type behaviour struct {
 	exitAfter time.Duration
 	// quitAfter: ends this long after it was asked to quit (0: at once)
 	quitAfter time.Duration
+	// bridgeExit: the bridge ends at once with this code (0: as the others)
+	bridgeExit int
 }
 
 // alwaysFails: every start ends as a failure (a watcher's 77 too, for a
@@ -235,6 +269,10 @@ func newSim(t *testing.T, fail func(n int) bool, b behaviour) *sim {
 			s.mu.Unlock()
 			if failNow {
 				return nil, errors.New("test: cannot start")
+			}
+			b := b
+			if p == BridgeSlot && b.bridgeExit != 0 {
+				b.exitCode, b.exitAfter = b.bridgeExit, -1
 			}
 			st := &procState{quitAfter: b.quitAfter, ignores: b.ignoreQuit || b.quitAfter > 0}
 			var fp *fakeProc
@@ -402,9 +440,14 @@ func (s *sim) play(script []want, simFor time.Duration) {
 		s.quiesce()
 		now := s.clk.Now()
 		for len(todo) > 0 && !s.t0.Add(todo[0].at).After(now) {
-			if v := todo[0].view; v != "" {
-				s.sup.Show(view(v))
-			} else {
+			switch w := todo[0]; {
+			case w.bridge != nil:
+				s.sup.WantBridge(*w.bridge, true)
+			case w.attach != nil:
+				s.sup.SetPanelAttached(*w.attach)
+			case w.view != "":
+				s.sup.Show(view(w.view))
+			default:
 				s.sup.Want(todo[0].ids)
 			}
 			todo = todo[1:]

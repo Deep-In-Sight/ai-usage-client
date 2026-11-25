@@ -153,8 +153,13 @@ func newHarness(t *testing.T) *harness { return newHarnessWith(t, false) }
 // newHarnessWith: standby, a stopped helper is watched for the desktop
 // coming back (Options.Standby).
 func newHarnessWith(t *testing.T, standby bool) *harness {
+	return newHarnessFor(t, func(o *Options) { o.Standby = standby })
+}
+
+// newHarnessFor: a harness whose options are changed by set.
+func newHarnessFor(t *testing.T, set func(*Options)) *harness {
 	h := &harness{t: t, clk: clock.NewFake(time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)), spawns: make(chan *fakeProc, 16), logBuf: &syncBuffer{}}
-	h.sup = New(Options{
+	o := Options{
 		Spawn: func(p provider.ID, uid uint32, token string) (Proc, error) {
 			h.mu.Lock()
 			fail, ignore := h.failSpawn, h.ignoreQuit
@@ -167,10 +172,11 @@ func newHarnessWith(t *testing.T, standby bool) *harness {
 			return fp, nil
 		},
 		IconDir: func(p provider.ID) string { return "/icons/" + name(p) },
-		Standby: standby,
 		Clock:   h.clk,
 		Log:     log.New(h.logBuf, "", 0),
-	})
+	}
+	set(&o)
+	h.sup = New(o)
 	t.Cleanup(func() {
 		done := make(chan struct{})
 		go func() { h.sup.Stop(); close(done) }()

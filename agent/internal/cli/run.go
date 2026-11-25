@@ -227,9 +227,10 @@ func runCmd(env Env, args []string) int {
 		notice = text.Notice(env.goos())
 	}
 	sup := supervisor.New(supervisor.Options{Spawn: env.helperSpawner(logger), IconDir: env.iconDir,
-		Standby: watchesDesktop(env.goos()), Clock: env.Clock, Log: logger})
+		Standby: watchesDesktop(env.goos()), BridgeEnableOnce: env.panelEnableOnce, Clock: env.Clock, Log: logger})
 	loop := &trayLoop{env: env, ctrl: ctrl, sup: sup, updates: updates, log: logger, setMode: e.SetClientMode,
-		known: []provider.ID{provider.Claude, provider.Codex}, extra: testHelpers(env)}
+		known: []provider.ID{provider.Claude, provider.Codex}, extra: testHelpers(env),
+		bridge: bridgeReady && wantsBridge(env.goos(), env.Getenv)}
 	// The tray's Remove: the helpers end, this process stops its engine
 	// and lets go of run.lock and the log before removing everything.
 	loop.remove = func() error {
@@ -247,6 +248,11 @@ func runCmd(env Env, args []string) int {
 	// 6: Quit, Remove or a signal.
 	return finish()
 }
+
+// bridgeReady: the helper can serve the GNOME bridge's role (hello role
+// "shell"). Until it can, no bridge is started anywhere. A variable, so
+// that tests can turn it on (pre-flight ruling F18).
+var bridgeReady = false
 
 // readable: the file at p can be read, or there is none yet.
 func readable(p string) error {

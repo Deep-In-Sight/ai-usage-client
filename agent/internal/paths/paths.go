@@ -22,6 +22,12 @@ const (
 	LogFile          = "agent.log"      // where a run without a console writes its log
 	TrayIconsDir     = "tray-icons"     // the Windows tray's icon files
 	AutostartOffFile = "autostart-off"  // "Start at login" was turned off in the tray
+	// The GNOME usage panel (drawn-panel design 6.4, 6.6; plan PR-12),
+	// written and removed by the main process only: the panel was attached
+	// in this or an earlier session (the icons wait for it at the next
+	// start), and the bridge turned the extension on once (never again).
+	PanelAttachedFile = "gnome-panel-attached"
+	PanelEnabledFile  = "gnome-panel-enabled"
 )
 
 // LatestFileFor is the file with the newest numbers of one provider:

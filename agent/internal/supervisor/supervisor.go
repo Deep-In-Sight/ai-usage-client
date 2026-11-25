@@ -1,10 +1,13 @@
 // Package supervisor runs the tray helpers: one `ai-usage tray-helper`
 // process per provider in use (design D3, 6.4), each showing one tray
-// icon. The main process keeps collecting and syncing whatever happens to
-// them; the supervisor starts a helper again when it ends (sooner for a
-// lost session, later for repeated failures) and stops them all when the
-// agent stops. It talks to them only through their standard input and
-// output (package trayproto).
+// icon, and on GNOME the bridge, a helper in the shell role that serves
+// the usage panel to the GNOME Shell extension (drawn-panel design 6.4).
+// The main process keeps collecting and syncing whatever happens to them;
+// the supervisor starts a helper again when it ends (sooner for a lost
+// session, later for repeated failures) and stops them all when the agent
+// stops. While the panel extension is attached it runs no icon helper
+// (SetPanelAttached). It talks to them only through their standard input
+// and output (package trayproto).
 package supervisor
 
 import (
@@ -49,9 +52,18 @@ type Options struct {
 	// (Linux: a tray host appeared or the session bus is back; Windows:
 	// TaskbarCreated). Off where the helper cannot watch (macOS).
 	Standby bool
-	Clock   clock.Clock
-	Log     *log.Logger
+	// BridgeEnableOnce is asked at every start of the bridge whether its
+	// hello may ask it to turn the panel extension on once (the agent
+	// outlives a logout, and the user's own "off" in the Extensions app
+	// must hold: pre-flight ruling F15); nil: yes.
+	BridgeEnableOnce func() bool
+	Clock            clock.Clock
+	Log              *log.Logger
 }
+
+// BridgeSlot is the bridge's slot (plan PR-9): apart from the providers'
+// slots and the neutral one, and never touched by Want.
+const BridgeSlot provider.ID = "#shell"
 
 // Event is what happened to a helper.
 type Event struct {
@@ -62,6 +74,18 @@ type Event struct {
 	Exit     *int   // the helper ended with this code
 	// RestartIn (with Exit) is when it is started again; negative: not.
 	RestartIn time.Duration
+	// Stopped (with Exit): the helper is stopped after repeated failures;
+	// RestartIn is its stop.
+	Stopped bool
+	// The bridge's shell line (Provider BridgeSlot): the panel extension
+	// attached (true) or went away (false); the shell is not one the panel
+	// supports (Supported false); turning the extension on succeeded
+	// (Enabled). Why says why attached or supported is false ("detach",
+	// "owner", "ping", "unsupported 44.2", "no shell").
+	Attached  *bool
+	Supported *bool
+	Enabled   bool
+	Why       string
 }
 
 // IconView is one helper's own part of the view.
@@ -115,6 +139,13 @@ type Supervisor struct {
 	// stale: Windows icons of helpers that ended without removing them
 	// (a crash, a kill); the next helper started removes them
 	stale []trayproto.StaleIcon
+	// attached: the usage panel is attached (or awaited): no icon helper
+	// runs (SetPanelAttached)
+	attached bool
+	// the bridge's enable-once: allowed by WantBridge, and spent once a
+	// bridge said it turned the extension on (never asked again by this
+	// process)
+	bridgeOnce, bridgeEnabled bool
 }
 
 type slot struct {
@@ -141,6 +172,10 @@ type slot struct {
 	trying      bool        // the process is a try of the stopped helper
 	tries       int         // tries of the stopped helper that failed (each doubles the gap to the next)
 	window      uint64      // Windows: the window of the process's icon (from its ready)
+	// parked: the bridge found no GNOME Shell the panel supports (exit 78);
+	// it starts again only on a new session bus (an icon helper's exit 75)
+	// or WantBridge off and on (plan PR-10)
+	parked bool
 }
 
 // tryGap is how long after its last start a stopped helper may be tried
@@ -183,7 +218,7 @@ func (s *Supervisor) Want(ids []provider.ID) {
 	}
 	s.order = slices.Clone(ids)
 	for id, sl := range s.slots {
-		if !slices.Contains(ids, id) {
+		if id != BridgeSlot && !slices.Contains(ids, id) {
 			sl.wanted = false
 			if sl.proc != nil {
 				s.quitOrKill(sl)
@@ -212,6 +247,79 @@ func (s *Supervisor) Want(ids []provider.ID) {
 			}
 		}
 	}
+}
+
+// WantBridge starts (on) or ends (off) the bridge, in its own slot apart
+// from Want's (plan PR-9). Its hello carries the role "shell" and, when
+// enableOnce allows it and Options.BridgeEnableOnce says so at that start,
+// enable_once. A bridge that found no supported shell (exit 78) is started
+// again by WantBridge off and on, or by an icon helper's exit 75 (a new
+// session bus; plan PR-10); its other ends follow the helpers' restart
+// rules (it never gets a standby watcher).
+func (s *Supervisor) WantBridge(on, enableOnce bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stop {
+		return
+	}
+	s.bridgeOnce = enableOnce
+	sl := s.slots[BridgeSlot]
+	switch {
+	case !on && sl == nil:
+	case !on:
+		sl.wanted = false
+		if sl.proc != nil {
+			s.quitOrKill(sl)
+		} else {
+			delete(s.slots, BridgeSlot)
+		}
+	case sl == nil:
+		sl = &slot{id: BridgeSlot, wanted: true}
+		s.slots[BridgeSlot] = sl
+		s.start(sl)
+	case !sl.wanted:
+		// asked to quit and wanted again before it ended: it starts anew
+		// once it has
+		sl.wanted = true
+	}
+}
+
+// SetPanelAttached holds the icon helpers back while the usage panel is
+// attached, or awaited (design 6.4): on, every icon helper (the neutral
+// one too) is asked to quit (and killed 3 s later if it has not ended) and
+// none starts, whatever Want says or a restart plans; off, Want's helpers
+// start again at once (a stopped one too). The bridge is not touched.
+func (s *Supervisor) SetPanelAttached(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stop || s.attached == on {
+		return
+	}
+	s.attached = on
+	if on {
+		for id, sl := range s.slots {
+			if id == BridgeSlot {
+				continue
+			}
+			sl.plan++ // pending restarts and tries are void
+			sl.probeAt = time.Time{}
+			if sl.proc != nil {
+				s.quitOrKill(sl)
+			}
+		}
+	} else {
+		for _, id := range s.order {
+			sl := s.slots[id]
+			if sl == nil || !sl.wanted {
+				continue
+			}
+			sl.stopped, sl.failures, sl.consecutive, sl.tries, sl.trying = false, nil, 0, 0, false
+			if sl.proc == nil {
+				s.start(sl) // one still quitting starts once it ended
+			}
+		}
+	}
+	s.sendNotice()
 }
 
 // Show sets the view: the same menu and usage panel for every helper
@@ -277,8 +385,8 @@ func (s *Supervisor) Notice(text string) {
 func (s *Supervisor) AnyReady() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, sl := range s.slots {
-		if sl.ready {
+	for id, sl := range s.slots {
+		if id != BridgeSlot && sl.ready {
 			return true
 		}
 	}
@@ -329,7 +437,7 @@ func (s *Supervisor) Stop() {
 // itself: a failed start is a failure exit (retry), whose new start waits
 // for a timer.
 func (s *Supervisor) start(sl *slot) {
-	if s.stop || !sl.wanted {
+	if s.stop || !sl.wanted || sl.parked || s.held(sl) {
 		return
 	}
 	now := s.o.Clock.Now()
@@ -353,7 +461,7 @@ func (s *Supervisor) start(sl *slot) {
 // the helper is stopped (s.mu held). A failed start is logged only: the
 // stop timer stays.
 func (s *Supervisor) startWatcher(sl *slot) {
-	if s.stop || !sl.wanted || !s.o.Standby || sl.proc != nil {
+	if s.stop || !sl.wanted || !s.o.Standby || sl.proc != nil || sl.id == BridgeSlot || s.held(sl) {
 		return
 	}
 	if p, token, ok := s.spawn(sl, true, s.o.Clock.Now()); ok {
@@ -361,6 +469,9 @@ func (s *Supervisor) startWatcher(sl *slot) {
 		s.launch(sl, p, token)
 	}
 }
+
+// held: sl is an icon helper held back while the panel is attached.
+func (s *Supervisor) held(sl *slot) bool { return s.attached && sl.id != BridgeSlot }
 
 // spawn starts a process for sl (s.mu held).
 func (s *Supervisor) spawn(sl *slot, standby bool, now time.Time) (Proc, string, bool) {
@@ -384,15 +495,21 @@ func (s *Supervisor) launch(sl *slot, p Proc, token string) {
 	sl.proc = p
 	sl.exited = make(chan struct{})
 	sl.out = newSender(p.Stdin())
-	hello := trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeHello, Token: token, Provider: string(sl.id),
-		UID: UIDFor(sl.id), Standby: sl.standby}
-	if s.o.IconDir != nil {
-		hello.IconDir = s.o.IconDir(sl.id)
+	hello := trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeHello, Token: token}
+	if sl.id == BridgeSlot {
+		// enable once is decided at each start (ruling F15)
+		hello.Role = trayproto.RoleShell
+		hello.EnableOnce = s.bridgeOnce && !s.bridgeEnabled && (s.o.BridgeEnableOnce == nil || s.o.BridgeEnableOnce())
+	} else {
+		hello.Provider, hello.UID, hello.Standby = string(sl.id), UIDFor(sl.id), sl.standby
+		if s.o.IconDir != nil {
+			hello.IconDir = s.o.IconDir(sl.id)
+		}
+		// icons left by helpers that crashed or were killed: this process
+		// removes them first (a Windows notification icon outlives its
+		// process until the pointer passes over it)
+		hello.Stale, s.stale = s.stale, nil
 	}
-	// icons left by helpers that crashed or were killed: this process
-	// removes them first (a Windows notification icon outlives its process
-	// until the pointer passes over it)
-	hello.Stale, s.stale = s.stale, nil
 	sl.out.send(hello)
 	exited := sl.exited
 	go s.read(sl.id, gen, p)
@@ -425,8 +542,16 @@ func (s *Supervisor) ended(sl *slot, code int, now time.Time) {
 		sl.out = nil
 	}
 	ev := Event{Provider: sl.id, Exit: &code, RestartIn: -1}
+	if !s.stop && sl.id != BridgeSlot && code == trayproto.ExitSessionLost {
+		s.unpark() // a new session bus: its shell may be one the panel supports
+	}
 	switch {
 	case s.stop:
+		s.queue.put(ev)
+		return
+	case sl.wanted && !sl.quitSent && sl.id == BridgeSlot && code == trayproto.ExitUnsupported:
+		sl.parked = true
+		s.o.Log.Print("tray helper shell: no GNOME Shell the usage panel supports on this session bus; not started again until the next one")
 		s.queue.put(ev)
 		return
 	case !sl.wanted:
@@ -456,12 +581,24 @@ func (s *Supervisor) ended(sl *slot, code int, now time.Time) {
 	s.retry(sl, ev, code, lived, now)
 }
 
+// unpark starts a parked bridge again, after the delay of a lost session
+// (s.mu held).
+func (s *Supervisor) unpark() {
+	b := s.slots[BridgeSlot]
+	if b == nil || !b.parked || !b.wanted || b.proc != nil {
+		return
+	}
+	b.parked = false
+	s.o.Log.Printf("tray helper shell: a new session bus; starting it again in %s", lostDelay)
+	s.startIn(b, lostDelay)
+}
+
 // probe tries a stopped helper again, now or, when its last start was less
 // than tryGap ago, then (s.mu held). It never starts more than one helper
 // a minute, and after each failed try it waits twice as long, up to
 // stoppedFor (review n-2: the view changes every minute).
 func (s *Supervisor) probe(sl *slot, why string) {
-	if s.stop || !sl.wanted || !sl.stopped || sl.proc != nil && !sl.standby {
+	if s.stop || !sl.wanted || !sl.stopped || sl.proc != nil && !sl.standby || s.held(sl) {
 		return
 	}
 	now := s.o.Clock.Now()
@@ -546,7 +683,17 @@ func (s *Supervisor) retry(sl *slot, ev Event, code int, lived time.Duration, no
 	if code == trayproto.ExitSessionEnded {
 		s.o.Log.Printf("tray helper %s: the session is ending", name(sl.id))
 	}
-	ev.RestartIn = wait
+	ev.RestartIn, ev.Stopped = wait, sl.stopped
+	s.startIn(sl, wait)
+	s.queue.put(ev)
+	if sl.stopped {
+		s.startWatcher(sl)
+	}
+}
+
+// startIn plans sl's next start after wait (s.mu held); any start before
+// then voids it.
+func (s *Supervisor) startIn(sl *slot, wait time.Duration) {
 	sl.plan++
 	plan := sl.plan
 	timer := s.o.Clock.After(wait)
@@ -570,10 +717,6 @@ func (s *Supervisor) retry(sl *slot, ev Event, code int, lived time.Duration, no
 		}
 		s.start(sl)
 	}()
-	s.queue.put(ev)
-	if sl.stopped {
-		s.startWatcher(sl)
-	}
 }
 
 // read turns the helper's lines into events. Once it stops reading (the
@@ -597,8 +740,15 @@ func (s *Supervisor) read(id provider.ID, gen int, p Proc) {
 		sl := s.slots[id]
 		current := sl != nil && sl.gen == gen && sl.proc == p && !sl.standby
 		if current {
-			switch m.Type {
-			case trayproto.TypeReady:
+			switch {
+			case id == BridgeSlot && m.Type == trayproto.TypeShell:
+				if m.Enabled {
+					s.bridgeEnabled = true // never asked again by this process (F15)
+				}
+				s.queue.put(Event{Provider: id, Attached: m.Attached, Supported: m.Supported, Enabled: m.Enabled, Why: m.Why})
+			case id == BridgeSlot && m.Type != trayproto.TypeClick:
+				// the bridge shows no icon: nothing else it says counts
+			case m.Type == trayproto.TypeReady:
 				sl.ready = true
 				if m.Window != 0 {
 					sl.window = m.Window
@@ -611,10 +761,10 @@ func (s *Supervisor) read(id provider.ID, gen int, p Proc) {
 						s.probe(other, "another tray icon came up")
 					}
 				}
-			case trayproto.TypeWaiting:
+			case m.Type == trayproto.TypeWaiting:
 				sl.ready = false
 				s.queue.put(Event{Provider: id, Waiting: m.Why})
-			case trayproto.TypeClick:
+			case m.Type == trayproto.TypeClick:
 				s.queue.put(Event{Provider: id, Click: m.ID})
 			}
 		}
@@ -665,12 +815,20 @@ func (s *Supervisor) sendView(sl *slot) {
 	sl.sentItems, sl.sentIcon, sl.sentPanel, sl.sentView = s.items, icon, s.panel, true
 }
 
-// sendNotice hands a pending notice to the first wanted helper.
+// sendNotice hands a pending notice to the first wanted helper, or to the
+// bridge while the panel is attached (it shows it through the desktop's
+// notifications, design 6.4).
 func (s *Supervisor) sendNotice() {
-	if s.notice == "" || len(s.order) == 0 {
+	if s.notice == "" {
 		return
 	}
-	sl := s.slots[s.order[0]]
+	var sl *slot
+	switch {
+	case s.attached:
+		sl = s.slots[BridgeSlot]
+	case len(s.order) > 0:
+		sl = s.slots[s.order[0]]
+	}
 	if sl == nil || sl.proc == nil || sl.quitSent || sl.standby {
 		return
 	}
@@ -679,8 +837,11 @@ func (s *Supervisor) sendNotice() {
 }
 
 func name(id provider.ID) string {
-	if id == "" {
+	switch id {
+	case "":
 		return "none"
+	case BridgeSlot:
+		return "shell"
 	}
 	return string(id)
 }
