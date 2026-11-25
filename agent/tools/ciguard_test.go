@@ -119,3 +119,37 @@ func TestPanelSessionRunsOnlyInItsSession(t *testing.T) {
 		}
 	}
 }
+
+// Review B-M7: winmenu (CI only: it changes the display scale and the
+// screen mode) refuses to run outside GitHub Actions, before it does
+// anything: without both GITHUB_ACTIONS=true and RUNNER_TEMP it exits 2
+// and says why.
+func TestWinmenuRefusesOutsideARunner(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("winmenu does its work on Windows only")
+	}
+	exe := filepath.Join(t.TempDir(), "winmenu.exe")
+	if out, err := exec.Command("go", "build", "-o", exe, "./winmenu").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	for _, partial := range [][]string{nil, {"GITHUB_ACTIONS=true"}, {"RUNNER_TEMP=" + t.TempDir()}, {"GITHUB_ACTIONS=1", "RUNNER_TEMP=" + t.TempDir()}} {
+		env := []string{"PATH=" + os.Getenv("PATH")}
+		for _, k := range []string{"SystemRoot", "windir", "TEMP", "TMP"} {
+			if v, ok := os.LookupEnv(k); ok {
+				env = append(env, k+"="+v)
+			}
+		}
+		for _, args := range [][]string{{"scale", "-to", "150", "-state", filepath.Join(t.TempDir(), "s.json")}, {"open", "-pid", "1"}, {"broadcast"}} {
+			cmd := exec.Command(exe, args...)
+			cmd.Env = append(env, partial...)
+			out, err := cmd.CombinedOutput()
+			code := -1
+			if ee, ok := err.(*exec.ExitError); ok {
+				code = ee.ExitCode()
+			}
+			if code != 2 || !strings.Contains(string(out), "refusing to run") {
+				t.Fatalf("%v %v: exit %d (%v)\n%s", partial, args, code, err, out)
+			}
+		}
+	}
+}

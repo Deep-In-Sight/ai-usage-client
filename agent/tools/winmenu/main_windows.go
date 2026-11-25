@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"runtime"
 	"time"
 	"unsafe"
 
@@ -34,6 +35,7 @@ var (
 	pGetMenuItemInfoW              = user32.NewProc("GetMenuItemInfoW")
 	pGetDpiForWindow               = user32.NewProc("GetDpiForWindow")
 	pSetCursorPos                  = user32.NewProc("SetCursorPos")
+	pGetCursorPos                  = user32.NewProc("GetCursorPos")
 	pGetSystemMetrics              = user32.NewProc("GetSystemMetrics")
 	pGetDC                         = user32.NewProc("GetDC")
 	pReleaseDC                     = user32.NewProc("ReleaseDC")
@@ -45,6 +47,22 @@ var (
 	pChangeDisplaySettingsExW      = user32.NewProc("ChangeDisplaySettingsExW")
 	pMonitorFromPoint              = user32.NewProc("MonitorFromPoint")
 	pGetDpiForMonitor              = windows.NewLazySystemDLL("shcore.dll").NewProc("GetDpiForMonitor")
+	pGetSysColor                   = user32.NewProc("GetSysColor")
+	pGetModuleHandleW              = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetModuleHandleW")
+	pGetSysColorBrush              = user32.NewProc("GetSysColorBrush")
+	pSystemParametersInfoForDpi    = user32.NewProc("SystemParametersInfoForDpi")
+	pRegisterClassExW              = user32.NewProc("RegisterClassExW")
+	pCreateWindowExW               = user32.NewProc("CreateWindowExW")
+	pDestroyWindow                 = user32.NewProc("DestroyWindow")
+	pDefWindowProcW                = user32.NewProc("DefWindowProcW")
+	pCreatePopupMenu               = user32.NewProc("CreatePopupMenu")
+	pInsertMenuItemW               = user32.NewProc("InsertMenuItemW")
+	pDestroyMenu                   = user32.NewProc("DestroyMenu")
+	pTrackPopupMenu                = user32.NewProc("TrackPopupMenu")
+	pSetForegroundWindow           = user32.NewProc("SetForegroundWindow")
+	pFillRect                      = user32.NewProc("FillRect")
+	pCreateFontIndirectW           = gdi32.NewProc("CreateFontIndirectW")
+	pGetTextMetricsW               = gdi32.NewProc("GetTextMetricsW")
 
 	pCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
 	pCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
@@ -125,33 +143,53 @@ func windowOf(pid uint32, cls string, visible bool) windows.Handle {
 type openResult struct {
 	Menu      [2]int32 `json:"menu"` // the menu window's width and height
 	DPI       uint32   `json:"dpi"`
+	Line      int      `json:"line"` // the menu font's line at that DPI
 	Items     []item   `json:"items"`
 	Header    int      `json:"header"` // index of the first header
 	Row       int      `json:"row"`
 	Quit      int      `json:"quit"`
-	Frame     string   `json:"frame"`      // the menu window's outermost pixel (left, half-way down)
-	Frame2    string   `json:"frame2"`     // one pixel further in
-	Pad       string   `json:"pad"`        // just left of the items
-	PadTop    string   `json:"pad_top"`    // just above the first item
-	HeaderBg  string   `json:"header_bg"`  // inside the header, top right
-	QuitBg    string   `json:"quit_bg"`    // inside Quit, top right
-	Lum       float64  `json:"lum"`        // the header background's luminance
-	BgDiff    int      `json:"bg_diff"`    // header vs Quit
-	HoverRow  string   `json:"hover_row"`  // the first row, the pointer on it
-	HoverQuit string   `json:"hover_quit"` // Quit, the pointer on it
+	Frame     []string `json:"frame"`     // the menu window's outermost pixel: left, right, top, bottom (half-way along)
+	Frame2    []string `json:"frame2"`    // one pixel further in
+	Pads      []string `json:"pads"`      // the menu's padding next to the items: left, right, above the first, below the last
+	HeaderBg  string   `json:"header_bg"` // inside the header, top right
+	QuitBg    string   `json:"quit_bg"`   // inside Quit, top right
+	Lum       float64  `json:"lum"`       // the header background's luminance
+	BgDiff    int      `json:"bg_diff"`   // header vs Quit
+	SysMenu   string   `json:"sys_menu"`  // GetSysColor(COLOR_MENU), read here
+	SysHi     string   `json:"sys_hi"`    // GetSysColor(COLOR_HIGHLIGHT)
+	HoverRow  string   `json:"hover_row"` // the first row, the pointer on it
+	HoverQuit string   `json:"hover_quit"`
 	HoverDiff int      `json:"hover_diff"`
 	Picture   string   `json:"picture"`
+	// RefWidth is the width Windows gives the items of a menu of this
+	// tool's own whose owner-drawn items measure exactly the panel's
+	// width at this DPI: the header's width equals it when the widest of
+	// the helper's items measures the panel's width, and Addition (it
+	// minus the panel's width) is what Windows adds to a measured width
+	RefWidth int32 `json:"ref_width"`
+	Addition int32 `json:"addition"`
 	// verdict numbers: items whose height the panel does not draw at this
 	// DPI (and items not owner-drawn); the header's drawn width minus the
-	// measured one (Windows' gutter); the header background's distance to
-	// the dark set's; the padding's distance to the header background (0:
+	// reference's (0: the widest item measures the panel's width); the
+	// header background's distance to the dark set's and to the system's
+	// menu colour; the padding's distance to the header background (0:
 	// everything inside the frame is ours); the hovered row's to the
-	// background
+	// background, to the system's highlight and to the dark set's; the
+	// bar's height in the first row
 	HeightProblems []string `json:"height_problems"`
-	Gutter         int32    `json:"gutter"`
+	WidthDiff      int32    `json:"width_diff"`
 	DarkDiff       int      `json:"dark_diff"`
+	MenuDiff       int      `json:"menu_diff"`
 	PadDiff        int      `json:"pad_diff"`
 	HoverVsBg      int      `json:"hover_vs_bg"`
+	HiDiff         int      `json:"hi_diff"`
+	DarkHiDiff     int      `json:"dark_hi_diff"`
+	BarH           int      `json:"bar_h"`
+}
+
+func sysColor(i uintptr) rgb {
+	c, _, _ := pGetSysColor.Call(i)
+	return rgb{uint8(c), uint8(c >> 8), uint8(c >> 16)}
 }
 
 func open(pid uint32, pngPath string) (*openResult, error) {
@@ -162,6 +200,16 @@ func open(pid uint32, pngPath string) (*openResult, error) {
 	sw, _, _ := pGetSystemMetrics.Call(0)
 	sh, _, _ := pGetSystemMetrics.Call(1)
 	// the menu opens up from the pointer: put it where nothing is under it
+	pSetCursorPos.Call(sw/2, sh-2)
+	time.Sleep(300 * time.Millisecond)
+	res := &openResult{}
+	dpi := primaryDPI()
+	m := panel.MetricsAt(int(dpi))
+	ref, err := refMenuWidth(int32(m.Width), int32(m.Item))
+	if err != nil {
+		return nil, fmt.Errorf("the reference menu: %v", err)
+	}
+	res.RefWidth, res.Addition = ref, ref-int32(m.Width)
 	pSetCursorPos.Call(sw/2, sh-2)
 	time.Sleep(300 * time.Millisecond)
 	const wmUser, wmRButtonUp = 0x0400, 0x0205
@@ -178,12 +226,15 @@ func open(pid uint32, pngPath string) (*openResult, error) {
 	}
 	defer closeMenu(pid, mw)
 	time.Sleep(800 * time.Millisecond)
-	res := &openResult{}
 	var wr rect
 	pGetWindowRect.Call(uintptr(mw), uintptr(unsafe.Pointer(&wr)))
 	res.Menu = [2]int32{wr.Right - wr.Left, wr.Bottom - wr.Top}
 	d, _, _ := pGetDpiForWindow.Call(uintptr(mw))
 	res.DPI = uint32(d)
+	if res.DPI != dpi {
+		return res, fmt.Errorf("the menu is at %d DPI, the screen at %d", res.DPI, dpi)
+	}
+	res.Line = menuLine(res.DPI)
 	const mnGetHMenu = 0x01E1
 	menu, _, _ := pSendMessageW.Call(uintptr(mw), mnGetHMenu, 0, 0)
 	if menu == 0 {
@@ -194,39 +245,47 @@ func open(pid uint32, pngPath string) (*openResult, error) {
 		var r rect
 		pGetMenuItemRect.Call(0, menu, uintptr(i), uintptr(unsafe.Pointer(&r)))
 		const miimFType, miimState = 0x0100, 0x0001
-		mi := struct {
-			Size, Mask, Type, State     uint32
-			ID                          uint32
-			SubMenu, Checked, Unchecked windows.Handle
-			ItemData                    uintptr
-			TypeData                    *uint16
-			Cch                         uint32
-			BMPItem                     windows.Handle
-		}{Mask: miimFType | miimState}
+		mi := menuItemInfo{Mask: miimFType | miimState}
 		mi.Size = uint32(unsafe.Sizeof(mi))
 		pGetMenuItemInfoW.Call(menu, uintptr(i), 1, uintptr(unsafe.Pointer(&mi)))
 		const mftOwnerDraw, mftSeparator, mfsDisabled = 0x0100, 0x0800, 0x0003
 		res.Items = append(res.Items, item{Left: r.Left, Top: r.Top, Right: r.Right, Bottom: r.Bottom,
 			Owner: mi.Type&mftOwnerDraw != 0, Sep: mi.Type&mftSeparator != 0, Disabled: mi.State&mfsDisabled != 0})
 	}
-	var err error
 	if res.Header, res.Row, res.Quit, err = roles(res.Items); err != nil {
 		return res, err
 	}
-	m := panel.MetricsAt(int(res.DPI))
-	res.HeightProblems = append([]string{}, heightProblems(res.Items, m)...) // [] rather than null
-	res.Gutter = res.Items[res.Header].w() - int32(m.Width)
-	shot := capture()
+	res.HeightProblems = append([]string{}, heightProblems(res.Items, m, res.Line)...) // [] rather than null
 	hd, qt, rw := res.Items[res.Header], res.Items[res.Quit], res.Items[res.Row]
-	mid := (wr.Top + wr.Bottom) / 2
-	res.Frame, res.Frame2 = shot.at(wr.Left, mid).String(), shot.at(wr.Left+1, mid).String()
-	pad, padTop := shot.at(hd.Left-1, (hd.Top+hd.Bottom)/2), shot.at((hd.Left+hd.Right)/2, res.Items[0].Top-1)
-	res.Pad, res.PadTop = pad.String(), padTop.String()
+	res.WidthDiff = hd.w() - res.RefWidth
+	shot := capture()
+	midX, midY := (wr.Left+wr.Right)/2, (wr.Top+wr.Bottom)/2
+	for _, p := range [][2]int32{{wr.Left, midY}, {wr.Right - 1, midY}, {midX, wr.Top}, {midX, wr.Bottom - 1}} {
+		res.Frame = append(res.Frame, shot.at(p[0], p[1]).String())
+	}
+	for _, p := range [][2]int32{{wr.Left + 1, midY}, {wr.Right - 2, midY}, {midX, wr.Top + 1}, {midX, wr.Bottom - 2}} {
+		res.Frame2 = append(res.Frame2, shot.at(p[0], p[1]).String())
+	}
+	last := res.Items[len(res.Items)-1]
 	hb, qb := shot.at(hd.Right-3, hd.Top+2), shot.at(qt.Right-3, qt.Top+2)
+	for _, p := range [][2]int32{{hd.Left - 1, (hd.Top + hd.Bottom) / 2}, {hd.Right, (hd.Top + hd.Bottom) / 2},
+		{(hd.Left + hd.Right) / 2, res.Items[0].Top - 1}, {(last.Left + last.Right) / 2, last.Bottom}} {
+		c := shot.at(p[0], p[1])
+		res.Pads = append(res.Pads, c.String())
+		res.PadDiff = max(res.PadDiff, diff(c, hb))
+	}
 	res.HeaderBg, res.QuitBg, res.Lum, res.BgDiff = hb.String(), qb.String(), lum(hb), diff(hb, qb)
 	dark := panel.DarkPalette.Background
 	res.DarkDiff = diff(hb, rgb{dark.R, dark.G, dark.B})
-	res.PadDiff = max(diff(pad, hb), diff(padTop, hb))
+	sm, shi := sysColor(4), sysColor(13) // COLOR_MENU, COLOR_HIGHLIGHT
+	res.SysMenu, res.SysHi, res.MenuDiff = sm.String(), shi.String(), diff(hb, sm)
+	// the bar's height: the column a quarter of the bar's length in
+	// (inside the fill of the CI's 42 %), across the first row
+	col := []rgb{}
+	for y := rw.Top; y < rw.Bottom; y++ {
+		col = append(col, shot.at(rw.Left+int32(m.Pad+2*m.Bar), y))
+	}
+	res.BarH = barRun(col)
 	if pngPath != "" {
 		if err := shot.save(pngPath, wr); err != nil {
 			return res, err
@@ -241,8 +300,162 @@ func open(pid uint32, pngPath string) (*openResult, error) {
 	}
 	hr, hq := hover(rw), hover(qt)
 	res.HoverRow, res.HoverQuit, res.HoverDiff, res.HoverVsBg = hr.String(), hq.String(), diff(hr, hq), diff(hr, hb)
+	dh := panel.DarkPalette.Highlight
+	res.HiDiff, res.DarkHiDiff = diff(hr, shi), diff(hr, rgb{dh.R, dh.G, dh.B})
 	pSetCursorPos.Call(sw/2, sh-2)
 	return res, nil
+}
+
+type menuItemInfo struct {
+	Size, Mask, Type, State     uint32
+	ID                          uint32
+	SubMenu, Checked, Unchecked windows.Handle
+	ItemData                    uintptr
+	TypeData                    *uint16
+	Cch                         uint32
+	BMPItem                     windows.Handle
+}
+
+// menuLine is the height of a line of the menu font at dpi
+// (SystemParametersInfoForDpi's NONCLIENTMETRICS, GetTextMetrics), 0 when
+// Windows does not say.
+func menuLine(dpi uint32) int {
+	const spiGetNonClientMetrics = 0x0029
+	var ncm [504]byte // NONCLIENTMETRICSW
+	*(*uint32)(unsafe.Pointer(&ncm[0])) = uint32(len(ncm))
+	if r, _, _ := pSystemParametersInfoForDpi.Call(spiGetNonClientMetrics, uintptr(len(ncm)), uintptr(unsafe.Pointer(&ncm[0])), 0, uintptr(dpi)); r == 0 {
+		return 0
+	}
+	// cbSize, five ints (24), lfCaptionFont (92), two ints (8),
+	// lfSmCaptionFont (92), two ints (8): lfMenuFont is at 224
+	f, _, _ := pCreateFontIndirectW.Call(uintptr(unsafe.Pointer(&ncm[224])))
+	if f == 0 {
+		return 0
+	}
+	defer pDeleteObject.Call(f)
+	dc, _, _ := pCreateCompatibleDC.Call(0)
+	if dc == 0 {
+		return 0
+	}
+	defer pDeleteDC.Call(dc)
+	old, _, _ := pSelectObject.Call(dc, f)
+	defer pSelectObject.Call(dc, old)
+	var tm [16]int32 // TEXTMETRICW begins with tmHeight
+	if r, _, _ := pGetTextMetricsW.Call(dc, uintptr(unsafe.Pointer(&tm[0]))); r == 0 {
+		return 0
+	}
+	return int(tm[0])
+}
+
+// fromWindows is a pointer Windows passed in a message's lParam (memory
+// Go does not manage).
+func fromWindows(p uintptr) unsafe.Pointer { return *(*unsafe.Pointer)(unsafe.Pointer(&p)) }
+
+// refMenuWidth opens a menu of this tool's own at the pointer, two
+// owner-drawn items that measure exactly w×h (one checked, as "Start at
+// login" is), and returns the width Windows gives its items: the
+// measured width plus Windows' own addition.
+func refMenuWidth(w, h int32) (int32, error) {
+	type answer struct {
+		width int32
+		err   error
+	}
+	ch := make(chan answer, 1)
+	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		const wmMeasureItem, wmDrawItem = 0x002C, 0x002B
+		proc := windows.NewCallback(func(hwnd, msg, wParam, lParam uintptr) uintptr {
+			switch msg {
+			case wmMeasureItem:
+				mi := (*struct{ CtlType, CtlID, ItemID, ItemWidth, ItemHeight uint32 })(fromWindows(lParam))
+				mi.ItemWidth, mi.ItemHeight = uint32(w), uint32(h)
+				return 1
+			case wmDrawItem:
+				di := (*struct {
+					CtlType, CtlID, ItemID, ItemAction, ItemState uint32
+					HwndItem                                      uintptr
+					HDC                                           uintptr
+					RcItem                                        rect
+				})(fromWindows(lParam))
+				br, _, _ := pGetSysColorBrush.Call(4)
+				pFillRect.Call(di.HDC, uintptr(unsafe.Pointer(&di.RcItem)), br)
+				return 1
+			}
+			r, _, _ := pDefWindowProcW.Call(hwnd, msg, wParam, lParam)
+			return r
+		})
+		inst, _, _ := pGetModuleHandleW.Call(0)
+		cls := utf16("WinmenuReference")
+		wc := struct {
+			Size, Style                uint32
+			WndProc                    uintptr
+			ClsExtra, WndExtra         int32
+			Instance, Icon, Cursor, Bg uintptr
+			MenuName, ClassName        *uint16
+			IconSm                     uintptr
+		}{WndProc: proc, Instance: inst, ClassName: cls}
+		wc.Size = uint32(unsafe.Sizeof(wc))
+		pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))) // a second call fails harmlessly
+		const wsPopup = 0x80000000
+		hwnd, _, _ := pCreateWindowExW.Call(0, uintptr(unsafe.Pointer(cls)), 0, wsPopup, 0, 0, 0, 0, 0, 0, inst, 0)
+		if hwnd == 0 {
+			ch <- answer{0, errors.New("CreateWindowEx")}
+			return
+		}
+		defer pDestroyWindow.Call(hwnd)
+		menu, _, _ := pCreatePopupMenu.Call()
+		if menu == 0 {
+			ch <- answer{0, errors.New("CreatePopupMenu")}
+			return
+		}
+		defer pDestroyMenu.Call(menu)
+		const miimFType, miimID, miimState, miimData, mftOwnerDraw, mfsChecked = 0x100, 0x2, 0x1, 0x20, 0x100, 0x8
+		for i, state := range []uint32{0, mfsChecked} {
+			mi := menuItemInfo{Mask: miimFType | miimID | miimState | miimData, Type: mftOwnerDraw, State: state, ID: uint32(i + 1), ItemData: uintptr(i + 1)}
+			mi.Size = uint32(unsafe.Sizeof(mi))
+			if r, _, _ := pInsertMenuItemW.Call(menu, uintptr(i), 1, uintptr(unsafe.Pointer(&mi))); r == 0 {
+				ch <- answer{0, errors.New("InsertMenuItem")}
+				return
+			}
+		}
+		got := make(chan int32, 1)
+		go func() {
+			pid := uint32(os.Getpid())
+			for range 100 {
+				time.Sleep(100 * time.Millisecond)
+				if mw := windowOf(pid, "#32768", true); mw != 0 {
+					time.Sleep(300 * time.Millisecond)
+					const mnGetHMenu = 0x01E1
+					m, _, _ := pSendMessageW.Call(uintptr(mw), mnGetHMenu, 0, 0)
+					var r rect
+					pGetMenuItemRect.Call(0, m, 0, uintptr(unsafe.Pointer(&r)))
+					got <- r.Right - r.Left
+					closeMenu(pid, mw)
+					return
+				}
+			}
+			got <- 0
+			pPostMessageW.Call(hwnd, 0x001F, 0, 0) // WM_CANCELMODE
+		}()
+		var p struct{ X, Y int32 }
+		pGetCursorPos.Call(uintptr(unsafe.Pointer(&p)))
+		pSetForegroundWindow.Call(hwnd)
+		const tpmBottomAlign = 0x0020
+		pTrackPopupMenu.Call(menu, tpmBottomAlign, uintptr(p.X), uintptr(p.Y), 0, hwnd, 0)
+		width := <-got
+		if width <= 0 {
+			ch <- answer{0, errors.New("its menu did not open")}
+			return
+		}
+		ch <- answer{width, nil}
+	}()
+	select {
+	case a := <-ch:
+		return a.width, a.err
+	case <-time.After(20 * time.Second):
+		return 0, errors.New("no answer within 20 s")
+	}
 }
 
 // closeMenu ends the menu (Escape, else WM_CANCELMODE).

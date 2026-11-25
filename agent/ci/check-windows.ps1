@@ -35,14 +35,15 @@ $script:required = 0
 $script:passed = 0
 $script:failedIds = @()
 
-function OneLine($s) {
+function OneLine($s, [int]$Max = 300) {
     $t = ("$s" -replace "[\r\n]+", ' ') -replace '%', '%25'
-    if ($t.Length -gt 300) { $t = $t.Substring(0, 300) }
+    if ($t.Length -gt $Max) { $t = $t.Substring(0, $Max) }
     return $t
 }
 function Pass([string]$Id, $Msg) { $script:required++; $script:passed++; Write-Output "pass ${Id}: $(OneLine $Msg)" }
-function Fail([string]$Id, $Msg) { $script:required++; $script:failedIds += $Id; Write-Output "::error title=${Id}::$(OneLine $Msg)" }
-function Info([string]$Id, $Msg) { Write-Output "::notice title=${Id}::$(OneLine $Msg)" }
+function Fail([string]$Id, $Msg, [int]$Max = 300) { $script:required++; $script:failedIds += $Id; Write-Output "::error title=${Id}::$(OneLine $Msg $Max)" }
+# A step shows at most 10 notices: keep them few (the last is summary).
+function Info([string]$Id, $Msg, [int]$Max = 300) { Write-Output "::notice title=${Id}::$(OneLine $Msg $Max)" }
 # Run one check; an exception is a failure of that check.
 function Check([string]$Id, [scriptblock]$Body) {
     try { & $Body } catch { Fail $Id "exception: $($_.Exception.Message)" }
@@ -277,11 +278,17 @@ Check 'status.both' {
 # The usage panel in the real tray menu (plan Task 8, PR-22): a helper's
 # menu, opened by posting the tray icon's right-click to its SystrayClass
 # window and measured by tools/winmenu, with the app mode light and dark
-# and at 125 % and 150 % (desktop runner only). Every item is drawn by the
-# helper; the header and Quit have one background, the pointer one
-# highlight; dark draws the dark set and the frame Windows draws around the
-# menu is measured, not judged. The app mode, the display scale and the
-# screen mode are put back in the finally block (and broadcast).
+# and at 125 % and 150 % (desktop runner only; one helper throughout).
+# Every item is drawn by the helper at the menu's DPI (heights, the bar's
+# height); the widest item measures the panel's width (the fake server's
+# server line names two fetching PCs: it wraps; Windows' own addition from
+# a reference menu of winmenu's) and what Windows adds to it is bounded; the header, Quit and the padding inside Windows' frame
+# (all four sides) have one background, the pointer one highlight, in the
+# system's colours when light (GetSysColor, read by winmenu) and in the
+# dark set when dark; the frame itself is Windows' own: published, not
+# judged. The app mode, the display scale and the screen mode are put back
+# in the finally block (and broadcast), and that is checked too. Two
+# notices carry the numbers (the step's notices are few).
 if ($Desktop) {
     $wm = Join-Path $env:CI_BIN 'winmenu.exe'
     $themeKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
@@ -289,6 +296,10 @@ if ($Desktop) {
     $oldApps = $null
     if ($themeKeyExisted) { $oldApps = (Get-ItemProperty -Path $themeKey -Name AppsUseLightTheme -ErrorAction SilentlyContinue).AppsUseLightTheme }
     $scaleState = Join-Path $env:RUNNER_TEMP 'panel-scale-state.json'
+    $script:panelPid = $null
+    $script:panelDpi = 96
+    $script:panelAddition = $null
+    $script:panelFacts = @()
     function WinMenu([string]$Arguments) {
         $r = RunExe $wm $Arguments 120
         $j = $null; try { $j = "$($r.out)".Trim() | ConvertFrom-Json } catch { }
@@ -296,88 +307,123 @@ if ($Desktop) {
         return $j
     }
     function SetApps([int]$v) {
-        if (-not (Test-Path $themeKey)) { New-Item -Path $themeKey -Force | Out-Null }
-        Set-ItemProperty -Path $themeKey -Name AppsUseLightTheme -Value $v -Type DWord
+        if (-not (Test-Path $themeKey)) { New-Item -Path $themeKey -Force -ErrorAction Stop | Out-Null }
+        Set-ItemProperty -Path $themeKey -Name AppsUseLightTheme -Value $v -Type DWord -ErrorAction Stop
         $null = WinMenu 'broadcast'
         Start-Sleep -Seconds 2
     }
+    # the menu of the first helper, then always of that one (review B-M3:
+    # 125 % and 150 % must measure the helper that was opened at 100 %)
     function PanelMenu([string]$Name) {
-        $h = @(HelpersWithWindow $script:agentPid | Select-Object -First 1)
-        if ($h.Count -eq 0) { return [pscustomobject]@{ error = 'no helper with a tray window' } }
-        return WinMenu "open -pid $($h[0].ProcessId) -png `"$(Join-Path $out $Name)`""
+        if (-not $script:panelPid) {
+            $h = @(HelpersWithWindow $script:agentPid | Select-Object -First 1)
+            if ($h.Count -eq 0) { return [pscustomobject]@{ error = 'no helper with a tray window' } }
+            $script:panelPid = $h[0].ProcessId
+        } elseif (@(HelpersWithWindow $script:agentPid | Where-Object { $_.ProcessId -eq $script:panelPid }).Count -eq 0) {
+            return [pscustomobject]@{ error = "helper $($script:panelPid) is gone (another helper would measure a menu never opened before)" }
+        }
+        return WinMenu "open -pid $($script:panelPid) -png `"$(Join-Path $out $Name)`""
     }
-    function MenuSizes($j) {
-        if ($j.error -or -not $j.items) { return "error: $($j.error)" }
+    function MenuFacts([string]$Name, $j) {
+        if ($j.error -or -not $j.items) { return "${Name}: error $($j.error)" }
         $hs = ($j.items | ForEach-Object { $_.Bottom - $_.Top }) -join ','
-        "menu $($j.menu -join 'x') at $($j.dpi) DPI, header $($j.items[$j.header].Right - $j.items[$j.header].Left) wide (gutter $($j.gutter)), item heights $hs"
+        $hd = $j.items[$j.header]
+        "${Name}: $($j.menu -join 'x') at $($j.dpi) DPI, items $($hd.Right - $hd.Left) wide (reference $($j.ref_width): Windows adds $($j.addition)), heights $hs (line $($j.line)), bar $($j.bar_h); header $($j.header_bg) Quit $($j.quit_bg) system $($j.sys_menu); hover $($j.hover_row) Quit $($j.hover_quit) system $($j.sys_hi); frame l/r/t/b $($j.frame -join '/') then $($j.frame2 -join '/'); padding $($j.pads -join '/') (pid $($script:panelPid))"
     }
-    function MenuColours($j) {
-        "header $($j.header_bg) Quit $($j.quit_bg) luminance $([Math]::Round([double]$j.lum, 2)); hover row $($j.hover_row) Quit $($j.hover_quit); frame $($j.frame)/$($j.frame2) padding $($j.pad)/$($j.pad_top)"
-    }
-    # what the light and dark menus share: drawn and measured at the
-    # menu's DPI, one background, one highlight
-    function MenuProblems($j) {
+    # what every menu must be: drawn and measured at the menu's DPI, the
+    # panel's width, one background inside the frame, one highlight, in
+    # the mode's colours
+    # $Addition: what Windows adds to this helper's measured width. At
+    # 100 % it is the reference menu's (winmenu, a process as fresh as the
+    # helper's start); after a change of the scale a running process keeps
+    # the addition it started with while a new one gets the new scale's
+    # (first CI run: the helper's items 414 and 494 px at 125 % and 150 %,
+    # the reference 416 and 500), so there the helper's own from 100 % is
+    # used and the fresh one is published and bounded too.
+    function MenuProblems($j, [bool]$Dark, $Addition = $null) {
         $p = @()
         if ($j.error) { return @("error: $($j.error)") }
         $p += @($j.height_problems)
+        $bar = [Math]::Floor((8 * $j.dpi + 48) / 96)
+        if ([Math]::Abs($j.bar_h - $bar) -gt 1) { $p += "bar $($j.bar_h) px high, want $bar" }
+        if ($null -eq $Addition) { $Addition = $j.addition }
+        $width = [Math]::Floor((320 * $j.dpi + 48) / 96)
+        $widest = ($j.items[$j.header].Right - $j.items[$j.header].Left) - $Addition
+        if ($widest -ne $width) { $p += "the widest item measures $widest (items $($j.items[$j.header].Right - $j.items[$j.header].Left) wide, Windows adds $Addition), not the panel's $width" }
+        $most = [Math]::Ceiling(0.4 * $j.dpi)
+        foreach ($a in @($j.addition, $Addition)) {
+            if ($a -lt 0 -or $a -gt $most) { $p += "Windows adds $a px (0..$most)" }
+        }
         if ($j.bg_diff -gt 3) { $p += "header $($j.header_bg) vs Quit $($j.quit_bg)" }
+        if ($j.pad_diff -gt 3) { $p += "padding $($j.pads -join '/') is not the header's $($j.header_bg)" }
         if ($j.hover_diff -gt 3) { $p += "hover: row $($j.hover_row) vs Quit $($j.hover_quit)" }
         if ($j.hover_vs_bg -le 3) { $p += "no highlight under the pointer ($($j.hover_row))" }
+        if ($Dark) {
+            if ([double]$j.lum -ge 0.3) { $p += "luminance $($j.lum)" }
+            if ($j.dark_diff -gt 2) { $p += "header $($j.header_bg) is not the dark set's #2b2b2b" }
+            if ($j.dark_hi_diff -gt 3) { $p += "hover $($j.hover_row) is not the dark set's #414141" }
+        } else {
+            if ([double]$j.lum -le 0.7) { $p += "luminance $($j.lum)" }
+            if ($j.menu_diff -gt 3) { $p += "header $($j.header_bg) is not the system's menu colour $($j.sys_menu)" }
+            if ($j.hi_diff -gt 3) { $p += "hover $($j.hover_row) is not the system's highlight $($j.sys_hi)" }
+        }
         return @($p | Where-Object { $_ })
     }
     try {
         Check 'panel.menu_light' {
             SetApps 1
             $j = PanelMenu 'panel-menu-light.png'
-            Info 'panel.menu_light.sizes' (MenuSizes $j)
-            Info 'panel.menu_light.colours' (MenuColours $j)
-            $p = @(MenuProblems $j)
-            if (-not $j.error -and [double]$j.lum -le 0.7) { $p += "luminance $($j.lum)" }
-            if ($p.Count -eq 0) { Pass 'panel.menu_light' "every item drawn, $($j.header_bg) throughout, highlight $($j.hover_row)" } else { Fail 'panel.menu_light' ($p -join '; ') }
+            $script:panelFacts += MenuFacts 'light' $j
+            if (-not $j.error -and $j.dpi) { $script:panelDpi = $j.dpi; $script:panelAddition = $j.addition }
+            $p = @(MenuProblems $j $false)
+            if ($p.Count -eq 0) { Pass 'panel.menu_light' "every item drawn, $($j.header_bg) throughout, highlight $($j.hover_row), $($j.items[0].Right - $j.items[0].Left) px (Windows adds $($j.addition))" } else { Fail 'panel.menu_light' ($p -join '; ') 1500 }
         }
         Check 'panel.menu_dark' {
             SetApps 0
             $j = PanelMenu 'panel-menu-dark.png'
-            Info 'panel.menu_dark.sizes' (MenuSizes $j)
-            Info 'panel.menu_dark.colours' (MenuColours $j)
-            # the frame is Windows' own: measured and published, not judged
-            Info 'panel.menu_dark.frame' "frame $($j.frame) then $($j.frame2); padding $($j.pad) (left) $($j.pad_top) (top), $($j.pad_diff) from the header's background"
-            $p = @(MenuProblems $j)
-            if (-not $j.error) {
-                if ([double]$j.lum -ge 0.3) { $p += "luminance $($j.lum)" }
-                if ($j.dark_diff -gt 2) { $p += "header $($j.header_bg) is not the dark set's #2b2b2b" }
-            }
-            if ($p.Count -eq 0) { Pass 'panel.menu_dark' "every item drawn in the dark set ($($j.header_bg)), highlight $($j.hover_row), frame $($j.frame)" } else { Fail 'panel.menu_dark' ($p -join '; ') }
+            $script:panelFacts += MenuFacts 'dark' $j
+            $p = @(MenuProblems $j $true)
+            if ($p.Count -eq 0) { Pass 'panel.menu_dark' "every item drawn in the dark set ($($j.header_bg)), highlight $($j.hover_row), padding $($j.pads -join '/'), frame $($j.frame -join '/')" } else { Fail 'panel.menu_dark' ($p -join '; ') 1500 }
         }
+        Info 'panel.menu' ($script:panelFacts -join ' | ') 2000
+        # light again, then 125 % and 150 %: the same helper, its menu
+        # measured and drawn again at the new DPI, back from dark (review
+        # B-M5)
         SetApps 1
-        # sizes at 125 % and 150 %: the helper keeps running, the menu is
-        # measured again at the new DPI
         Check 'panel.menu_scale' {
             $p = @()
-            $facts = @()
+            $script:panelFacts = @()
             foreach ($s in 125, 150) {
                 $sc = WinMenu "scale -to $s -state `"$scaleState`""
                 $want = [int]($s * 96 / 100)
                 if ($sc.error -or $sc.dpi -ne $want) { $p += "${s}%: scale not set ($($sc.error) dpi=$($sc.dpi))"; continue }
                 Start-Sleep -Seconds 3
                 $j = PanelMenu "panel-menu-$s.png"
-                $facts += "${s}% (screen $($sc.screen)): $(MenuSizes $j)"
+                $script:panelFacts += MenuFacts "${s}% (screen $($sc.screen))" $j
                 if ($j.error) { $p += "${s}%: $($j.error)"; continue }
                 if ($j.dpi -ne $want) { $p += "${s}%: menu at $($j.dpi) DPI" }
-                $p += @($j.height_problems | ForEach-Object { "${s}%: $_" })
+                $p += @(MenuProblems $j $false $script:panelAddition | ForEach-Object { "${s}%: $_" })
             }
-            foreach ($f in $facts) { Info 'panel.menu_scale.measured' $f }
-            if ($p.Count -eq 0) { Pass 'panel.menu_scale' '125 % and 150 %: drawn at the menu DPI, every height as measured' } else { Fail 'panel.menu_scale' ($p -join '; ') }
+            if ($p.Count -eq 0) { Pass 'panel.menu_scale' '125 % and 150 %: the same helper, every item measured and drawn at the menu DPI, light again' } else { Fail 'panel.menu_scale' ($p -join '; ') 1500 }
         }
     } finally {
+        # review B-M1: the restore is checked, and its errors reach the catch
+        $rp = @()
         $r = WinMenu "scale -to restore -state `"$scaleState`""
-        Info 'panel.restore' "scale: dpi $($r.dpi) screen $($r.screen) $($r.error)"
+        if ($r.error) { $rp += "scale: $($r.error)" }
+        elseif ($r.dpi -ne $script:panelDpi) { $rp += "scale: $($r.dpi) DPI, was $($script:panelDpi)" }
         try {
-            if (-not $themeKeyExisted) { Remove-Item -Path $themeKey -Recurse -Force -ErrorAction SilentlyContinue }
-            elseif ($null -eq $oldApps) { Remove-ItemProperty -Path $themeKey -Name AppsUseLightTheme -ErrorAction SilentlyContinue }
-            else { Set-ItemProperty -Path $themeKey -Name AppsUseLightTheme -Value $oldApps -Type DWord }
-        } catch { Fail 'panel.restore' "AppsUseLightTheme not put back: $($_.Exception.Message)" }
+            if (-not $themeKeyExisted) { if (Test-Path $themeKey) { Remove-Item -Path $themeKey -Recurse -Force -ErrorAction Stop } }
+            elseif ($null -eq $oldApps) { Remove-ItemProperty -Path $themeKey -Name AppsUseLightTheme -ErrorAction Stop }
+            else { Set-ItemProperty -Path $themeKey -Name AppsUseLightTheme -Value $oldApps -Type DWord -ErrorAction Stop }
+        } catch { $rp += "AppsUseLightTheme not put back: $($_.Exception.Message)" }
+        $now = $null
+        if (Test-Path $themeKey) { $now = (Get-ItemProperty -Path $themeKey -Name AppsUseLightTheme -ErrorAction SilentlyContinue).AppsUseLightTheme }
+        if ("$now" -ne "$oldApps") { $rp += "AppsUseLightTheme is [$now], was [$oldApps]" }
         $null = WinMenu 'broadcast'
+        $script:panelFacts += "restored: $($r.dpi) DPI, screen $($r.screen), AppsUseLightTheme [$now]"
+        Info 'panel.menu_scale.measured' ($script:panelFacts -join ' | ') 2000
+        if ($rp.Count -eq 0) { Pass 'panel.restore' "$($r.dpi) DPI, screen $($r.screen), AppsUseLightTheme [$now]" } else { Fail 'panel.restore' ($rp -join '; ') }
     }
 }
 
