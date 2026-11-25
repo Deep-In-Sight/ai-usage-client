@@ -607,21 +607,25 @@ func TestNoticeGoesToTheFirstHelper(t *testing.T) {
 	h.sup.Notice("AI Usage is running.")
 	h.sup.Want([]provider.ID{provider.Claude, provider.Codex})
 	a, b := h.spawned(), h.spawned()
+	a.none(t) // their icons are not up yet (review H3)
+	a.say(t, trayproto.Msg{Type: trayproto.TypeReady})
 	if m := a.next(t); m.Type != trayproto.TypeNotice || m.Text != "AI Usage is running." {
 		t.Fatalf("%+v", m)
 	}
+	b.say(t, trayproto.Msg{Type: trayproto.TypeReady})
+	h.event(func(e Event) bool { return e.Ready && e.Provider == provider.Codex })
 	b.none(t)
-	// once only: a restarted first helper does not show it again (its icon
-	// came up: it took the notice)
-	a.say(t, trayproto.Msg{Type: trayproto.TypeReady})
-	h.event(func(e Event) bool { return e.Ready })
+	// once only: a restarted first helper does not show it again (it took
+	// the notice when its icon was up)
 	h.clk.Advance(time.Minute)
 	a.exit(trayproto.ExitSessionLost)
 	h.event(isExit)
 	h.clk.Advance(time.Second)
 	a = h.spawned()
+	a.say(t, trayproto.Msg{Type: trayproto.TypeReady})
+	h.event(func(e Event) bool { return e.Ready && e.Provider == provider.Claude })
 	a.none(t)
-	// a notice while the helper runs is sent at once
+	// a notice while the icon is up is sent at once
 	h.sup.Notice("second")
 	if m := a.next(t); m.Text != "second" {
 		t.Fatalf("%+v", m)

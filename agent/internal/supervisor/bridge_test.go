@@ -319,7 +319,8 @@ func TestStoppedBridgeIsNotWatched(t *testing.T) {
 }
 
 // While attached the notice goes to the bridge (it shows it through the
-// desktop's notifications); otherwise to the first icon helper as before.
+// desktop's notifications) once it said a supported shell answers;
+// otherwise to the first icon helper whose icon is up (review H3).
 func TestNoticeGoesToBridgeWhenAttached(t *testing.T) {
 	h := newHarness(t)
 	h.sup.Want([]provider.ID{provider.Claude})
@@ -329,6 +330,7 @@ func TestNoticeGoesToBridgeWhenAttached(t *testing.T) {
 	h.sup.SetPanelAttached(true)
 	quitGot(t, c)
 	h.event(isExitOf(provider.Claude))
+	bridgeSays(t, h, b, trayproto.Msg{Type: trayproto.TypeShell, Supported: &yes})
 	h.sup.Notice("AI Usage is running.")
 	if m := b.next(t); m.Type != trayproto.TypeNotice || m.Text != "AI Usage is running." {
 		t.Fatalf("%+v", m)
@@ -336,6 +338,8 @@ func TestNoticeGoesToBridgeWhenAttached(t *testing.T) {
 	h.sup.SetPanelAttached(false)
 	c = h.spawned()
 	h.sup.Notice("second")
+	c.none(t) // its icon is not up yet
+	c.say(t, trayproto.Msg{Type: trayproto.TypeReady})
 	if m := c.next(t); m.Type != trayproto.TypeNotice || m.Text != "second" {
 		t.Fatalf("%+v", m)
 	}
@@ -344,12 +348,22 @@ func TestNoticeGoesToBridgeWhenAttached(t *testing.T) {
 	h2 := newHarness(t)
 	h2.sup.WantBridge(true, false)
 	b2, _ := h2.bridge()
+	bridgeSays(t, h2, b2, trayproto.Msg{Type: trayproto.TypeShell, Supported: &yes})
 	h2.sup.Notice("third") // no icon helper yet
 	b2.none(t)
 	h2.sup.SetPanelAttached(true)
 	if m := b2.next(t); m.Text != "third" {
 		t.Fatalf("%+v", m)
 	}
+}
+
+var yes, no = true, false
+
+// bridgeSays: the bridge b says m and the supervisor handled it.
+func bridgeSays(t *testing.T, h *harness, b *fakeProc, m trayproto.Msg) {
+	t.Helper()
+	b.say(t, m)
+	h.event(func(e Event) bool { return e.Provider == BridgeSlot && (e.Attached != nil || e.Supported != nil) })
 }
 
 // Stop ends the bridge too, and nothing starts after it.
@@ -425,54 +439,100 @@ func TestEnabledLineAfterTheBridgeEnded(t *testing.T) {
 	}
 }
 
-// Review m5: a notice handed to a helper that ends before it took it (a
-// bridge that could not dial its bus says nothing) goes to the next
-// helper; once a helper took it (the bridge said something, an icon
-// helper's icon came up) it is not shown again.
-func TestNoticeKeptUntilAHelperTookIt(t *testing.T) {
+// Review H3: a notice counts as taken when it is handed to a helper that
+// can show it: an icon helper whose icon is up (it shows it at once), the
+// bridge once it said supported:true or attached:true (it is on a bus
+// with a supported shell). One that is not there yet gets nothing, so a
+// notice is never shown twice nor lost with a helper that ends; a notice
+// the bridge has not taken when the panel stops being attached goes to
+// the first icon helper.
+func TestNoticeTakenAtHandOverToAReadyHelper(t *testing.T) {
+	// the bridge, while the panel is awaited: nothing before it is on its
+	// bus; a bridge that ends before (no bus) took nothing
 	h := newHarness(t)
 	h.sup.WantBridge(true, false)
 	b, _ := h.bridge()
 	h.sup.SetPanelAttached(true)
 	h.sup.Notice("AI Usage is running.")
-	if m := b.next(t); m.Type != trayproto.TypeNotice {
-		t.Fatalf("%+v", m)
-	}
-	b.exit(trayproto.ExitSessionLost) // no bus: it said nothing
+	b.none(t)
+	bridgeSays(t, h, b, trayproto.Msg{Type: trayproto.TypeShell, Supported: &no, Why: "no shell version"})
+	b.none(t)
+	b.exit(trayproto.ExitSessionLost)
 	h.event(isExitOf(BridgeSlot))
 	h.clk.Advance(lostDelay)
 	b, _ = h.bridge()
+	b.none(t)
+	bridgeSays(t, h, b, trayproto.Msg{Type: trayproto.TypeShell, Attached: &yes})
 	if m := b.next(t); m.Type != trayproto.TypeNotice || m.Text != "AI Usage is running." {
 		t.Fatalf("%+v", m)
 	}
-	yes := true
-	b.say(t, trayproto.Msg{Type: trayproto.TypeShell, Supported: &yes})
-	h.event(func(e Event) bool { return e.Supported != nil })
-	b.exit(trayproto.ExitSessionLost)
+	b.exit(trayproto.ExitSessionLost) // taken: not shown again
 	h.event(isExitOf(BridgeSlot))
 	h.clk.Advance(2 * lostDelay)
 	b, _ = h.bridge()
+	bridgeSays(t, h, b, trayproto.Msg{Type: trayproto.TypeShell, Supported: &yes})
 	b.none(t)
-	// an icon helper that ends before its icon came up hands it on too
+
+	// an icon helper: only once its icon is up; one that ended before
+	// took nothing
 	h2 := newHarness(t)
 	h2.sup.Notice("second")
 	h2.sup.Want([]provider.ID{provider.Claude})
 	c := h2.spawned()
-	if m := c.next(t); m.Text != "second" {
-		t.Fatalf("%+v", m)
-	}
+	c.none(t)
 	c.exit(trayproto.ExitSessionLost)
 	h2.event(isExit)
 	h2.clk.Advance(lostDelay)
 	c = h2.spawned()
-	if m := c.next(t); m.Text != "second" {
+	c.none(t)
+	c.say(t, trayproto.Msg{Type: trayproto.TypeReady})
+	if m := c.next(t); m.Type != trayproto.TypeNotice || m.Text != "second" {
 		t.Fatalf("%+v", m)
 	}
-	c.say(t, trayproto.Msg{Type: trayproto.TypeReady})
-	h2.event(func(e Event) bool { return e.Ready })
 	h2.clk.Advance(time.Minute)
 	c.exit(trayproto.ExitSessionLost)
 	h2.event(isExit)
 	h2.clk.Advance(lostDelay)
-	h2.spawned().none(t)
+	c = h2.spawned()
+	c.say(t, trayproto.Msg{Type: trayproto.TypeReady})
+	h2.event(func(e Event) bool { return e.Ready })
+	c.none(t)
+
+	// awaited, the bridge never on a supported shell, the panel given up:
+	// the first icon helper shows it, the bridge never gets it
+	h3 := newHarness(t)
+	h3.sup.WantBridge(true, false)
+	b3, _ := h3.bridge()
+	h3.sup.SetPanelAttached(true)
+	h3.sup.Want([]provider.ID{provider.Claude, provider.Codex})
+	h3.sup.Notice("third")
+	h3.noSpawn()
+	h3.sup.SetPanelAttached(false)
+	c1, c2 := h3.spawned(), h3.spawned()
+	c1.say(t, trayproto.Msg{Type: trayproto.TypeReady})
+	if m := c1.next(t); m.Type != trayproto.TypeNotice || m.Text != "third" {
+		t.Fatalf("%+v", m)
+	}
+	c2.say(t, trayproto.Msg{Type: trayproto.TypeReady})
+	h3.event(func(e Event) bool { return e.Ready && e.Provider == provider.Codex })
+	c2.none(t)
+	bridgeSays(t, h3, b3, trayproto.Msg{Type: trayproto.TypeShell, Supported: &yes})
+	b3.none(t)
+}
+
+// Review H3: of the wanted icon helpers, the first whose icon is up shows
+// the notice: one whose icon does not come up (Windows: each icon is its
+// own) does not keep it from the user.
+func TestNoticeGoesToTheFirstIconUp(t *testing.T) {
+	h := newHarness(t)
+	h.sup.Notice("AI Usage is running.")
+	h.sup.Want([]provider.ID{provider.Claude, provider.Codex})
+	a, b := h.spawned(), h.spawned()
+	b.say(t, trayproto.Msg{Type: trayproto.TypeReady})
+	if m := b.next(t); m.Type != trayproto.TypeNotice || m.Text != "AI Usage is running." {
+		t.Fatalf("%+v", m)
+	}
+	a.say(t, trayproto.Msg{Type: trayproto.TypeReady})
+	h.event(func(e Event) bool { return e.Ready && e.Provider == provider.Claude })
+	a.none(t)
 }

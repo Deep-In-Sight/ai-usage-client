@@ -126,22 +126,19 @@ func UIDFor(p provider.ID) uint32 {
 // Supervisor runs the helpers. Its methods may be called from any
 // goroutine.
 type Supervisor struct {
-	o      Options
-	mu     sync.Mutex
-	order  []provider.ID
-	slots  map[provider.ID]*slot
-	items  []trayproto.Item
-	icons  map[provider.ID]IconView
-	panel  *trayproto.Panel
+	o     Options
+	mu    sync.Mutex
+	order []provider.ID
+	slots map[provider.ID]*slot
+	items []trayproto.Item
+	icons map[provider.ID]IconView
+	panel *trayproto.Panel
+	// the once-only notice, until a helper that can show it took it
+	// (sendNotice)
 	notice string
-	// the process the notice was handed to (nil: none), until it takes it
-	// (its icon came up; the bridge said something) or ends without
-	// (review m5)
-	noticeTo  *slot
-	noticeGen int
-	stop      bool
-	done      chan struct{} // closed by Stop: pending restarts end
-	queue     *eventQueue
+	stop   bool
+	done   chan struct{} // closed by Stop: pending restarts end
+	queue  *eventQueue
 	// stale: Windows icons of helpers that ended without removing them
 	// (a crash, a kill); the next helper started removes them
 	stale []trayproto.StaleIcon
@@ -160,7 +157,7 @@ type slot struct {
 	gen         int // counts starts; a stale exit or timer is ignored
 	proc        Proc
 	out         *sender
-	ready       bool
+	ready       bool // an icon helper's icon is up; the bridge said supported:true or attached:true
 	started     time.Time
 	quitSent    bool
 	exited      chan struct{} // closed when the current process ended
@@ -379,12 +376,12 @@ func cloneFloat(f *float64) *float64 {
 	return &v
 }
 
-// Notice is shown once, by the first helper (when its icon is up), or by
-// the bridge while the panel is attached.
+// Notice is shown once: by the first helper whose icon is up, or by the
+// bridge while the panel is attached (sendNotice).
 func (s *Supervisor) Notice(text string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.notice, s.noticeTo = text, nil
+	s.notice = text
 	s.sendNotice()
 }
 
@@ -460,7 +457,6 @@ func (s *Supervisor) start(sl *slot) {
 		return
 	}
 	s.launch(sl, p, token)
-	s.sendNotice() // before the view: shown as soon as the icon is up
 	s.sendView(sl)
 }
 
@@ -530,7 +526,6 @@ func (s *Supervisor) launch(sl *slot, p Proc, token string) {
 		} else {
 			s.queue.put(Event{Provider: sl.id, Exit: &code, RestartIn: -1})
 		}
-		s.noticeLost(sl, gen)
 	}()
 }
 
@@ -755,13 +750,14 @@ func (s *Supervisor) read(id provider.ID, gen int, p Proc) {
 			s.queue.put(Event{Provider: id, Enabled: true})
 		}
 		if current {
-			if m.Type == trayproto.TypeReady || id == BridgeSlot && m.Type == trayproto.TypeShell {
-				s.noticeTaken(sl, gen)
-			}
 			switch {
 			case id == BridgeSlot && m.Type == trayproto.TypeShell:
 				if m.Enabled {
 					s.bridgeEnabled = true // never asked again by this process (F15)
+				}
+				if m.Supported != nil && *m.Supported || m.Attached != nil && *m.Attached {
+					sl.ready = true // on its bus with a supported shell: it can show the notice
+					s.sendNotice()
 				}
 				s.queue.put(Event{Provider: id, Attached: m.Attached, Supported: m.Supported, Enabled: m.Enabled, Why: m.Why})
 			case id == BridgeSlot && m.Type != trayproto.TypeClick:
@@ -772,6 +768,7 @@ func (s *Supervisor) read(id provider.ID, gen int, p Proc) {
 					sl.window = m.Window
 				}
 				s.queue.put(Event{Provider: id, Ready: true})
+				s.sendNotice()
 				// a tray icon came up: the desktop may be back for a
 				// stopped helper too
 				for _, other := range s.slots {
@@ -833,45 +830,35 @@ func (s *Supervisor) sendView(sl *slot) {
 	sl.sentItems, sl.sentIcon, sl.sentPanel, sl.sentView = s.items, icon, s.panel, true
 }
 
-// sendNotice hands a pending notice to the first wanted helper, or to the
-// bridge while the panel is attached (it shows it through the desktop's
-// notifications, design 6.4). It stays pending until that helper took it:
-// one that ends before (a bridge that could not dial its bus) leaves it to
-// the next (review m5).
+// sendNotice hands a pending notice to a helper that can show it now, and
+// it counts as taken then (review H3): while the panel is attached (or
+// awaited) the bridge, once it said a supported shell answered or the
+// panel attached (it shows it through the desktop's notifications, design
+// 6.4); otherwise the first wanted icon helper whose icon is up (it shows
+// it at once). A helper not there yet gets nothing: one that ends before
+// it could show the notice does not take it, and none shows it twice. A
+// notice the bridge had not taken when the panel stopped being attached
+// goes to the icon helpers so (s.mu held).
 func (s *Supervisor) sendNotice() {
-	if s.notice == "" || s.noticeTo != nil {
+	if s.notice == "" {
 		return
 	}
 	var sl *slot
-	switch {
-	case s.attached:
+	if s.attached {
 		sl = s.slots[BridgeSlot]
-	case len(s.order) > 0:
-		sl = s.slots[s.order[0]]
+	} else {
+		for _, id := range s.order {
+			if c := s.slots[id]; c != nil && c.ready {
+				sl = c
+				break
+			}
+		}
 	}
-	if sl == nil || sl.proc == nil || sl.quitSent || sl.standby {
+	if sl == nil || !sl.ready || sl.proc == nil || sl.out == nil || sl.quitSent || sl.standby {
 		return
 	}
 	sl.out.send(trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeNotice, Text: s.notice})
-	s.noticeTo, s.noticeGen = sl, sl.gen
-}
-
-// noticeTaken: the process gen of sl took the notice it was handed: an
-// icon helper shows it once its icon is up, the bridge once it is on its
-// bus (s.mu held).
-func (s *Supervisor) noticeTaken(sl *slot, gen int) {
-	if s.noticeTo == sl && s.noticeGen == gen {
-		s.notice, s.noticeTo = "", nil
-	}
-}
-
-// noticeLost: the process gen of sl ended (its end handled); a notice it
-// had not taken goes to the next helper (s.mu held).
-func (s *Supervisor) noticeLost(sl *slot, gen int) {
-	if s.noticeTo == sl && s.noticeGen == gen {
-		s.noticeTo = nil
-		s.sendNotice()
-	}
+	s.notice = ""
 }
 
 func name(id provider.ID) string {

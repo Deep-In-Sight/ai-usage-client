@@ -444,28 +444,76 @@ func TestStoppedBridgeShowsIconsAtOnce(t *testing.T) {
 
 // The bridge found no supported GNOME Shell, or none at all: the icons
 // come at once, even while the marker holds them (ruling in the 4b
-// report); the marker stays, as no supported shell answered (review I1).
+// report). The marker goes when the shell answered with a version the
+// panel does not support (no panel will attach on this desktop), and stays
+// for "no shell" and "no shell version" (a session not up yet: review I1;
+// ruling of 4b fix round 2).
 func TestUnsupportedShellShowsIconsAtOnce(t *testing.T) {
+	for why, kept := range map[string]bool{"no shell": true, "no shell version": true, "unsupported 44.2": false} {
+		r := newLoopRig(t, claudeInUse(), withMarker(t, paths.PanelAttachedFile))
+		b := r.bridge()
+		r.noIcon()
+		b.say(trayproto.Msg{Type: trayproto.TypeShell, Supported: no, Why: why})
+		_ = r.icon()
+		if kept {
+			time.Sleep(20 * time.Millisecond)
+			if !r.marker(paths.PanelAttachedFile) {
+				t.Fatalf("%s: the marker went", why)
+			}
+		} else {
+			r.markerGone(paths.PanelAttachedFile)
+		}
+		b.exit(trayproto.ExitUnsupported)
+		r.handled(bridgeExit)
+		r.clk.Advance(time.Hour)
+		select {
+		case p := <-r.bridges:
+			t.Fatalf("%s: the bridge was started again: %+v", why, p.hello)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// Review H4: the start-up wait with the marker is the one wait a lost bus
+// may start: a bridge that ends with 75 during it (it had a bus and lost
+// it) does not start a second one, so the icons come 10 s after the start.
+func TestStartupWaitIsTheOneWait(t *testing.T) {
 	r := newLoopRig(t, claudeInUse(), withMarker(t, paths.PanelAttachedFile))
 	b := r.bridge()
-	r.noIcon()
-	b.say(trayproto.Msg{Type: trayproto.TypeShell, Supported: no, Why: "no shell"})
-	_ = r.icon()
-	eq(t, r.marker(paths.PanelAttachedFile), true)
-	r = newLoopRig(t, claudeInUse(), withMarker(t, paths.PanelAttachedFile))
-	b = r.bridge()
-	r.noIcon()
-	b.say(trayproto.Msg{Type: trayproto.TypeShell, Supported: no, Why: "unsupported 44.2"})
-	_ = r.icon()
-	eq(t, r.marker(paths.PanelAttachedFile), true)
-	b.exit(trayproto.ExitUnsupported)
+	r.clk.Advance(5 * time.Second)
+	b.exit(trayproto.ExitSessionLost)
 	r.handled(bridgeExit)
-	r.clk.Advance(time.Hour)
-	select {
-	case p := <-r.bridges:
-		t.Fatalf("the bridge was started again: %+v", p.hello)
-	case <-time.After(50 * time.Millisecond):
-	}
+	r.clk.Advance(time.Second)
+	_ = r.bridge()
+	r.clk.Advance(4*time.Second - time.Millisecond)
+	r.noIcon()
+	r.clk.Advance(time.Millisecond)
+	_ = r.icon()
+	time.Sleep(20 * time.Millisecond)
+	eq(t, r.marker(paths.PanelAttachedFile), true) // no supported shell answered
+}
+
+// Review H1: the shell leaving after the extension detached (the user
+// turned it off, then logged out; or a lock held the detach, then the
+// session ended) is told by the bridge with why "owner": the icons come
+// when the grace ends, and the marker stays, as no supported shell
+// answers (design 6.4: not removed when a session ends).
+func TestShellLeftAfterADetachKeepsTheMarker(t *testing.T) {
+	r := newLoopRig(t, claudeInUse(), nil)
+	b, c := r.bridge(), r.icon()
+	r.supported(b)
+	r.attach(b, c)
+	b.shell(no, "detach")
+	r.handled(attachedIs(false))
+	r.clk.Advance(3 * time.Second)
+	b.shell(no, "owner") // no caller: the bridge tells the shell's leaving all the same
+	r.handled(attachedIs(false))
+	r.clk.Advance(detachGrace - 3*time.Second - time.Millisecond)
+	r.noIcon()
+	r.clk.Advance(time.Millisecond)
+	_ = r.icon()
+	time.Sleep(20 * time.Millisecond)
+	eq(t, r.marker(paths.PanelAttachedFile), true)
 }
 
 // Review I1: a logout. The shell leaves, then the session bus: the bridge

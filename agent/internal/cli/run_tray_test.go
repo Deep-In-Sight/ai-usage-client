@@ -259,9 +259,13 @@ func TestRunShowsNoticeOnce(t *testing.T) {
 		var got []string
 		var mu sync.Mutex
 		te.helpers.onReady = func(h *fakeHelper) {
-			// the notice comes before the first view: a helper shows it
-			// once its icon is up (macOS: the menu bar title for a while)
+			// the notice is handed to the helper once its icon is up (review
+			// H3; macOS: the menu bar title for a while)
 			n := h.noticesGot()
+			for deadline := time.Now().Add(300 * time.Millisecond); len(n) == 0 && time.Now().Before(deadline); {
+				time.Sleep(5 * time.Millisecond)
+				n = h.noticesGot()
+			}
 			if goos == "darwin" {
 				n = nil
 				deadline := time.Now().Add(5 * time.Second)

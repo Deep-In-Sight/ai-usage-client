@@ -370,21 +370,35 @@ func (l *trayLoop) bridgeEvent(e supervisor.Event) {
 		}
 		l.mark()
 	case e.Attached != nil:
+		was := l.panelOn
 		l.panelOn = false
 		if e.Why == "owner" {
-			l.shellUp = false // the shell left the bus (a restart, a logout)
+			// the shell left the bus (a restart, a logout); the bridge says so
+			// also when the extension had detached before (review H1)
+			l.shellUp = false
 		}
 		if e.Why == "ping" {
 			l.log.Print("usage panel: the extension stopped answering; showing the tray icon")
 			l.release()
 			return
 		}
-		l.log.Printf("usage panel went away (%s)", e.Why)
+		if was {
+			l.log.Printf("usage panel went away (%s)", e.Why)
+		} else if e.Why == "owner" {
+			l.log.Print("usage panel: GNOME Shell left the session bus")
+		}
 		l.grace()
 	case e.Supported != nil:
 		l.log.Printf("usage panel: not on this desktop (%s)", e.Why)
 		l.panelOn, l.shellUp = false, false
 		l.release()
+		if strings.HasPrefix(e.Why, "unsupported ") {
+			// the shell answered with a version the panel does not support:
+			// no panel attaches on this desktop, the next start shows the
+			// icons at once ("no shell", "no shell version": a session not
+			// up yet, the marker stays; ruling of 4b fix round 2)
+			l.unmark()
+		}
 	case e.Exit != nil:
 		l.panelOn, l.shellUp = false, false
 		switch {
@@ -428,9 +442,13 @@ func (l *trayLoop) release() {
 		l.held = false
 		l.sup.SetPanelAttached(false)
 	}
-	if !l.shellUp {
-		return
+	if l.shellUp {
+		l.unmark()
 	}
+}
+
+// unmark removes the gnome-panel-attached marker.
+func (l *trayLoop) unmark() {
 	if err := os.Remove(l.env.Dirs.File(paths.PanelAttachedFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		l.log.Printf("usage panel: %v", err)
 	}
