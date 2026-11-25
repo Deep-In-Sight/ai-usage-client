@@ -92,7 +92,7 @@ type Msg struct {
 	EnableOnce bool   `json:"enable_once,omitempty"` // hello (shell): turn the panel extension on once
 	Panel      *Panel `json:"panel,omitempty"`       // view: the usage panel, the same for every helper
 	Attached   *bool  `json:"attached,omitempty"`    // shell: the panel extension attached (true) or went away (false)
-	Supported  *bool  `json:"supported,omitempty"`   // shell: false when the GNOME Shell is not one the panel supports
+	Supported  *bool  `json:"supported,omitempty"`   // shell: true once a GNOME Shell the panel supports answered, false when it is not one (or none came)
 	Enabled    bool   `json:"enabled,omitempty"`     // shell: turning the extension on succeeded
 }
 

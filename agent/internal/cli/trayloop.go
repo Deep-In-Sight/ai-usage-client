@@ -71,11 +71,16 @@ type trayLoop struct {
 	// The GNOME usage panel (design 6.4, 6.7): the bridge is wanted; the
 	// icon helpers are held back (Supervisor.SetPanelAttached); the bridge
 	// says the extension is attached; hold ends an attach wait or a detach
-	// grace (the icons come then).
+	// grace (the icons come then); a GNOME Shell the panel supports
+	// answered the running bridge and has not left since (only then may
+	// the gnome-panel-attached marker go: review I1); an attach wait was
+	// started since then (a lost session bus starts one only once).
 	bridge  bool
 	held    bool
 	panelOn bool
 	hold    <-chan time.Time
+	shellUp bool
+	waited  bool
 	// tests: called once an event has been handled
 	handled func(supervisor.Event)
 }
@@ -239,6 +244,7 @@ func (l *trayLoop) run(ctx context.Context, notice string) {
 		// it a while instead of flashing up (design 6.4)
 		if l.marked() {
 			l.holdIcons(attachWait)
+			l.waited = true
 		}
 		l.sup.WantBridge(true, true)
 	}
@@ -339,20 +345,25 @@ func (l *trayLoop) mode() string {
 
 // bridgeEvent follows the bridge (design 6.4, 6.7; plan PR-11): attached,
 // the icons go; gone after a Ping lapse, or the bridge stopped after
-// repeated failures or on an unsupported shell, they come at once; gone
+// repeated failures or found no supported shell, they come at once; gone
 // otherwise (a Detach, the shell's owner left, the bridge ended), they
 // come after detachGrace unless it attaches again; the bridge ending with
-// a lost session bus while the panel was attached holds them anew for
-// attachWait (the next login).
+// a lost session bus while the marker is there holds them anew for
+// attachWait (a logout: the next login's panel), once: the bridge started
+// again on a bus that is not back ends with 75 again and again (review
+// I1).
 func (l *trayLoop) bridgeEvent(e supervisor.Event) {
 	switch {
 	case e.Enabled:
 		l.markEnabled()
+	case e.Supported != nil && *e.Supported:
+		l.shellUp, l.waited = true, false
 	case e.Attached != nil && *e.Attached:
 		if !l.panelOn {
 			l.log.Print("usage panel attached: no tray icon")
 		}
 		l.panelOn, l.hold = true, nil
+		l.shellUp, l.waited = true, false
 		if !l.held {
 			l.held = true
 			l.sup.SetPanelAttached(true)
@@ -360,6 +371,9 @@ func (l *trayLoop) bridgeEvent(e supervisor.Event) {
 		l.mark()
 	case e.Attached != nil:
 		l.panelOn = false
+		if e.Why == "owner" {
+			l.shellUp = false // the shell left the bus (a restart, a logout)
+		}
 		if e.Why == "ping" {
 			l.log.Print("usage panel: the extension stopped answering; showing the tray icon")
 			l.release()
@@ -367,15 +381,18 @@ func (l *trayLoop) bridgeEvent(e supervisor.Event) {
 		}
 		l.log.Printf("usage panel went away (%s)", e.Why)
 		l.grace()
-	case e.Supported != nil && !*e.Supported:
+	case e.Supported != nil:
 		l.log.Printf("usage panel: not on this desktop (%s)", e.Why)
-		l.panelOn = false
+		l.panelOn, l.shellUp = false, false
 		l.release()
 	case e.Exit != nil:
-		l.panelOn = false
+		l.panelOn, l.shellUp = false, false
 		switch {
 		case *e.Exit == trayproto.ExitSessionLost && l.marked():
-			l.holdIcons(attachWait)
+			if !l.waited {
+				l.waited = true
+				l.holdIcons(attachWait)
+			}
 		case e.Stopped:
 			l.release()
 		default:
@@ -400,12 +417,19 @@ func (l *trayLoop) grace() {
 	}
 }
 
-// release shows the icons again and forgets that the panel was attached.
+// release shows the icons again. It forgets that the panel was attached
+// (removes the marker) only while a supported shell answers the bridge:
+// then the panel could have attached and did not. Otherwise (no shell
+// yet, a logout, no bridge on a bus) the marker stays for the next start
+// (design 6.4: not removed when a session ends; review I1).
 func (l *trayLoop) release() {
 	l.hold = nil
 	if l.held {
 		l.held = false
 		l.sup.SetPanelAttached(false)
+	}
+	if !l.shellUp {
+		return
 	}
 	if err := os.Remove(l.env.Dirs.File(paths.PanelAttachedFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		l.log.Printf("usage panel: %v", err)

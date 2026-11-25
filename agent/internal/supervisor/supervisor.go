@@ -78,10 +78,11 @@ type Event struct {
 	// RestartIn is its stop.
 	Stopped bool
 	// The bridge's shell line (Provider BridgeSlot): the panel extension
-	// attached (true) or went away (false); the shell is not one the panel
-	// supports (Supported false); turning the extension on succeeded
-	// (Enabled). Why says why attached or supported is false ("detach",
-	// "owner", "ping", "unsupported 44.2", "no shell").
+	// attached (true) or went away (false); a GNOME Shell the panel
+	// supports answered (Supported true) or the shell is not one (false);
+	// turning the extension on succeeded (Enabled). Why says why attached
+	// or supported is false ("detach", "owner", "ping", "unsupported 44.2",
+	// "no shell").
 	Attached  *bool
 	Supported *bool
 	Enabled   bool

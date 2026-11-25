@@ -118,6 +118,7 @@ func TestViewCarriesPanel(t *testing.T) {
 		{V: Version, Type: TypeHello, Token: "0123456789abcdef", Role: RoleShell, EnableOnce: true},
 		{V: Version, Type: TypeShell, Attached: &yes, Why: "detach"},
 		{V: Version, Type: TypeShell, Supported: &no, Why: "unsupported 44.2"},
+		{V: Version, Type: TypeShell, Supported: &yes},
 		{V: Version, Type: TypeShell, Enabled: true},
 	}
 	var b bytes.Buffer
@@ -142,6 +143,22 @@ func TestViewCarriesPanel(t *testing.T) {
 		t.Fatal(err)
 	}
 	eqs(t, q.String(), `{"v":1,"type":"quit"}`+"\n")
+	// the bridge's shell lines, byte for byte (review I1 added supported:true)
+	for _, c := range []struct {
+		m    Msg
+		want string
+	}{
+		{Msg{V: Version, Type: TypeShell, Supported: &yes}, `{"v":1,"type":"shell","supported":true}`},
+		{Msg{V: Version, Type: TypeShell, Supported: &no, Why: "no shell"}, `{"v":1,"type":"shell","why":"no shell","supported":false}`},
+		{Msg{V: Version, Type: TypeShell, Attached: &no, Why: "ping"}, `{"v":1,"type":"shell","why":"ping","attached":false}`},
+		{Msg{V: Version, Type: TypeShell, Enabled: true}, `{"v":1,"type":"shell","enabled":true}`},
+	} {
+		var b bytes.Buffer
+		if err := Encode(&b, c.m); err != nil {
+			t.Fatal(err)
+		}
+		eqs(t, b.String(), c.want+"\n")
+	}
 	eqs(t, TypeShell, "shell")
 	eqs(t, RoleShell, "shell")
 	if ExitUnsupported != 78 {

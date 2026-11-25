@@ -58,3 +58,17 @@ func TestFakeNextIsTheEarliestWaiter(t *testing.T) {
 		t.Fatalf("Next after the first fired = %v %v", n, ok)
 	}
 }
+
+func TestFakeWaitingAtAnInstant(t *testing.T) {
+	t0 := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+	f := NewFake(t0)
+	f.After(time.Minute)
+	f.After(time.Hour)
+	if !f.Waiting(t0.Add(time.Hour)) || !f.Waiting(t0.Add(time.Minute)) || f.Waiting(t0.Add(30*time.Second)) {
+		t.Fatal("Waiting does not see the waits")
+	}
+	f.Advance(time.Minute)
+	if f.Waiting(t0.Add(time.Minute)) {
+		t.Fatal("a fired wait is still waiting")
+	}
+}

@@ -252,6 +252,13 @@ func (r *loopRig) attach(b, c *rigProc) {
 	}
 }
 
+// supported: the bridge says a GNOME Shell the panel supports answered.
+func (r *loopRig) supported(b *rigProc) {
+	r.t.Helper()
+	b.say(trayproto.Msg{Type: trayproto.TypeShell, Supported: yes})
+	r.handled(func(e supervisor.Event) bool { return e.Supported != nil && *e.Supported })
+}
+
 func (r *loopRig) marker(name string) bool {
 	_, err := os.Stat(r.te.Dirs.File(name))
 	return err == nil
@@ -299,18 +306,30 @@ func TestNoMarkerIconsAtOnce(t *testing.T) {
 }
 
 // With the marker the icons wait 10 s for the panel; without an attach
-// by then they come and the marker goes.
+// by then they come, and the marker goes when a supported shell answered
+// meanwhile (the panel is broken), else it stays (review I1: no shell yet,
+// e.g. a bus that is not back after a logout).
 func TestMarkerHoldsIconsTenSeconds(t *testing.T) {
-	r := newLoopRig(t, claudeInUse(), withMarker(t, paths.PanelAttachedFile))
-	_ = r.bridge()
-	r.noIcon()
-	r.clk.Advance(attachWait - time.Millisecond)
-	r.noIcon()
-	r.clk.Advance(time.Millisecond)
-	if c := r.icon(); c.id != provider.Claude {
-		t.Fatalf("%q", c.id)
+	for _, shell := range []bool{true, false} {
+		r := newLoopRig(t, claudeInUse(), withMarker(t, paths.PanelAttachedFile))
+		b := r.bridge()
+		r.noIcon()
+		if shell {
+			r.supported(b)
+		}
+		r.clk.Advance(attachWait - time.Millisecond)
+		r.noIcon()
+		r.clk.Advance(time.Millisecond)
+		if c := r.icon(); c.id != provider.Claude {
+			t.Fatalf("%q", c.id)
+		}
+		if shell {
+			r.markerGone(paths.PanelAttachedFile)
+		} else {
+			time.Sleep(20 * time.Millisecond)
+			eq(t, r.marker(paths.PanelAttachedFile), true)
+		}
 	}
-	r.markerGone(paths.PanelAttachedFile)
 	// the marker and an attach within the 10 s: no icon at all
 	r2 := newLoopRig(t, claudeInUse(), withMarker(t, paths.PanelAttachedFile))
 	b := r2.bridge()
@@ -419,18 +438,26 @@ func TestStoppedBridgeShowsIconsAtOnce(t *testing.T) {
 		t.Fatalf("%+v", e)
 	}
 	_ = r.icon()
-	r.markerGone(paths.PanelAttachedFile)
+	// no supported shell answers now: the marker stays (review I1)
+	eq(t, r.marker(paths.PanelAttachedFile), true)
 }
 
-// The bridge found no supported GNOME Shell: the icons come at once, even
-// while the marker holds them (ruling in the 4b report).
+// The bridge found no supported GNOME Shell, or none at all: the icons
+// come at once, even while the marker holds them (ruling in the 4b
+// report); the marker stays, as no supported shell answered (review I1).
 func TestUnsupportedShellShowsIconsAtOnce(t *testing.T) {
 	r := newLoopRig(t, claudeInUse(), withMarker(t, paths.PanelAttachedFile))
 	b := r.bridge()
 	r.noIcon()
+	b.say(trayproto.Msg{Type: trayproto.TypeShell, Supported: no, Why: "no shell"})
+	_ = r.icon()
+	eq(t, r.marker(paths.PanelAttachedFile), true)
+	r = newLoopRig(t, claudeInUse(), withMarker(t, paths.PanelAttachedFile))
+	b = r.bridge()
+	r.noIcon()
 	b.say(trayproto.Msg{Type: trayproto.TypeShell, Supported: no, Why: "unsupported 44.2"})
 	_ = r.icon()
-	r.markerGone(paths.PanelAttachedFile)
+	eq(t, r.marker(paths.PanelAttachedFile), true)
 	b.exit(trayproto.ExitUnsupported)
 	r.handled(bridgeExit)
 	r.clk.Advance(time.Hour)
@@ -441,26 +468,38 @@ func TestUnsupportedShellShowsIconsAtOnce(t *testing.T) {
 	}
 }
 
-// The bridge ends with a lost session bus (a logout) while the panel was
-// attached: the icons are held 10 s anew for the next login's panel.
-func TestBridgeRestartOnNewBusHoldsAgain(t *testing.T) {
+// Review I1: a logout. The shell leaves, then the session bus: the bridge
+// ends with 75 and the icons wait 10 s from then; the bridge started again
+// on the dead bus ends with 75 again and again, which does not restart the
+// wait; when it ends the icons come but the marker stays (no supported
+// shell answered), so the next login's agent waits for its panel.
+func TestLogoutKeepsTheMarker(t *testing.T) {
 	r := newLoopRig(t, claudeInUse(), nil)
 	b, c := r.bridge(), r.icon()
 	r.clk.Advance(time.Minute)
+	r.supported(b)
 	r.attach(b, c)
 	b.shell(no, "owner") // the shell went first
 	r.handled(attachedIs(false))
 	r.clk.Advance(8 * time.Second)
-	b.exit(trayproto.ExitSessionLost)
+	b.exit(trayproto.ExitSessionLost) // T: the wait runs to T+10 s
 	r.handled(bridgeExit)
-	r.clk.Advance(time.Second) // the bridge starts again on the new bus
-	b = r.bridge()
-	r.clk.Advance(attachWait - time.Second - time.Millisecond)
+	// started again at T+1, T+2, T+4 and T+8 (the backoff); each finds no bus
+	for _, d := range []time.Duration{time.Second, time.Second, 2 * time.Second, 4 * time.Second} {
+		r.clk.Advance(d)
+		b = r.bridge()
+		b.exit(trayproto.ExitSessionLost)
+		r.handled(bridgeExit)
+		r.noIcon()
+	}
+	r.clk.Advance(2*time.Second - time.Millisecond)
 	r.noIcon()
 	r.clk.Advance(time.Millisecond)
 	_ = r.icon()
-	r.markerGone(paths.PanelAttachedFile)
-	// the new login's panel attaches within the 10 s: no icon
+	time.Sleep(20 * time.Millisecond)
+	eq(t, r.marker(paths.PanelAttachedFile), true)
+	// the first 75 after an attach does start a new wait, and the new
+	// login's panel attaching within it starts no icon
 	r2 := newLoopRig(t, claudeInUse(), nil)
 	b, c = r2.bridge(), r2.icon()
 	r2.clk.Advance(time.Minute)
@@ -471,11 +510,54 @@ func TestBridgeRestartOnNewBusHoldsAgain(t *testing.T) {
 	r2.clk.Advance(time.Second)
 	b = r2.bridge()
 	r2.clk.Advance(5 * time.Second)
+	r2.supported(b)
 	b.shell(yes, "")
 	r2.handled(attachedIs(true))
 	r2.clk.Advance(time.Hour)
 	r2.noIcon()
 	eq(t, r2.iconStarts(), before)
+	eq(t, r2.marker(paths.PanelAttachedFile), true)
+}
+
+// Review I1: the shell left and its bus outlives the grace (a slow
+// logout): the icons come after the grace, the marker stays, as no shell
+// answers; a shell that comes back and attaches is the panel again.
+func TestShellGoneKeepsTheMarker(t *testing.T) {
+	r := newLoopRig(t, claudeInUse(), nil)
+	b, c := r.bridge(), r.icon()
+	r.supported(b)
+	r.attach(b, c)
+	b.shell(no, "owner")
+	r.handled(attachedIs(false))
+	r.clk.Advance(detachGrace)
+	c = r.icon()
+	time.Sleep(20 * time.Millisecond)
+	eq(t, r.marker(paths.PanelAttachedFile), true)
+	r.attach(b, c)
+	b.shell(no, "detach") // a shell there: its Detach ends the panel
+	r.handled(attachedIs(false))
+	r.clk.Advance(detachGrace)
+	_ = r.icon()
+	r.markerGone(paths.PanelAttachedFile)
+}
+
+// Review m6: a second end while a grace runs keeps its deadline (the
+// shell's owner left, then the bridge ended): the icons come 10 s after
+// the first.
+func TestGraceKeepsItsDeadline(t *testing.T) {
+	r := newLoopRig(t, claudeInUse(), nil)
+	b, c := r.bridge(), r.icon()
+	r.clk.Advance(time.Minute)
+	r.attach(b, c)
+	b.shell(no, "owner")
+	r.handled(attachedIs(false))
+	r.clk.Advance(5 * time.Second)
+	b.exit(2)
+	r.handled(bridgeExit)
+	r.clk.Advance(5*time.Second - time.Millisecond)
+	r.noIcon()
+	r.clk.Advance(time.Millisecond)
+	_ = r.icon()
 }
 
 // enabled:true writes gnome-panel-enabled once (design 6.6).
@@ -580,28 +662,31 @@ func TestNoBridgeOutsideGNOME(t *testing.T) {
 		desktop string
 		bridge  bool
 	}{{false, "ubuntu:GNOME", false}, {true, "ubuntu:GNOME", true}, {true, "KDE", false}} {
-		old := bridgeReady
-		bridgeReady = c.ready
-		fs := newFakeServer(t)
-		te := trayEnv(t, fs)
-		te.GOOS = "linux"
-		te.vars["XDG_SESSION_TYPE"] = "wayland"
-		te.vars["XDG_CURRENT_DESKTOP"] = c.desktop
-		cancel, code := te.mainAsync("run")
-		_ = te.helpers.ready()
-		deadline := time.Now().Add(500 * time.Millisecond)
-		for time.Now().Before(deadline) && te.helpers.count() < 2 {
-			time.Sleep(5 * time.Millisecond)
-		}
-		cancel()
-		eq(t, waitCode(t, code), 0)
-		bridgeReady = old
-		te.helpers.mu.Lock()
-		var ids []provider.ID
-		for _, h := range te.helpers.started {
-			ids = append(ids, h.id)
-		}
-		te.helpers.mu.Unlock()
+		ids := func() []provider.ID {
+			old := bridgeReady
+			bridgeReady = c.ready
+			defer func() { bridgeReady = old }() // review m7: also when the run fails
+			fs := newFakeServer(t)
+			te := trayEnv(t, fs)
+			te.GOOS = "linux"
+			te.vars["XDG_SESSION_TYPE"] = "wayland"
+			te.vars["XDG_CURRENT_DESKTOP"] = c.desktop
+			cancel, code := te.mainAsync("run")
+			_ = te.helpers.ready()
+			deadline := time.Now().Add(500 * time.Millisecond)
+			for time.Now().Before(deadline) && te.helpers.count() < 2 {
+				time.Sleep(5 * time.Millisecond)
+			}
+			cancel()
+			eq(t, waitCode(t, code), 0)
+			te.helpers.mu.Lock()
+			defer te.helpers.mu.Unlock()
+			var ids []provider.ID
+			for _, h := range te.helpers.started {
+				ids = append(ids, h.id)
+			}
+			return ids
+		}()
 		if got := slices.Contains(ids, supervisor.BridgeSlot); got != c.bridge || len(ids) != map[bool]int{false: 1, true: 2}[c.bridge] {
 			t.Fatalf("ready %v desktop %q: helpers %q", c.ready, c.desktop, ids)
 		}

@@ -164,8 +164,8 @@ func (r *rig) conn() *dbus.Conn {
 	return c
 }
 
-// ready waits until the bridge wrote the extension for the shell (it then
-// serves, the shell wait is over).
+// ready waits until the bridge wrote the extension for the shell and
+// said the shell is supported (it then serves, the shell wait is over).
 func (r *rig) ready(form string) string {
 	r.t.Helper()
 	dir, err := gnomeext.Dir(func(k string) string { return r.env[k] }, "/nonexistent")
@@ -173,13 +173,17 @@ func (r *rig) ready(form string) string {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if ok, _ := gnomeext.Current(dir, form); ok {
-			return dir
+			break
 		}
 		if time.Now().After(deadline) {
 			r.t.Fatalf("no %s extension in %s", form, dir)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	if m := r.next(); m.Type != trayproto.TypeShell || m.Supported == nil || !*m.Supported || m.Attached != nil || m.Why != "" {
+		r.t.Fatalf("got %+v, want supported", m)
+	}
+	return dir
 }
 
 // waiter waits until something waits on the fake clock.
@@ -704,5 +708,197 @@ func TestNoticeViaNotifications(t *testing.T) {
 	}
 	if got := r.shell.Notices(); !slices.Equal(got, []string{"AI Usage|AI Usage|AI Usage is running. Its icon is in the top bar."}) {
 		t.Fatalf("%q", got)
+	}
+}
+
+// Review I1: the bridge says once that the shell is supported, as its own
+// line (the main process removes the marker only after it), before it
+// turns the extension on.
+func TestSupportedLine(t *testing.T) {
+	r := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", EnableOK: true}, enableOnce: true})
+	var b bytes.Buffer
+	must(t, trayproto.Encode(&b, r.next()))
+	if b.String() != `{"v":1,"type":"shell","supported":true}`+"\n" {
+		t.Fatalf("%s", b.String())
+	}
+	if m := r.next(); !m.Enabled {
+		t.Fatalf("%+v", m)
+	}
+	r.none()
+}
+
+// Review I2: after a Ping lapse the caller is kept as lapsed: its next
+// Ping or GetView attaches it again (design 6.4: attached is the caller on
+// the bus and a call under 90 s old).
+func TestLapsedCallerAttachesAgain(t *testing.T) {
+	r := newRig(t, rigOptions{shell: shell46()})
+	r.ready("gnome46")
+	r.attached()
+	for _, method := range []string{"Ping", "GetView"} {
+		r.clk.Advance(PingTimeout)
+		isAttached(t, r.next(), false, "ping")
+		r.clk.Advance(time.Hour) // the shell stalled
+		r.none()
+		must(t, r.call(method).Err)
+		isAttached(t, r.next(), true, "")
+		must(t, r.call("Ping").Err)
+		r.none()
+	}
+	// attached again for good: a lapse from now is told again
+	r.clk.Advance(PingTimeout)
+	isAttached(t, r.next(), false, "ping")
+}
+
+// Review I2: a lapsed caller that leaves the bus is forgotten: the same
+// connection taking the shell's name again is not attached by its Ping.
+func TestLapsedCallerThatLeftIsForgotten(t *testing.T) {
+	r := newRig(t, rigOptions{shell: shell46()})
+	r.ready("gnome46")
+	r.attached()
+	r.clk.Advance(PingTimeout)
+	isAttached(t, r.next(), false, "ping")
+	r.shell.Leave(t)
+	r.none()
+	reply, err := r.shell.Conn.RequestName(fakeshell.ShellName, dbus.NameFlagDoNotQueue)
+	must(t, err)
+	if reply != dbus.RequestNameReplyPrimaryOwner {
+		t.Fatalf("RequestName: %v", reply)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for r.call("Ping").Err != nil { // the bridge saw the owner come back
+		if time.Now().After(deadline) {
+			t.Fatal("Ping refused")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	r.none()
+	r.attached() // an Attach does
+}
+
+// unicast sends a signal from c to dest only (not through match rules).
+func unicast(t *testing.T, c *dbus.Conn, dest string, path dbus.ObjectPath, iface, member string, body ...any) {
+	t.Helper()
+	m := &dbus.Message{Type: dbus.TypeSignal, Headers: map[dbus.HeaderField]dbus.Variant{
+		dbus.FieldPath: dbus.MakeVariant(path), dbus.FieldInterface: dbus.MakeVariant(iface),
+		dbus.FieldMember: dbus.MakeVariant(member), dbus.FieldDestination: dbus.MakeVariant(dest),
+		dbus.FieldSignature: dbus.MakeVariant(dbus.SignatureOf(body...)),
+	}, Body: body}
+	must(t, c.Send(m, nil).Err)
+}
+
+// Review m1: the bus's signals count only from the bus, ActiveChanged only
+// from the screen saver: another program's NameLost does not end the
+// bridge, its NameOwnerChanged does not detach, its ActiveChanged does not
+// tell a held detach.
+func TestSignalsFromOthersAreIgnored(t *testing.T) {
+	r := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", Locked: true}})
+	r.ready("gnome46")
+	r.attached()
+	other := r.conn()
+	var me string
+	must(t, other.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, BusName).Store(&me))
+	unicast(t, other, me, "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameLost", BusName)
+	unicast(t, other, me, "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameOwnerChanged", shellName, r.shell.Conn.Names()[0], "")
+	r.none()
+	select {
+	case c := <-r.code:
+		t.Fatalf("the bridge ended with %d", c)
+	default:
+	}
+	must(t, r.call("Ping").Err) // still attached, still serving
+	must(t, r.call("Detach").Err)
+	r.none() // held: locked
+	unicast(t, other, me, screenSaverPath, screenSaverName, "ActiveChanged", false)
+	must(t, other.Emit(screenSaverPath, screenSaverName+".ActiveChanged", false))
+	r.none()
+	r.shell.SetLocked(t, false)
+	isAttached(t, r.next(), false, "detach")
+}
+
+// waitPending waits until n GetActive calls wait at g.
+func waitPending(t *testing.T, g *fakeshell.ActiveGate, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for g.Pending() < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d GetActive calls wait, want %d", g.Pending(), n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Review m6: the screen saver's answer to a Detach that an Attach ended
+// before the answer came tells nothing.
+func TestLockAnswerAfterReattachTellsNothing(t *testing.T) {
+	r := newRig(t, rigOptions{shell: shell46()})
+	r.ready("gnome46")
+	r.attached()
+	g := r.shell.HoldGetActive(t)
+	must(t, r.call("Detach").Err)
+	waitPending(t, g, 1) // it will answer "not locked"
+	must(t, r.call("Attach", uint32(1), "46.0").Err)
+	g.Open()
+	r.none()
+}
+
+// Review m2: an old GetActive answer does not apply to a newer held
+// Detach: Detach while unlocked (its answer pending), Attach, lock, Detach
+// again; the first answer ("not locked") tells nothing during the lock.
+func TestOldLockAnswerIsIgnored(t *testing.T) {
+	r := newRig(t, rigOptions{shell: shell46()})
+	r.ready("gnome46")
+	r.attached()
+	g := r.shell.HoldGetActive(t)
+	must(t, r.call("Detach").Err)
+	waitPending(t, g, 1)
+	must(t, r.call("Attach", uint32(1), "46.0").Err)
+	r.shell.SetLocked(t, true)
+	must(t, r.call("Detach").Err)
+	waitPending(t, g, 2)
+	g.Open()
+	r.none()
+	r.shell.SetLocked(t, false)
+	isAttached(t, r.next(), false, "detach")
+}
+
+// timerAt waits until something waits on the fake clock until d from now.
+func (r *rig) timerAt(d time.Duration) {
+	r.t.Helper()
+	want := r.clk.Now().Add(d)
+	deadline := time.Now().Add(5 * time.Second)
+	for !r.clk.Waiting(want) {
+		if time.Now().After(deadline) {
+			r.t.Fatalf("nothing waits until %v", want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Review m3: a held Detach asks the screen saver again every 30 s: no
+// longer active (its signal never came), or it cannot be asked (gone from
+// the bus), the Detach is told.
+func TestHeldDetachAsksAgain(t *testing.T) {
+	for _, end := range []string{"quiet unlock", "screen saver gone"} {
+		r := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", Locked: true}})
+		r.ready("gnome46")
+		r.attached()
+		r.clk.Advance(7 * time.Second) // timers of their own (none ends at a recheck)
+		must(t, r.call("Detach").Err)
+		r.timerAt(lockRecheck)
+		r.clk.Advance(lockRecheck) // still locked: held
+		r.timerAt(lockRecheck)
+		r.none()
+		if end == "quiet unlock" {
+			r.shell.SetLockedQuietly(false)
+		} else {
+			r.shell.Release(t, fakeshell.ScreenSaverName)
+		}
+		r.clk.Advance(lockRecheck - time.Millisecond)
+		r.none()
+		r.clk.Advance(time.Millisecond)
+		m := r.next()
+		if m.Attached == nil || *m.Attached || m.Why != "detach" {
+			t.Fatalf("%s: %+v", end, m)
+		}
 	}
 }

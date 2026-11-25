@@ -93,8 +93,11 @@ func (s *service) Detach(sender dbus.Sender) *dbus.Error {
 		return err
 	}
 	if !s.do(func() {
-		if s.b.caller == string(sender) {
+		switch string(sender) {
+		case s.b.caller:
 			s.b.detach("detach")
+		case s.b.lapsed:
+			s.b.lapsed = "" // dropped already; told already
 		}
 	}) {
 		return ended()

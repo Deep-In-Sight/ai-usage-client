@@ -76,6 +76,19 @@ func (f *Fake) Next() (time.Time, bool) {
 	return next, !next.IsZero()
 }
 
+// Waiting reports whether something waits until exactly at (a test can
+// tell a new timer from older ones).
+func (f *Fake) Waiting(at time.Time) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, w := range f.waiters {
+		if w.at.Equal(at) {
+			return true
+		}
+	}
+	return false
+}
+
 // Set moves the fake time to t and fires every waiter that is due.
 func (f *Fake) Set(t time.Time) {
 	f.mu.Lock()
