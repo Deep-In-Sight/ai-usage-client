@@ -118,6 +118,66 @@ function isEmpty(view) {
         view.new_version === '' && view.actions.length === 0 && view.top.length === 0;
 }
 
+// topEntries: what the top bar shows for view: its entries, or the neutral
+// grey ring when it has none (the button never shrinks to nothing while
+// the agent's tray icons are hidden).
+function topEntries(view) {
+    if (view.top.length > 0)
+        return view.top;
+    return [{provider: '', text: '', percent: null, level: 'none', stale: false}];
+}
+
+// Dim text (account, time, reset line, server line) and a stale group are
+// drawn at these opacities (0..255): the menu's text colour, dimmed once.
+var DIM_OPACITY = 150;
+var STALE_OPACITY = 153;
+
+// textOpacity: the opacity of one piece of text (or bar) of the panel. Dim
+// text in a stale group is dimmed once, not once for each (design 5.2, 5.3).
+function textOpacity(dim, stale) {
+    if (dim && stale)
+        return Math.min(DIM_OPACITY, STALE_OPACITY);
+    if (dim)
+        return DIM_OPACITY;
+    return stale ? STALE_OPACITY : 255;
+}
+
+// layoutKey: the menu's items for view, one string each in order (the
+// new-version line, each section and its rows, the prompt, the server line
+// and the shown actions). Two views with the same key differ only in what
+// the items show: texts, bars, levels, flags and problem lines.
+function layoutKey(view) {
+    const key = [];
+    if (view.new_version !== '')
+        key.push('newversion');
+    for (const s of view.sections) {
+        key.push(`s:${s.provider}`);
+        for (const r of s.rows)
+            key.push(r.more ? `${r.id}|more` : r.id);
+    }
+    if (view.prompt !== '')
+        key.push('prompt');
+    if (view.server !== '')
+        key.push('server');
+    for (const a of view.actions) {
+        if (a.visible)
+            key.push(a.checkbox ? `a:${a.id}|check` : `a:${a.id}`);
+    }
+    return key;
+}
+
+// menuUpdate: how a new view reaches the menu. A closed menu is built
+// again; an open one is changed in place while its items stay the same
+// (hover and keyboard focus stay where they are), and otherwise gets the
+// new view when it closes.
+function menuUpdate(open, shownKey, newKey) {
+    if (!open)
+        return 'rebuild';
+    if (Array.isArray(shownKey) && shownKey.length === newKey.length && shownKey.every((k, i) => k === newKey[i]))
+        return 'in-place';
+    return 'on-close';
+}
+
 // fillWidth is how much of a track of width track the bar fills for the
 // shown percent (the agent's panel.FillWidth, one table for both:
 // agent/internal/panel/testdata/fillwidth.json): none for no value or 0 %,

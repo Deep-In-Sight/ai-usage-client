@@ -7,7 +7,8 @@
 import GLib from 'gi://GLib';
 
 import {
-    PROTOCOL, clickable, fillWidth, isDarkBackground, isEmpty, levelClass, parseView, useOrientation,
+    DIM_OPACITY, PROTOCOL, STALE_OPACITY, clickable, fillWidth, isDarkBackground, isEmpty, layoutKey, levelClass,
+    menuUpdate, parseView, textOpacity, topEntries, useOrientation,
 } from '../ai-usage-panel@localhost/view.js';
 
 const here = GLib.path_get_dirname(GLib.filename_from_uri(import.meta.url)[0]);
@@ -200,6 +201,72 @@ equal(PROTOCOL, 1, 'protocol');
     equal(clickable(w, 'refresh'), false, 'a disabled action');
     equal(clickable(w, 'dashboard'), false, 'a hidden action');
     equal(clickable(w, 'r.codex.4'), true, 'the More limits row');
+}
+
+// -- topEntries: a view without top-bar numbers still gets the neutral ring
+{
+    const neutral = {provider: '', text: '', percent: null, level: 'none', stale: false};
+    equal(topEntries(parseView('{"sections": [{"provider": "claude"}]}')), [neutral], 'no top: the neutral ring');
+    equal(topEntries(parseView('{"top": null}')), [neutral], 'top null: the neutral ring');
+    equal(topEntries(parseView(golden)), parseView(golden).top, 'the golden view: its own entries');
+    const a = topEntries(parseView('{}'));
+    a[0].text = 'changed';
+    equal(topEntries(parseView('{}'))[0].text, '', 'the neutral entry is a fresh copy');
+}
+
+// -- textOpacity: dim text and a stale group are each dimmed once (design
+//    5.2, 5.3), never one on top of the other
+{
+    equal(DIM_OPACITY, 150, 'dim opacity');
+    equal(STALE_OPACITY, 153, 'stale opacity (0.6)');
+    equal(textOpacity(false, false), 255, 'plain text');
+    equal(textOpacity(true, false), DIM_OPACITY, 'dim text');
+    equal(textOpacity(false, true), STALE_OPACITY, 'text of a stale group');
+    equal(textOpacity(true, true), Math.min(DIM_OPACITY, STALE_OPACITY), 'dim text of a stale group: dimmed once');
+}
+
+// -- layoutKey / menuUpdate (an open menu keeps its items while only the
+//    texts and bars change)
+{
+    const v = parseView(golden);
+    const key = layoutKey(v);
+    equal(key.includes('r.claude.0') && key.includes('r.codex.1'), true, 'rows are in the key');
+    equal(key.filter(k => k.startsWith('s:')), ['s:claude', 's:codex'], 'sections are in the key');
+    equal(key.includes('server') && key.includes('a:quit'), true, 'server and actions are in the key');
+
+    const changed = JSON.parse(golden);
+    changed.sections[0].rows[0].percent = 77;
+    changed.sections[0].rows[0].percent_text = '77%';
+    changed.sections[0].rows[0].level = 'warning';
+    changed.sections[0].stale = !changed.sections[0].stale;
+    changed.sections[0].problem = 'Sign-in expired';
+    changed.sections[0].updated = 'Updated 23:59';
+    changed.actions[1].text = 'Refreshing…';
+    changed.actions[1].enabled = false;
+    changed.server = 'Server unreachable';
+    const w = parseView(JSON.stringify(changed));
+    equal(layoutKey(w), key, 'texts, bars, flags and problem lines do not change the key');
+
+    const shape = (what, edit) => {
+        const c = JSON.parse(golden);
+        edit(c);
+        equal(JSON.stringify(layoutKey(parseView(JSON.stringify(c)))) !== JSON.stringify(key), true, what);
+    };
+    shape('a row gone', c => c.sections[1].rows.pop());
+    shape('a row id changed', c => { c.sections[1].rows[0].id = 'r.codex.7'; });
+    shape('a row became the More row', c => { c.sections[1].rows[1].more = true; });
+    shape('a section gone', c => c.sections.pop());
+    shape('a new version', c => { c.new_version = 'New version available: 9.9.9'; });
+    shape('an action hidden', c => { c.actions[0].visible = false; });
+    shape('a checkbox action', c => { c.actions[0].checkbox = true; });
+    shape('a prompt', c => { c.prompt = 'Sign in to Claude Code or Codex'; });
+    shape('no server line', c => { c.server = ''; });
+
+    equal(menuUpdate(false, key, key), 'rebuild', 'a closed menu is rebuilt');
+    equal(menuUpdate(false, null, key), 'rebuild', 'the first view');
+    equal(menuUpdate(true, key, layoutKey(w)), 'in-place', 'open, same items: in place');
+    equal(menuUpdate(true, key, layoutKey(parseView('{}'))), 'on-close', 'open, other items: when it closes');
+    equal(menuUpdate(true, null, key), 'on-close', 'open without a layout');
 }
 
 print(`${checks - failures}/${checks} checks passed`);

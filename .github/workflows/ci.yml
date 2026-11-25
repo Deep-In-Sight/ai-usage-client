@@ -61,11 +61,13 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          gjs -m ../gnome-extension/tests/test_view.js 2>&1 | tee "$RUNNER_TEMP/gjs.log" || {
-            grep -E -i -A2 'fail|error|exception' "$RUNNER_TEMP/gjs.log" | head -10 | sed 's/^/::error title=gjs::/'
-            exit 1
-          }
-          tail -1 "$RUNNER_TEMP/gjs.log" | sed 's/^/::notice title=gjs::/'
+          for t in test_view test_link; do
+            gjs -m "../gnome-extension/tests/$t.js" 2>&1 | tee "$RUNNER_TEMP/gjs-$t.log" || {
+              grep -E -i -A2 'fail|error|exception' "$RUNNER_TEMP/gjs-$t.log" | head -10 | sed "s/^/::error title=gjs $t::/"
+              exit 1
+            }
+            tail -1 "$RUNNER_TEMP/gjs-$t.log" | sed "s/^/::notice title=gjs $t::/"
+          done
       - name: extension forms are current
         # internal/gnomeext's GNOME 42 and 46/50 forms are what tools/mkext
         # makes from gnome-extension/ai-usage-panel@localhost now

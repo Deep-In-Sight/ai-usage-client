@@ -8,8 +8,9 @@
 //
 // While the agent is not there (not running, removed) the button is
 // hidden. When anything here fails, the button is hidden and the agent is
-// told (Detach), so it shows its tray icon instead. Nothing else in the top
-// bar is touched.
+// told (Detach), so it shows its tray icon instead; the extension stays
+// away until the agent's bus name goes and comes back (link.js). Nothing
+// else in the top bar is touched.
 //
 // This file is the source for GNOME 46 and 50; the agent's tools/mkext
 // writes the GNOME 42 form from it, so it keeps to the import and export
@@ -27,7 +28,8 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-import {PROTOCOL, clickable, fillWidth, isDarkBackground, isEmpty, levelClass, parseView, useOrientation} from './view.js';
+import {createLink} from './link.js';
+import {PROTOCOL, clickable, fillWidth, isDarkBackground, isEmpty, layoutKey, levelClass, menuUpdate, parseView, textOpacity, topEntries, useOrientation} from './view.js';
 
 const BUS_NAME = 'local.AIUsage.Panel';
 const OBJECT_PATH = '/local/AIUsage/Panel';
@@ -36,8 +38,6 @@ const BAR_WIDTH = 300;
 const BAR_HEIGHT = 8;
 const TOP_ICON_SIZE = 16;
 const HEADER_ICON_SIZE = 20;
-const DIM_OPACITY = 150;    // secondary text, as in the original extension
-const STALE_OPACITY = 153;  // a group whose numbers are old: 0.6
 
 // The ring's colour by level: the bars' colours, grey without a number.
 const RING_RGB = {
@@ -86,10 +86,24 @@ function vbox(params) {
     return new St.BoxLayout(p);
 }
 
-function dimLabel(text, params = {}) {
-    return new St.Label(Object.assign({
-        text, style_class: 'ai-usage-small', opacity: DIM_OPACITY, y_align: Clutter.ActorAlign.CENTER,
-    }, params));
+// A label of the small, dim text; its opacity is set by textOpacity.
+function dimLabel(params = {}) {
+    return new St.Label(Object.assign({style_class: 'ai-usage-small', y_align: Clutter.ActorAlign.CENTER}, params));
+}
+
+// steady: item (made with reactive and can_focus false) is not clickable
+// and takes no keyboard focus, but is drawn in the menu's text colour. St
+// marks a widget that is not reactive :insensitive and the shell's theme
+// greys that out (and the popup-inactive-menu-item class with it); both
+// are taken off again whenever St puts them back.
+function steady(item) {
+    const clear = () => {
+        item.remove_style_pseudo_class('insensitive');
+        item.remove_style_class_name('popup-inactive-menu-item');
+    };
+    clear();
+    item.connect('notify::reactive', clear);
+    return item;
 }
 
 // The button in the top bar and its menu: draws a view, nothing more.
@@ -102,11 +116,21 @@ class AIUsagePanelIndicator extends PanelMenu.Button {
         this._aiuClawd = clawd;
         this._aiuProblems = [];
         this._aiuDark = true;
+        // the menu's items (layoutKey) and how each follows a new view
+        this._aiuLayout = null;
+        this._aiuUpdaters = [];
+        // a view with other items, for when the open menu closes
+        this._aiuPending = null;
         this._aiuPills = new St.BoxLayout({style_class: 'ai-usage-top'});
         this.add_child(this._aiuPills);
         this.menu.connect('open-state-changed', (_menu, open) => client.guard('menu', () => {
-            if (open)
+            if (open) {
                 this._aiuFollowTheme();
+            } else if (this._aiuPending !== null) {
+                const view = this._aiuPending;
+                this._aiuPending = null;
+                this._aiuBuild(view);
+            }
         }));
     }
 
@@ -153,103 +177,175 @@ class AIUsagePanelIndicator extends PanelMenu.Button {
 
     render(view) {
         this._aiuPills.destroy_all_children();
-        for (const top of view.top) {
+        for (const top of topEntries(view)) {
             const pill = new St.BoxLayout({style_class: 'ai-usage-pill'});
             pill.add_child(this._aiuPicture(top.provider, TOP_ICON_SIZE, top));
-            pill.add_child(new St.Label({text: top.text, y_align: Clutter.ActorAlign.CENTER}));
+            if (top.text !== '')
+                pill.add_child(new St.Label({text: top.text, y_align: Clutter.ActorAlign.CENTER}));
             this._aiuPills.add_child(pill);
         }
 
+        switch (menuUpdate(this.menu.isOpen, this._aiuLayout, layoutKey(view))) {
+        case 'in-place':
+            this._aiuPending = null;
+            for (const update of this._aiuUpdaters)
+                update(view);
+            break;
+        case 'on-close':
+            this._aiuPending = view;
+            break;
+        default:
+            this._aiuBuild(view);
+        }
+    }
+
+    // _aiuBuild makes the menu's items for view. Each item is made by a
+    // function given pick (view -> the item's part of it) and keeps an
+    // updater, so an open menu with the same items follows a new view in
+    // place.
+    _aiuBuild(view) {
         const menu = this.menu;
         menu.removeAll();
+        this._aiuPending = null;
         this._aiuProblems = [];
-        if (view.new_version !== '')
-            this._aiuAction({id: 'newversion', text: view.new_version, enabled: true, visible: true, checkbox: false});
+        this._aiuUpdaters = [];
+        this._aiuLayout = layoutKey(view);
+        if (view.new_version !== '') {
+            this._aiuAction(v => ({
+                id: 'newversion', text: v.new_version, enabled: true, visible: true, checkbox: false, checked: false,
+            }), view);
+        }
         view.sections.forEach((s, i) => {
             if (i > 0)
                 menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            this._aiuSection(s);
+            this._aiuSection(v => v.sections[i], view);
+            s.rows.forEach((_r, j) => this._aiuRow(v => [v.sections[i].rows[j], v.sections[i].stale], view));
         });
         if (view.prompt !== '')
-            menu.addMenuItem(new PopupMenu.PopupMenuItem(view.prompt, {reactive: false, can_focus: false}));
+            this._aiuInfo(v => v.prompt, false, view);
         menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        if (view.server !== '') {
-            const server = new PopupMenu.PopupMenuItem(view.server, {reactive: false, can_focus: false});
-            server.label.add_style_class_name('ai-usage-small');
-            server.label.opacity = DIM_OPACITY;
-            menu.addMenuItem(server);
-        }
+        if (view.server !== '')
+            this._aiuInfo(v => v.server, true, view);
         for (const a of view.actions) {
             if (a.visible)
-                this._aiuAction(a);
+                this._aiuAction(v => v.actions.find(b => b.id === a.id), view);
         }
     }
 
-    _aiuSection(s) {
-        const head = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
-        // not clickable, but drawn in the menu's text colour, not greyed out
-        head.remove_style_class_name('popup-inactive-menu-item');
+    // _aiuKeep adds item to the menu; update(part) draws pick(view) into
+    // it, now and for each later view of the same items.
+    _aiuKeep(item, pick, update, view) {
+        update(pick(view));
+        this._aiuUpdaters.push(v => update(pick(v)));
+        this.menu.addMenuItem(item);
+    }
+
+    // The header: picture, bold name, dim account, right-aligned dim time;
+    // the problem line under it. Not clickable.
+    _aiuSection(pick, view) {
+        const head = steady(new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false}));
         const col = vbox({x_expand: true, style_class: 'ai-usage-section'});
         const line = new St.BoxLayout({style_class: 'ai-usage-header'});
-        line.add_child(this._aiuPicture(s.provider, HEADER_ICON_SIZE, PLAIN_RING));
-        line.add_child(new St.Label({text: s.name, style_class: 'ai-usage-name', y_align: Clutter.ActorAlign.CENTER}));
-        line.add_child(dimLabel(s.account, {x_expand: true}));
-        line.add_child(dimLabel(s.updated));
+        const picture = this._aiuPicture(pick(view).provider, HEADER_ICON_SIZE, PLAIN_RING);
+        const name = new St.Label({style_class: 'ai-usage-name', y_align: Clutter.ActorAlign.CENTER});
+        const account = dimLabel({x_expand: true});
+        const updated = dimLabel();
+        for (const a of [picture, name, account, updated])
+            line.add_child(a);
         col.add_child(line);
-        if (s.problem !== '') {
-            const problem = new St.Label({text: s.problem, style_class: 'ai-usage-problem'});
-            problem.clutter_text.line_wrap = true;
-            if (!this._aiuDark)
-                problem.add_style_class_name('ai-usage-on-light');
-            this._aiuProblems.push(problem);
-            col.add_child(problem);
-        }
         head.add_child(col);
-        if (s.stale)
-            head.opacity = STALE_OPACITY;
-        this.menu.addMenuItem(head);
-        for (const r of s.rows)
-            this._aiuRow(r, s.stale);
+        let problem = null;
+        this._aiuKeep(head, pick, s => {
+            name.text = s.name;
+            account.text = s.account;
+            updated.text = s.updated;
+            picture.opacity = name.opacity = textOpacity(false, s.stale);
+            account.opacity = updated.opacity = textOpacity(true, s.stale);
+            if (s.problem !== '' && problem === null) {
+                problem = new St.Label({style_class: 'ai-usage-problem'});
+                problem.clutter_text.line_wrap = true;
+                if (!this._aiuDark)
+                    problem.add_style_class_name('ai-usage-on-light');
+                this._aiuProblems.push(problem);
+                col.add_child(problem);
+            } else if (s.problem === '' && problem !== null) {
+                this._aiuProblems = this._aiuProblems.filter(p => p !== problem);
+                problem.destroy();
+                problem = null;
+            }
+            if (problem !== null) {
+                problem.text = s.problem;
+                problem.opacity = textOpacity(false, s.stale);
+            }
+        }, view);
     }
 
-    _aiuRow(r, stale) {
+    _aiuRow(pick, view) {
+        const [first] = pick(view);
         const item = new PopupMenu.PopupBaseMenuItem();
         const col = vbox({x_expand: true, style_class: 'ai-usage-row'});
         const line = new St.BoxLayout();
-        line.add_child(new St.Label({text: r.label, style_class: 'ai-usage-label', x_expand: true}));
-        if (!r.more) {
-            const percent = new St.Label({text: r.percent_text, style_class: 'ai-usage-percent'});
-            if (r.level === 'critical')
-                percent.add_style_class_name('ai-usage-critical');
-            line.add_child(percent);
-        }
+        const label = new St.Label({style_class: 'ai-usage-label', x_expand: true});
+        line.add_child(label);
         col.add_child(line);
-        if (!r.more) {
-            const track = new St.Widget({
+        // the More row is its label only
+        let percent = null, track = null, detail = null;
+        if (!first.more) {
+            percent = new St.Label({style_class: 'ai-usage-percent'});
+            line.add_child(percent);
+            track = new St.Widget({
                 style_class: 'ai-usage-track', width: BAR_WIDTH, height: BAR_HEIGHT, x_align: Clutter.ActorAlign.START,
             });
+            col.add_child(track);
+            detail = dimLabel();
+            col.add_child(detail);
+        }
+        item.add_child(col);
+        this._aiuKeep(item, pick, ([r, stale]) => {
+            label.text = r.label;
+            label.opacity = textOpacity(false, stale);
+            if (percent === null)
+                return;
+            percent.text = r.percent_text;
+            percent.opacity = textOpacity(false, stale);
+            if (r.level === 'critical')
+                percent.add_style_class_name('ai-usage-critical');
+            else
+                percent.remove_style_class_name('ai-usage-critical');
+            track.destroy_all_children();
             const width = fillWidth(r.percent, BAR_WIDTH, BAR_HEIGHT);
             const level = levelClass(r.level);
             if (width > 0 && level !== null)
                 track.add_child(new St.Widget({style_class: `ai-usage-fill ${level}`, width, height: BAR_HEIGHT}));
-            col.add_child(track);
-            col.add_child(dimLabel(r.detail));
-        }
-        item.add_child(col);
-        if (stale)
-            item.opacity = STALE_OPACITY;
-        item.connect('activate', () => this._aiuClient.guard('click', () => this._aiuClient.click(r.id)));
-        this.menu.addMenuItem(item);
+            track.opacity = textOpacity(false, stale);
+            detail.text = r.detail;
+            detail.opacity = textOpacity(true, stale);
+        }, view);
+        item.connect('activate', () => this._aiuClient.guard('click', () => this._aiuClient.click(first.id)));
     }
 
-    _aiuAction(a) {
-        const item = new PopupMenu.PopupMenuItem(a.text);
-        if (!a.enabled)
-            item.setSensitive(false);
-        if (a.checkbox)
-            item.setOrnament(a.checked ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
-        item.connect('activate', () => this._aiuClient.guard('click', () => this._aiuClient.click(a.id)));
-        this.menu.addMenuItem(item);
+    // A line of text that is not clickable: the sign-in prompt, the dim
+    // server line.
+    _aiuInfo(pick, dim, view) {
+        const item = steady(new PopupMenu.PopupMenuItem('', {reactive: false, can_focus: false}));
+        if (dim)
+            item.label.add_style_class_name('ai-usage-small');
+        item.label.opacity = textOpacity(dim, false);
+        this._aiuKeep(item, pick, text => {
+            item.label.text = text;
+        }, view);
+    }
+
+    _aiuAction(pick, view) {
+        const item = new PopupMenu.PopupMenuItem('');
+        const id = pick(view).id;
+        this._aiuKeep(item, pick, a => {
+            item.label.text = a.text;
+            item.setSensitive(a.enabled);
+            if (a.checkbox)
+                item.setOrnament(a.checked ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
+        }, view);
+        item.connect('activate', () => this._aiuClient.guard('click', () => this._aiuClient.click(id)));
     }
 
     // The problem line's colour follows the menu's background (plan PR-16):
@@ -277,15 +373,16 @@ class AIUsagePanelIndicator extends PanelMenu.Button {
 });
 
 // The connection to the agent: watches its bus name, reads and draws its
-// view, attaches, pings and sends clicks.
+// view, attaches, pings and sends clicks. When it shows a view and counts
+// as attached is link.js's (tested there).
 class PanelClient {
     constructor(ext) {
         this._uuid = ext.uuid;
+        this._link = createLink();
         this._proxy = null;
         this._signalId = 0;
         this._pingId = 0;
         this._watchId = 0;
-        this._attached = false;
         this._view = null;
         this._button = null;
         this.guard('enable', () => {
@@ -301,22 +398,25 @@ class PanelClient {
     }
 
     // guard runs fn; when it throws, the error is logged, the button
-    // hidden and the agent told, and the shell carries on.
+    // hidden and the agent told, and the shell carries on. The extension
+    // stays away until the agent's name goes and comes back (link.js).
     guard(what, fn) {
         try {
             return fn();
         } catch (e) {
             console.error(`${this._uuid}: ${what}:`, e);
-            this._failed();
+            this._failed(false);
             return undefined;
         }
     }
 
-    _failed() {
+    // _failed: hide, stop pinging, tell the agent. badView: the agent's
+    // answer was no view; its next good view is shown and attached again.
+    _failed(badView) {
         try {
+            this._link.failed(badView);
             this._setShown(false);
             this._stopPing();
-            this._attached = false;
             this._detach();
         } catch (e) {
             console.error(`${this._uuid}: after a failure:`, e);
@@ -342,8 +442,12 @@ class PanelClient {
     _appeared() {
         this._dropProxy();
         this._view = null;
+        const generation = this._link.appeared();
+        // DO_NOT_AUTO_START: no call ever asks the bus to start a program
+        // for the name; only a running agent answers.
         new PanelProxy(Gio.DBus.session, BUS_NAME, OBJECT_PATH, (proxy, error) => this.guard('proxy', () => {
-            if (!this._button || this._watchId === 0)
+            // a later appearance, a vanish or disable() came first
+            if (!this._button || !this._link.current(generation))
                 return;
             if (error) {
                 console.log(`${this._uuid}: no connection to the agent: ${error.message}`);
@@ -352,10 +456,11 @@ class PanelClient {
             this._proxy = proxy;
             this._signalId = proxy.connectSignal('ViewChanged', () => this.guard('ViewChanged', () => this._refresh()));
             this._refresh();
-        }));
+        }), null, Gio.DBusProxyFlags.DO_NOT_AUTO_START);
     }
 
     _vanished() {
+        this._link.vanished();
         this._dropProxy();
         this._view = null;
         this._setShown(false);
@@ -367,15 +472,15 @@ class PanelClient {
             this._proxy.disconnectSignal(this._signalId);
         this._signalId = 0;
         this._proxy = null;
-        this._attached = false;
     }
 
     _refresh() {
         const proxy = this._proxy;
-        if (!proxy)
+        if (!proxy || !this._link.mayShow())
             return;
+        const generation = this._link.generation;
         proxy.GetViewRemote((result, error) => this.guard('GetView', () => {
-            if (proxy !== this._proxy)
+            if (!this._link.current(generation) || !this._link.mayShow())
                 return;
             if (error) {
                 // No answer (a hung agent): keep the last view, if any.
@@ -385,8 +490,11 @@ class PanelClient {
                 return;
             }
             const view = parseView(result[0]);
-            if (view === null)
-                throw new Error('GetView did not return a view');
+            if (view === null) {
+                console.error(`${this._uuid}: GetView did not return a view`);
+                this._failed(true);
+                return;
+            }
             if (isEmpty(view)) {
                 // The agent has no panel yet: wait for its ViewChanged.
                 if (this._view === null)
@@ -396,24 +504,24 @@ class PanelClient {
             this._button.render(view);
             this._view = view;
             this._setShown(true);
-            if (!this._attached)
-                this._attach(proxy);
+            const token = this._link.startAttach();
+            if (token !== 0)
+                this._attach(proxy, token);
         }));
     }
 
-    _attach(proxy) {
+    _attach(proxy, token) {
         proxy.AttachRemote(PROTOCOL, Config.PACKAGE_VERSION, (result, error) => this.guard('Attach', () => {
-            if (proxy !== this._proxy)
-                return;
-            if (error) {
+            if (error)
                 console.log(`${this._uuid}: Attach failed: ${error.message}`);
+            // false for an error and for a reply that came after a failure,
+            // a vanish or disable()
+            if (!this._link.attachDone(token, !error))
                 return;
-            }
-            this._attached = true;
             if (this._pingId === 0) {
                 this._pingId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, PING_SECONDS, () => {
                     this.guard('Ping', () => {
-                        if (this._proxy)
+                        if (this._proxy && this._link.attached)
                             this._proxy.PingRemote(() => {});
                     });
                     return this._pingId !== 0 ? GLib.SOURCE_CONTINUE : GLib.SOURCE_REMOVE;
@@ -430,7 +538,7 @@ class PanelClient {
     }
 
     click(id) {
-        if (this._proxy && clickable(this._view, id))
+        if (this._proxy && this._link.mayShow() && clickable(this._view, id))
             this._proxy.ClickRemote(id, () => {});
     }
 
@@ -440,6 +548,7 @@ class PanelClient {
         } catch (e) {
             // the agent may already be gone
         }
+        this._link.close();
         if (this._watchId !== 0) {
             Gio.bus_unwatch_name(this._watchId);
             this._watchId = 0;

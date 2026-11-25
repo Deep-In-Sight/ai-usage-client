@@ -134,7 +134,7 @@ func TestWriteThenCurrent(t *testing.T) {
 			t.Fatalf("Current(%s) = %v %v", form, cur, err)
 		}
 	}
-	if !strings.Contains(string(want["metadata.json"]), `"46", "50"`) || len(want) != 5 {
+	if !strings.Contains(string(want["metadata.json"]), `"46", "50"`) || len(want) != 6 {
 		t.Fatalf("gnome46: %d files, metadata %s", len(want), want["metadata.json"])
 	}
 	// a shell of the other form (an Ubuntu upgrade the other way round)
