@@ -36,11 +36,19 @@ lc_autostart() { env "$@" setsid "$exe" run < /dev/null >> "$out/autostart-run.l
 lc_log="$data/agent.log"
 lc_pids() { pgrep -f "^$exe run" | tr '\n' ' ' | sed 's/ $//'; }
 lc_count() { pgrep -f "^$exe run" | wc -l; }
-# the tray helpers (design 6.4): "$exe tray-helper"
-lc_hpids() { pgrep -f "^$exe tray-helper" | tr '\n' ' ' | sed 's/ $//'; }
-lc_hcount() { pgrep -f "^$exe tray-helper" | wc -l; }
-# lc_children PID: the helpers whose parent is PID
-lc_children() { local p n=0; for p in $(pgrep -f "^$exe tray-helper"); do [ "$(ps -o ppid= -p "$p" | tr -d ' ')" = "$1" ] && n=$((n + 1)); done; echo $n; }
+# the icon helpers (design 6.4): "$exe tray-helper" but the GNOME bridge,
+# which owns local.AIUsage.Panel on one of the buses started here
+# (lc_addrs) until it gives up without a shell (lib.sh, ruling F13)
+lc_addrs=""
+lc_hpids() { icon_helper_pids "$exe" $lc_addrs | tr '\n' ' ' | sed 's/ $//'; }
+lc_hcount() { icon_helper_pids "$exe" $lc_addrs | grep -c .; }
+# lc_hcount_is N [PARENT]: N icon helpers (whose parent is PARENT): a bridge
+# just started is counted until it owns its name, so callers wait a little
+lc_hcount_is() { [ "$(lc_hcount)" -eq "$1" ] && { [ -z "${2:-}" ] || [ "$(lc_children "$2")" -eq "$1" ]; }; }
+# every helper, the bridge too
+lc_allcount() { pgrep -f "^$exe tray-helper" | wc -l; }
+# lc_children PID: the icon helpers whose parent is PID
+lc_children() { local p n=0; for p in $(icon_helper_pids "$exe" $lc_addrs); do [ "$(ps -o ppid= -p "$p" | tr -d ' ')" = "$1" ] && n=$((n + 1)); done; echo $n; }
 
 # lc_bus NAME [ADDRESS]: start a private session bus; sets lc_addr, lc_bpid.
 lc_bus() {
@@ -52,7 +60,7 @@ lc_bus() {
     dbus-daemon --session --fork --print-address=5 --print-pid=6 5>"$out/$name.addr" 6>"$out/$name.pid" || return 1
   fi
   lc_ready() { lc_addr=$(head -n 1 "$out/$name.addr") && [ -n "$lc_addr" ] && lc_bpid=$(head -n 1 "$out/$name.pid") && [ -n "$lc_bpid" ]; }
-  wait_for 10 lc_ready
+  wait_for 10 lc_ready && lc_addrs="$lc_addrs $lc_addr"
 }
 
 # lc_watcher NAME ADDRESS: start a fake tray host on that bus; sets lc_wpid.
@@ -125,6 +133,7 @@ lifecycle_checks() {
   pid2=$(lc_pids)
   [ "$(lc_count)" -eq 1 ] || problems="$problems processes=[$pid2]"
   [ "$pid2" = "$pid1" ] || problems="$problems pid_changed=$pid1->$pid2"
+  wait_for 10 lc_hcount_is 1
   hpid2=$(lc_hpids)
   [ "$(lc_hcount)" -eq 1 ] || problems="$problems helpers=[$hpid2]"
   [ -n "$hpid1" ] && [ "$hpid2" != "$hpid1" ] || problems="$problems helper_not_restarted=[$hpid1]->[$hpid2]"
@@ -182,7 +191,7 @@ lifecycle_checks() {
   [ "$(lc_count)" -eq 1 ] || problems="$problems processes_later=[$(lc_pids)]"
   [ "$(lc_pids)" = "$pid3" ] || problems="$problems agent_changed_later=[$(lc_pids)]"
   # one icon: the old agent's helper ended with it, the new one has one
-  [ "$(lc_hcount)" -eq 1 ] && [ "$(lc_children "$pid3")" -eq 1 ] || problems="$problems helpers=[$(lc_hpids)]"
+  wait_for 10 lc_hcount_is 1 "$pid3" || problems="$problems helpers=[$(lc_hpids)]"
   n=$(lc_panics); [ "$n" = 0 ] || problems="$problems panics=$n"
   if grep -q 'took over' "$lc_log" 2>/dev/null; then info relogin "the new run took over from the old one"; fi
   if [ -z "$problems" ]; then pass tray.relogin "pid $pid1 -> $pid3, registered on the new bus, label 57%, syncs $s -> $(lc_syncs)"
@@ -223,12 +232,12 @@ lifecycle_checks() {
   wait_for 90 two_items || problems="$problems items=$(lc_items w5)"
   pid5=$(lc_pids)
   [ "$(lc_count)" -eq 1 ] || problems="$problems processes=[$pid5]"
-  [ "$(lc_hcount)" -eq 2 ] && [ "$(lc_children "$pid5")" -eq 2 ] || problems="$problems helpers=[$(lc_hpids)]"
+  wait_for 10 lc_hcount_is 2 "$pid5" || problems="$problems helpers=[$(lc_hpids)]"
   if [ -z "$problems" ]; then pass tray.two_helpers "$(lc_items w5) items registered by helpers $(lc_hpids) of agent $pid5"
   else fail tray.two_helpers "$problems"; fi
   problems=""
   if [ -n "$pid5" ]; then kill -9 "$pid5"; else problems="no_agent"; fi
-  no_helpers() { [ "$(lc_hcount)" -eq 0 ]; }
+  no_helpers() { [ "$(lc_allcount)" -eq 0 ]; } # the bridge too
   t0=$(date +%s)
   wait_for 5 no_helpers || problems="$problems helpers_left=[$(lc_hpids)]"
   t1=$(date +%s)
@@ -259,7 +268,7 @@ lifecycle_checks() {
   done
   stopped() { grep -q 'tray helper claude stopped after repeated failures' "$lc_log" && grep -q 'tray helper claude: watching the desktop' "$lc_log"; }
   wait_for 30 stopped || problems="$problems not_stopped_and_watched"
-  [ "$(lc_hcount)" -eq 1 ] || problems="$problems watchers=[$(lc_hpids)]"
+  wait_for 10 lc_hcount_is 1 || problems="$problems watchers=[$(lc_hpids)]"
   # the tray host goes and comes back (GNOME Shell restarted)
   kill "$w6" 2>/dev/null
   sleep 1
@@ -269,7 +278,7 @@ lifecycle_checks() {
   wait_for 90 lc_registered w6b || problems="$problems not_back"
   t3=$(date +%s)
   grep -q 'tray helper claude: trying again (the desktop came back)' "$lc_log" || problems="$problems no_desktop_back_in_log"
-  [ "$(lc_hcount)" -eq 1 ] || problems="$problems helpers=[$(lc_hpids)]"
+  wait_for 10 lc_hcount_is 1 || problems="$problems helpers=[$(lc_hpids)]"
   starts=$(grep -c 'tray helper claude' "$lc_log" 2>/dev/null)
   [ $((starts - before)) -le 15 ] || problems="$problems log_lines=$((starts - before))"
   if [ -z "$problems" ]; then pass tray.comes_back "stopped after five failures, watched, registered again $((t3 - t2)) s after the host came back"

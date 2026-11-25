@@ -149,6 +149,30 @@ sync_ok() {
     [ "$(printf %s "$s" | jget - last_mode)" = "$2" ]
 }
 
+# The GNOME bridge (drawn-panel design 6.4) is a tray helper too: the same
+# "$exe tray-helper" in the shell role, which owns local.AIUsage.Panel on
+# its session bus (on these buses without GNOME Shell it waits up to 30 s
+# and ends with 78; it may have moved to $XDG_RUNTIME_DIR/bus when its
+# address died). Counts of icons leave it out (pre-flight ruling F13).
+# bridge_pids ADDR...: the pids owning local.AIUsage.Panel on those buses
+# and on the runtime folder's.
+bridge_pids() {
+  local a
+  for a in "$@" ${XDG_RUNTIME_DIR:+"unix:path=$XDG_RUNTIME_DIR/bus"}; do
+    busctl --address="$a" --timeout=3 status local.AIUsage.Panel 2>/dev/null | sed -n 's/^PID=//p'
+  done
+}
+# icon_helper_pids EXE ADDR...: EXE's tray helpers but the bridge.
+icon_helper_pids() {
+  local exe=$1 p skip
+  shift
+  skip=" $(bridge_pids "$@" | tr '\n' ' ') "
+  for p in $(pgrep -f "^$exe tray-helper"); do
+    case "$skip" in *" $p "*) ;; *) echo "$p" ;; esac
+  done
+}
+icon_helper_count() { icon_helper_pids "$@" | grep -c .; }
+
 # The release check (check-linux.sh release_codex_check) records here what
 # it changed on the runner; release_cleanup undoes it, each part once, and
 # is also the exit trap, so an interrupted run undoes it too.

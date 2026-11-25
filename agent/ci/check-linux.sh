@@ -168,25 +168,31 @@ print("ok" if head and rows else "missing: " + " | ".join(l for l, _ in items))
   else fail tray.menu "$got"; fi
 }
 
-# tray.helper_private: the helper's command line names nothing but the
-# subcommand (its provider and icon folder come over its standard input),
-# and it gets the desktop session's variables but not the rest of the
-# agent's environment (a canary the agent has).
+# tray.helper_private: every helper's command line names nothing but the
+# subcommand (its provider and icon folder, or its shell role, come over
+# its standard input), and it gets the desktop session's variables but not
+# the rest of the agent's environment (a canary the agent has): the icon
+# helper's and the GNOME bridge's (BUS: the session bus it serves on).
 helper_private_check() {
-  local hp ap cmd names problems=""
-  hp=$(pgrep -f "^$exe tray-helper" | head -n 1)
+  local bus=$1 hp ap cmd names problems="" bridge seen=""
   ap=$(pgrep -f "^$exe run" | head -n 1)
-  if [ -z "$hp" ] || [ -z "$ap" ]; then fail tray.helper_private "helper=[$hp] agent=[$ap]"; return; fi
-  cmd=$(tr '\0' ' ' < "/proc/$hp/cmdline")
-  names=$(tr '\0' '\n' < "/proc/$hp/environ" | cut -d= -f1 | sort | tr '\n' ' ')
-  [ "$cmd" = "$exe tray-helper " ] || problems="$problems cmdline=[$cmd]"
-  tr '\0' '\n' < "/proc/$ap/environ" | grep -q '^CI_SECRET_CANARY=' || problems="$problems canary_not_in_agent"
-  case " $names " in *" CI_SECRET_CANARY "*) problems="$problems canary_in_helper" ;; esac
-  for v in DBUS_SESSION_BUS_ADDRESS XDG_CURRENT_DESKTOP XDG_SESSION_TYPE HOME PATH AI_USAGE_HELPER_TOKEN; do
-    case " $names " in *" $v "*) ;; *) problems="$problems no_$v" ;; esac
+  bridge=$(bridge_pids "$bus" | head -n 1)
+  [ -n "$ap" ] || problems="$problems no_agent"
+  [ -n "$bridge" ] || problems="$problems no_bridge"
+  tr '\0' '\n' < "/proc/$ap/environ" 2>/dev/null | grep -q '^CI_SECRET_CANARY=' || problems="$problems canary_not_in_agent"
+  for hp in $(pgrep -f "^$exe tray-helper"); do
+    cmd=$(tr '\0' ' ' < "/proc/$hp/cmdline")
+    names=$(tr '\0' '\n' < "/proc/$hp/environ" | cut -d= -f1 | sort | tr '\n' ' ')
+    if [ "$hp" = "$bridge" ]; then seen="$seen bridge"; else seen="$seen icon"; fi
+    [ "$cmd" = "$exe tray-helper " ] || problems="$problems cmdline=[$cmd]"
+    case " $names " in *" CI_SECRET_CANARY "*) problems="$problems canary_in_helper_$hp" ;; esac
+    for v in DBUS_SESSION_BUS_ADDRESS XDG_CURRENT_DESKTOP XDG_SESSION_TYPE HOME PATH AI_USAGE_HELPER_TOKEN; do
+      case " $names " in *" $v "*) ;; *) problems="$problems no_${v}_$hp" ;; esac
+    done
   done
-  if [ -z "$problems" ]; then pass tray.helper_private "command line [$cmd], environment: $names"
-  else fail tray.helper_private "$problems; environment: $names"; fi
+  case "$seen" in *icon*) ;; *) problems="$problems no_icon_helper" ;; esac
+  if [ -z "$problems" ]; then pass tray.helper_private "helpers [$seen ], command line [$cmd], environment: $names"
+  else fail tray.helper_private "$problems; helpers [$seen ]; environment: $names"; fi
 }
 
 tray_label_check() {
@@ -208,6 +214,8 @@ tray_label_check() {
     get_prop() { DBUS_SESSION_BUS_ADDRESS="$bus_addr" "$CI_BIN/fakewatcher" get "$svc" "$1" 2>>"$out/watcher.err"; }
     label_is() { label=$(get_prop XAyatanaLabel) && [ "$label" = "$1" ]; }
     if wait_for 90 registered; then
+      # while the bridge still waits for a GNOME Shell (30 s)
+      helper_private_check "$bus_addr"
       wait_for 30 label_is 42% || problems="$problems label=[$label]"
       guide=$(get_prop XAyatanaLabelGuide)
       [ -n "$guide" ] || problems="$problems guide_empty"
@@ -216,11 +224,11 @@ tray_label_check() {
       wait_for 30 tray_mode || problems="$problems mode=$(dev "$device4" last_mode)"
       # Claude only: exactly one icon, drawn by one helper of the agent
       n_items=$(awk '$1 == "registered" { s[$2] = 1 } END { n = 0; for (k in s) n++; print n }' "$out/watcher.log")
-      n_helpers=$(pgrep -f "^$exe tray-helper" | wc -l)
+      one_icon_helper() { n_helpers=$(icon_helper_count "$exe" "$bus_addr"); [ "$n_helpers" -eq 1 ]; }
+      wait_for 10 one_icon_helper
       [ "$n_items" = 1 ] && [ "$n_helpers" -eq 1 ] || problems="$problems items=$n_items helpers=$n_helpers"
       # tray.menu: the menu as the tray host reads it (dbusmenu GetLayout)
       menu_check
-      helper_private_check
       curl -fsS --max-time 10 -X POST "$BASE/weekly?percent=57" || problems="$problems set_weekly_failed"
       signalled() { grep -q "^label $svc \"57%\" " "$out/watcher.log"; }
       wait_for 60 signalled || problems="$problems no_signal_57"
@@ -393,7 +401,8 @@ tray_codex_check() {
   }
   if wait_for 90 two_items; then
     wait_for 60 both_labels || problems="$problems labels=[$labels]"
-    [ "$(pgrep -f "^$exe tray-helper" | wc -l)" -eq 2 ] || problems="$problems helpers=$(pgrep -f "^$exe tray-helper" | wc -l)"
+    two_icon_helpers() { [ "$(icon_helper_count "$exe" "$bus_addr")" -eq 2 ]; }
+    wait_for 10 two_icon_helpers || problems="$problems helpers=$(icon_helper_count "$exe" "$bus_addr")"
     svc=$(printf '%s\n' "$items" | head -n 1)
     layout=$(timeout 15 busctl --address="$bus_addr" --timeout=10 --json=short -- \
       call "$svc" /StatusNotifierItem/menu com.canonical.dbusmenu GetLayout iias 0 -1 0 2>&1)

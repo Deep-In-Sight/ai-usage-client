@@ -181,6 +181,7 @@ type runOpts struct {
 	// without removing them, and this helper's icon window
 	removeStale func([]trayproto.StaleIcon)
 	window      func() uint64
+	bridge      func(ctx context.Context, in *bufio.Reader, out io.Writer, enableOnce bool) int
 }
 
 func startRun(t *testing.T, ro runOpts) *run {
@@ -209,6 +210,7 @@ func startRun(t *testing.T, ro runOpts) *run {
 		tick:         20 * time.Millisecond,
 		readyTimeout: 2 * time.Second,
 		giveUp:       func() { r.gaveUp.Store(true); ro.ui.Quit() },
+		bridge:       ro.bridge,
 	}
 	go func() {
 		r.code <- runWith(context.Background(), inR, outW, "tok-0123456789", d)
@@ -694,4 +696,53 @@ func TestHelperReadyNamesItsWindow(t *testing.T) {
 	m = r.next()
 	eq(t, m.Type, trayproto.TypeReady)
 	eq(t, m.Window, uint64(0))
+}
+
+// A hello with the role "shell" makes the helper the GNOME bridge: it gets
+// the rest of the input and the hello's enable_once, shows no tray, and
+// its exit code is the helper's; an unknown role is refused.
+func TestHelperInTheShellRoleIsTheBridge(t *testing.T) {
+	type got struct {
+		enableOnce bool
+		line       trayproto.Msg
+	}
+	calls := make(chan got, 1)
+	bridge := func(ctx context.Context, in *bufio.Reader, out io.Writer, enableOnce bool) int {
+		m, err := trayproto.Decode(in)
+		if err != nil {
+			t.Error(err)
+		}
+		calls <- got{enableOnce, m}
+		_ = trayproto.Encode(out, trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeShell, Enabled: true})
+		return trayproto.ExitUnsupported
+	}
+	r := startRun(t, runOpts{bridge: bridge})
+	r.send(trayproto.Msg{Type: trayproto.TypeHello, Token: "tok-0123456789", Role: trayproto.RoleShell, EnableOnce: true})
+	r.send(view("42%", false))
+	if m := r.next(); m.Type != trayproto.TypeShell || !m.Enabled {
+		t.Fatalf("%+v", m)
+	}
+	eq(t, r.exitCode(), trayproto.ExitUnsupported)
+	if c := <-calls; !c.enableOnce || c.line.Type != trayproto.TypeView {
+		t.Fatalf("%+v", c)
+	}
+	select {
+	case <-r.ui.ran:
+		t.Fatal("the tray was started")
+	case o := <-r.opts:
+		t.Fatalf("a tray was made for %+v", o)
+	default:
+	}
+	r = startRun(t, runOpts{bridge: bridge})
+	r.send(trayproto.Msg{Type: trayproto.TypeHello, Token: "tok-0123456789", Role: "other"})
+	eq(t, r.exitCode(), trayproto.ExitRefused)
+	// the token is checked first, as for any helper
+	r = startRun(t, runOpts{bridge: bridge})
+	r.send(trayproto.Msg{Type: trayproto.TypeHello, Token: "wrong", Role: trayproto.RoleShell})
+	eq(t, r.exitCode(), trayproto.ExitRefused)
+	select {
+	case c := <-calls:
+		t.Fatalf("the bridge ran: %+v", c)
+	default:
+	}
 }

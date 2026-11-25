@@ -250,9 +250,9 @@ func runCmd(env Env, args []string) int {
 }
 
 // bridgeReady: the helper can serve the GNOME bridge's role (hello role
-// "shell"). Until it can, no bridge is started anywhere. A variable, so
-// that tests can turn it on (pre-flight ruling F18).
-var bridgeReady = false
+// "shell", package shellbridge). A variable, so that tests can turn it off
+// and on (pre-flight ruling F18).
+var bridgeReady = true
 
 // readable: the file at p can be read, or there is none yet.
 func readable(p string) error {

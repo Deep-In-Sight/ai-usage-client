@@ -56,6 +56,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, token string) int {
 		tick:         2 * time.Second,
 		readyTimeout: 60 * time.Second,
 		giveUp:       func() { log.Print("the tray did not start within a minute; ending"); os.Exit(1) },
+		bridge:       runBridge,
 	})
 }
 
@@ -84,6 +85,9 @@ type deps struct {
 	// readyTimeout: the tray library must have started by then, or giveUp.
 	readyTimeout time.Duration
 	giveUp       func()
+	// bridge serves the usage panel to the GNOME Shell extension, for a
+	// hello whose role is "shell" (shellbridge.Run)
+	bridge func(ctx context.Context, in *bufio.Reader, out io.Writer, enableOnce bool) int
 }
 
 type helper struct {
@@ -125,6 +129,14 @@ func runWith(ctx context.Context, in io.Reader, out io.Writer, token string, d d
 		// first: an icon of a crashed helper stays until the pointer
 		// passes over it (review n-2)
 		d.removeStale(first.Stale)
+	}
+	switch first.Role {
+	case "":
+	case trayproto.RoleShell:
+		return d.bridge(ctx, br, out, first.EnableOnce)
+	default:
+		log.Printf("tray-helper: unknown role %q", first.Role)
+		return trayproto.ExitRefused
 	}
 	if first.Standby {
 		return standby(ctx, br, d)
