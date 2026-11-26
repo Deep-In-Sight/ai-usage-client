@@ -21,8 +21,9 @@ func macPalette(dark bool) Palette {
 
 // Plan Task 9, F11: over a menu whose background is not the panel's own
 // (macOS), nothing fills the item, the dim lines take the palette's own
-// dim colour, a stale group is its colours at 0.6 of their opacity, and the
-// problem line's colour follows the appearance.
+// dim colour, a stale group's colours are at 0.6 of their opacity but for
+// its dim text, which stays the dim colour (review A-m3), and the problem
+// line's colour follows the appearance.
 func TestLayoutOverTheMenusOwnBackground(t *testing.T) {
 	m := MetricsAt(96)
 	for _, dark := range []bool{false, true} {
@@ -44,7 +45,7 @@ func TestLayoutOverTheMenusOwnBackground(t *testing.T) {
 		ops = Layout(st, m, tm96, 320, 64, pal, false)
 		at := func(c color.NRGBA) color.NRGBA { c.A = uint8(float64(c.A)*StaleOpacity + 0.5); return c }
 		eq(t, find(t, ops, Text, "5-hour").Colour, at(pal.Text))
-		eq(t, find(t, ops, Text, "Resets Fri 21:20 · in 2h 20m").Colour, at(pal.Dimmed))
+		eq(t, find(t, ops, Text, "Resets Fri 21:20 · in 2h 20m").Colour, pal.Dimmed)
 		eq(t, find(t, ops, Text, "42%").Colour, at(Critical))
 		eq(t, find(t, ops, Pixels, "").Opacity, StaleAlpha)
 
@@ -58,7 +59,7 @@ func TestLayoutOverTheMenusOwnBackground(t *testing.T) {
 		eq(t, find(t, Layout(h, m, tm96, 320, 60, pal, false), Text, h.Problem).Colour, want)
 		h.Stale = true
 		eq(t, find(t, Layout(h, m, tm96, 320, 60, pal, false), Text, h.Problem).Colour, at(want))
-		eq(t, find(t, Layout(h, m, tm96, 320, 60, pal, false), Text, "Updated 18:52").Colour, at(pal.Dimmed))
+		eq(t, find(t, Layout(h, m, tm96, 320, 60, pal, false), Text, "Updated 18:52").Colour, pal.Dimmed)
 
 		inf := Item{Kind: "info", Text: "Server connected", Dim: true}
 		eq(t, find(t, Layout(inf, m, tm96, 320, 30, pal, false), Text, "Server connected").Colour, pal.Dimmed)

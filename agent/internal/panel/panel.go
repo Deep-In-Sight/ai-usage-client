@@ -24,7 +24,7 @@ var (
 )
 
 const (
-	StaleOpacity = 0.6  // a stale group is drawn at this opacity
+	StaleOpacity = 0.6  // a stale group is drawn at this opacity (its dim text stays dim: not faded twice)
 	DimMix       = 0.45 // dim text: the menu's text colour mixed this far toward its background
 	BarHeight    = 8    // the bar's height at 96 DPI (MetricsAt scales it)
 )

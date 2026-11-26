@@ -174,6 +174,10 @@ func TestLayoutHeader(t *testing.T) {
 	ops = Layout(st, m, tm96, 350, 32, DarkPalette, false)
 	eq(t, find(t, ops, Pixels, "").Opacity, uint8(153))
 	eq(t, find(t, ops, Text, "Claude").Colour, Fade(DarkPalette.Text, DarkPalette.Background, StaleOpacity))
+	// review A-m3: the account and the time are dim already: not faded
+	// further (GNOME's rule)
+	eq(t, find(t, ops, Text, "team-a@… · 3 PCs").Colour, Dim(DarkPalette.Text, DarkPalette.Background))
+	eq(t, find(t, ops, Text, "Updated 18:52").Colour, Dim(DarkPalette.Text, DarkPalette.Background))
 	// the longest account at the width Size gives: every part whole, the
 	// PCs and the plan kept (review A-I1)
 	long := Item{Kind: "header", Provider: "codex", Name: "Codex", Account: longAccount, Updated: "Updated Mon 15:30"}
@@ -229,6 +233,20 @@ func TestLayoutRow(t *testing.T) {
 	st := row("normal", 42)
 	st.Stale = true
 	eq(t, find(t, Layout(st, m, tm96, 350, 64, LightPalette, false), Pixels, "").Opacity, uint8(153))
+	// review A-m3: a stale group's normal text is faded to 0.6, its dim
+	// text stays dim (not faded twice: GNOME's rule, view.js
+	// textOpacity); under the pointer every text is the highlight's text
+	// colour faded
+	for _, pal := range []Palette{LightPalette, DarkPalette} {
+		ops = Layout(st, m, tm96, 350, 64, pal, false)
+		eq(t, find(t, ops, Text, "5-hour").Colour, Fade(pal.Text, pal.Background, StaleOpacity))
+		eq(t, find(t, ops, Text, "42%").Colour, Fade(pal.Text, pal.Background, StaleOpacity))
+		eq(t, find(t, ops, Text, "Resets Fri 21:20 · in 2h 20m").Colour, Dim(pal.Text, pal.Background))
+		ops = Layout(st, m, tm96, 350, 64, pal, true)
+		hl := Fade(pal.HighlightText, pal.Highlight, StaleOpacity)
+		eq(t, find(t, ops, Text, "5-hour").Colour, hl)
+		eq(t, find(t, ops, Text, "Resets Fri 21:20 · in 2h 20m").Colour, hl)
+	}
 	// a taller item: the same block, centred
 	lbl = find(t, Layout(row("normal", 42), m, tm96, 350, 74, LightPalette, false), Text, "5-hour")
 	eq(t, lbl.Y, 10)

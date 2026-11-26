@@ -143,7 +143,13 @@ func Layout(it Item, m Metrics, tm Measurer, w, h int, pal Palette, selected boo
 	}
 	opacity := uint8(255)
 	if it.Stale {
-		text, dim = Fade(text, bg, StaleOpacity), Fade(dim, bg, StaleOpacity)
+		// the group at 0.6 (design 5.3), its dim text left as it is: dim
+		// already, not faded twice (GNOME's rule, view.js textOpacity;
+		// review A-m3); under the pointer the dim text is the faded text
+		text = Fade(text, bg, StaleOpacity)
+		if highlighted {
+			dim = text
+		}
 		opacity = StaleAlpha
 	}
 	ops := []Op{{Kind: Fill, W: w, H: h, Colour: bg}}

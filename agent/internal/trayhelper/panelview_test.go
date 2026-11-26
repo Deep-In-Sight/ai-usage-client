@@ -140,14 +140,17 @@ func TestViewItemsCarryOutThePanelsLayout(t *testing.T) {
 		}
 	}
 	// the dim lines are the system's secondary label colour; the stale
-	// group is at 0.6 of the label colours' opacity; the problem line is
-	// dark amber in a light appearance, amber in a dark one
+	// group is at 0.6 of the label colour's opacity, its dim lines stay
+	// the secondary label colour (not faded twice: review A-m3); the
+	// problem line is dark amber in a light appearance, amber in a dark
+	// one
 	c := &fakeCanvas{scale: 1}
 	d.DrawView(ids["r.claude.0"], c, 320, 64, 1, macColours, false)
-	staleText := macColours.SecondaryText
-	staleText.A = uint8(float64(staleText.A)*panel.StaleOpacity + 0.5)
-	if !strings.Contains(strings.Join(c.calls, "\n"), fmt.Sprint(staleText)) {
-		t.Fatalf("no stale dim text %v in %v", staleText, c.calls)
+	fade := func(c color.NRGBA) color.NRGBA { c.A = uint8(float64(c.A)*panel.StaleOpacity + 0.5); return c }
+	calls := strings.Join(c.calls, "\n")
+	if !strings.Contains(calls, fmt.Sprint(fade(macColours.Text))) || !strings.Contains(calls, fmt.Sprint(macColours.SecondaryText)) ||
+		strings.Contains(calls, fmt.Sprint(fade(macColours.SecondaryText))) {
+		t.Fatalf("stale text not %v, dim text not %v in %v", fade(macColours.Text), macColours.SecondaryText, c.calls)
 	}
 	for _, dark := range []bool{false, true} {
 		cols := macColours
