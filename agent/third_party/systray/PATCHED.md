@@ -123,7 +123,9 @@ extra properties.
     SetOwnerDrawn(on)` (a hidden item stays hidden), `MenuOwnerWindow()`
     (the hidden window that owns the menu), `AddOwnerDrawnSeparator()` and,
     for tests only, `SetReinsertHookForTests(f)` (f runs between an
-    item's removal and its insert in the re-insert before an open); the
+    item's removal and its insert in the re-insert before an open) and
+    `SetReinsertFaultForTests(f)` (an insert of that re-insert fails
+    when f says so); the
     handling of `WM_MEASUREITEM` (the size at the effective DPI of the
     monitor under the pointer, `MonitorFromPoint` +
     `shcore!GetDpiForMonitor`, 96 when unknown; the `POINT` is passed as
@@ -138,11 +140,14 @@ extra properties.
     visible owner-drawn item and separator (Windows keeps an owner-drawn
     item's size until it is inserted anew, so each is removed and inserted
     again at its place, from the parent and state it was last given, never
-    reading the item itself); a panic in the drawer is logged instead of
-    ending the program.
-  - One lock (`menuMu`) for the menu's items: every add, update, hide,
-    show, separator add, removal and reset (the package's wrappers), the
-    switch in `SetOwnerDrawn` and the re-insert before an open hold it, so
+    reading the item itself; an insert that fails is logged and tried once
+    more, as the item could be Quit); a panic in the drawer is logged
+    instead of ending the program.
+  - One lock (`menuMu`) for the menu's items: every add, update (a menu
+    item's picture too: `(*MenuItem).SetIconFromFilePath`), hide, show,
+    separator add, removal and reset (the package's wrappers), the switch
+    in `SetOwnerDrawn`, the re-insert before an open and the reading of the
+    menu to show hold it, so
     that the re-insert on the tray's thread and the program's goroutines
     never interleave (a hidden item shown again, an item inserted twice).
     It is never held across a drawer call or anything that waits for the
@@ -158,10 +163,15 @@ extra properties.
     converted), and a text item again once that is switched off;
     `addSeparatorMenuItem` gives an owner-drawn separator
     `MFT_SEPARATOR|MFT_OWNERDRAW`; `showMenu` calls
-    `prepareOwnerDrawnMenu` before `TrackPopupMenu` and tells it when
-    `TrackPopupMenu` returned; `resetMenu` forgets the owner-drawn items
-    and separators; the wrappers `addOrUpdateMenuItem`, `addSeparator`,
-    `hideMenuItem`, `removeMenuItem` and `resetMenu` hold `menuMu`.
+    `prepareOwnerDrawnMenu` before `TrackPopupMenu`, shows the menu it
+    returns (read under `menuMu`: upstream reads `t.menus[0]` without a
+    lock while `resetMenu` replaces the map; while the menu is shown
+    already, no menu, so the second `TrackPopupMenu` fails as before) and
+    tells it when `TrackPopupMenu` returned; `resetMenu` forgets the
+    owner-drawn items and separators; the wrappers `addOrUpdateMenuItem`,
+    `addSeparator`, `hideMenuItem`, `removeMenuItem` and `resetMenu`, and
+    `(*MenuItem).SetIconFromFilePath` (which upstream updates the item
+    without them), hold `menuMu`.
 - The header comment says the file was modified.
 
 ### `systray_darwin.m` (macOS)

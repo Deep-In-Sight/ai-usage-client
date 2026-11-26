@@ -115,6 +115,10 @@ type ownerDrawResult struct {
 	DPIs          []uint32 // the DPIs Measure and Draw were given
 	DeltaShown    bool     // Delta, hidden while the re-insert had it out, is in the open menu
 	DeltaHide     string   // what became of that Hide
+	// Epsilon, whose first insert in the re-insert failed: in the open
+	// menu, and how often its insert was tried (review N2)
+	EpsilonShown bool
+	EpsilonTries int
 }
 
 // openMenu posts the tray icon's right-click to the tray's window, as a
@@ -316,6 +320,30 @@ func TestOwnerDrawChild(t *testing.T) {
 		closeMenu(w)
 		systray.SetReinsertHookForTests(nil)
 
+		// review N2: an insert of the re-insert that fails is tried once
+		// more, so the item (it could be Quit) is not missing from the menu
+		epsilon := systray.AddMenuItem("Epsilon", "")
+		epsilon.SetOwnerDrawn(true)
+		var triesMu sync.Mutex
+		systray.SetReinsertFaultForTests(func(id uint32) bool {
+			if id != epsilon.ID() {
+				return false
+			}
+			triesMu.Lock()
+			defer triesMu.Unlock()
+			res.EpsilonTries++
+			return res.EpsilonTries == 1 // the first insert fails
+		})
+		w, m = openMenu()
+		if w == 0 {
+			res.Error = "no menu window the fourth time"
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+		_, _, res.EpsilonShown = itemType(m, epsilon.ID())
+		closeMenu(w)
+		systray.SetReinsertFaultForTests(nil)
+
 		// what Windows sends every top-level window when the colour mode changes
 		const hwndBroadcast, wmSettingChange, smtoAbortIfHung = 0xffff, 0x001A, 0x0002
 		area, _ := windows.UTF16PtrFromString("ImmersiveColorSet")
@@ -427,6 +455,10 @@ func TestOwnerDrawnItemIsOwnerDrawn(t *testing.T) {
 	eq(t, res.DeltaHide, "done")
 	if res.DeltaShown {
 		t.Fatal("Delta, hidden during the re-insert, is in the menu")
+	}
+	// review N2
+	if !res.EpsilonShown || res.EpsilonTries != 2 {
+		t.Fatalf("Epsilon, its first insert failed: in the menu %v, inserts tried %d (want 2)", res.EpsilonShown, res.EpsilonTries)
 	}
 	t.Logf("measures: first open %d, second %d; separator drawn %v", res.MeasuresFirst, res.MeasuresAgain, res.SepHeights)
 }

@@ -832,10 +832,10 @@ func (t *winTray) showMenu() error {
 		return err
 	}
 	pSetForegroundWindow.Call(uintptr(t.window))
-	shown := prepareOwnerDrawnMenu(t.menus[0]) // patched (see PATCHED.md)
+	menu, shown := prepareOwnerDrawnMenu() // patched (see PATCHED.md): the menu read under menuMu
 
 	res, _, err = pTrackPopupMenu.Call(
-		uintptr(t.menus[0]),
+		uintptr(menu),
 		TPM_BOTTOMALIGN|TPM_LEFTALIGN,
 		uintptr(p.X),
 		uintptr(p.Y),
@@ -1139,11 +1139,13 @@ func (item *MenuItem) SetIconFromFilePath(iconFilePath string) error {
 	if err != nil {
 		return fmt.Errorf("unable to convert icon to bitmap: %s", err)
 	}
+	menuMu.Lock() // patched (see PATCHED.md): one change of the menu at a time
+	defer menuMu.Unlock()
 	wt.muMenuItemIcons.Lock()
 	wt.menuItemIcons[uint32(item.id)] = h
 	wt.muMenuItemIcons.Unlock()
 
-	err = wt.addOrUpdateMenuItem(uint32(item.id), item.parentId(), item.title, item.disabled, item.checked)
+	err = addOrUpdateMenuItemLocked(item) // patched (see PATCHED.md)
 	if err != nil {
 		return fmt.Errorf("unable to addOrUpdateMenuItem: %s", err)
 	}

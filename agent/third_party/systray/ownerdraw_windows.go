@@ -8,6 +8,7 @@
 package systray
 
 import (
+	"errors"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -56,10 +57,12 @@ type odItemState struct {
 }
 
 // menuMu is the one lock of the menu's items: every add, update, hide,
-// show and removal (the package's wrappers in systray_windows.go, from any
-// goroutine) and the re-insert before each open (prepareOwnerDrawnMenu,
-// on the tray's thread) hold it, so that a Hide between the re-insert's
-// removal and its insert, or two inserts of one item, cannot happen.
+// show and removal (the package's wrappers in systray_windows.go and a
+// menu item's SetIconFromFilePath, from any goroutine), the re-insert
+// before each open and the reading of the menu to show (prepareOwnerDrawn-
+// Menu, on the tray's thread) hold it, so that a Hide between the
+// re-insert's removal and its insert, two inserts of one item, or a reset
+// replacing the menu while it is read, cannot happen.
 //
 // Why it cannot deadlock with the tray's thread: a thread that waits for
 // menuMu pumps no messages, so a holder must never wait for the tray's
@@ -94,6 +97,23 @@ func SetReinsertHookForTests(f func(itemID uint32)) {
 	menuMu.Lock()
 	defer menuMu.Unlock()
 	odReinsertHook = f
+}
+
+// odInsertFault, when set (SetReinsertFaultForTests), is asked before each
+// insert of the re-insert before an open; true: that insert fails as a
+// failing InsertMenuItem would.
+var odInsertFault func(itemID uint32) bool
+
+// errInsertFault is the failure odInsertFault makes.
+var errInsertFault = errors.New("insert failed (test)")
+
+// SetReinsertFaultForTests is for tests only: f is asked before each insert
+// of the re-insert before an open, with the menu's lock held; when it
+// answers true that insert fails (nil: none fails).
+func SetReinsertFaultForTests(f func(itemID uint32) bool) {
+	menuMu.Lock()
+	defer menuMu.Unlock()
+	odInsertFault = f
 }
 
 // SetMenuDrawer sets the drawer of the owner-drawn items; before or after
@@ -320,20 +340,28 @@ func windowDPI(hdc uintptr) uint32 {
 // since the last time). Windows keeps an owner-drawn item's size until the
 // item is inserted anew (a SetMenuItemInfo of the same type does not ask
 // again, CI run 45697510079), so each visible one is removed and inserted
-// again at its place, with menuMu held. The returned func is called once
-// TrackPopupMenu has returned.
-func prepareOwnerDrawnMenu(menu windows.Handle) (done func()) {
+// again at its place, with menuMu held; an insert that fails is tried once
+// more (the item could be Quit). It returns the menu to show, read with
+// menuMu held (resetMenu replaces it: upstream read it without a lock), and
+// a func to call once TrackPopupMenu has returned. While the menu is on the
+// screen already (a click handled in its own loop) it takes no lock and
+// returns no menu: TrackPopupMenu fails then, as a second popup of one
+// thread does.
+func prepareOwnerDrawnMenu() (menu windows.Handle, done func()) {
 	if !odShown.CompareAndSwap(false, true) {
-		return func() {} // the menu is on the screen already: leave it be
+		return 0, func() {} // the menu is on the screen already: leave it be
 	}
 	done = func() { odShown.Store(false) }
+	menuMu.Lock()
+	menu = wt.menus[0]
+	menuMu.Unlock()
 	od.mu.Lock()
 	d := od.drawer
 	drawn := len(od.items) > 0 || len(od.seps) > 0
 	hadBrush := od.brush != 0
 	od.mu.Unlock()
 	if d == nil || menu == 0 {
-		return done
+		return menu, done
 	}
 	// the drawer's calls, before menuMu is taken
 	if op, ok := d.(MenuOpener); ok {
@@ -349,6 +377,7 @@ func prepareOwnerDrawnMenu(menu windows.Handle) (done func()) {
 
 	menuMu.Lock()
 	defer menuMu.Unlock()
+	menu = wt.menus[0] // the menu a reset since put in its place
 	od.mu.Lock()
 	items := make([]uint32, 0, len(od.items))
 	for id := range od.items {
@@ -364,8 +393,27 @@ func prepareOwnerDrawnMenu(menu windows.Handle) (done func()) {
 			state[id] = st
 		}
 	}
-	hook := odReinsertHook
+	hook, fault := odReinsertHook, odInsertFault
 	od.mu.Unlock()
+	// putBack runs insert, and once more when it fails (review N2: a
+	// removed item that is not put back is missing from the menu until its
+	// visibility changes, and it could be Quit); both failures are logged
+	putBack := func(id uint32, what string, insert func() error) {
+		try := func() error {
+			if fault != nil && fault(id) {
+				return errInsertFault
+			}
+			return insert()
+		}
+		err := try()
+		if err == nil {
+			return
+		}
+		log.Printf("systray error: %s %d could not be put back: %s; trying once more", what, id, err)
+		if err := try(); err != nil {
+			log.Printf("systray error: %s %d could not be put back again: %s", what, id, err)
+		}
+	}
 	for _, id := range items {
 		st, ok := state[id]
 		if !ok || wt.getVisibleItemIndex(st.parent, id) == -1 {
@@ -378,21 +426,23 @@ func prepareOwnerDrawnMenu(menu windows.Handle) (done func()) {
 			hook(id)
 		}
 		// an owner-drawn item has no text: its title is not needed
-		if err := wt.addOrUpdateMenuItem(id, st.parent, "", st.disabled, st.checked); err != nil {
-			log.Printf("systray error: menu item %d could not be put back: %s", id, err)
-		}
+		putBack(id, "menu item", func() error { return wt.addOrUpdateMenuItem(id, st.parent, "", st.disabled, st.checked) })
 	}
 	for _, id := range seps {
 		if wt.getVisibleItemIndex(0, id) == -1 {
 			continue
 		}
 		if err := wt.hideMenuItem(id, 0); err == nil {
-			if err := wt.addSeparatorMenuItem(id, 0); err != nil {
-				log.Printf("systray error: separator %d could not be put back: %s", id, err)
-			}
+			putBack(id, "separator", func() error {
+				err := wt.addSeparatorMenuItem(id, 0)
+				if err != nil {
+					wt.delFromVisibleItems(0, id) // upstream keeps a separator whose insert failed
+				}
+				return err
+			})
 		}
 	}
-	return done
+	return menu, done
 }
 
 // setMenuBackground fills the menu around its items with rgb (on: true)

@@ -1,7 +1,7 @@
 diff -aruN a/PATCHED.md b/PATCHED.md
 --- a/PATCHED.md
 +++ b/PATCHED.md
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,240 @@
 +# fyne.io/systray, patched copy
 +
 +This folder is a copy of [fyne.io/systray](https://github.com/fyne-io/systray)
@@ -127,7 +127,9 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 +    SetOwnerDrawn(on)` (a hidden item stays hidden), `MenuOwnerWindow()`
 +    (the hidden window that owns the menu), `AddOwnerDrawnSeparator()` and,
 +    for tests only, `SetReinsertHookForTests(f)` (f runs between an
-+    item's removal and its insert in the re-insert before an open); the
++    item's removal and its insert in the re-insert before an open) and
++    `SetReinsertFaultForTests(f)` (an insert of that re-insert fails
++    when f says so); the
 +    handling of `WM_MEASUREITEM` (the size at the effective DPI of the
 +    monitor under the pointer, `MonitorFromPoint` +
 +    `shcore!GetDpiForMonitor`, 96 when unknown; the `POINT` is passed as
@@ -142,11 +144,14 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 +    visible owner-drawn item and separator (Windows keeps an owner-drawn
 +    item's size until it is inserted anew, so each is removed and inserted
 +    again at its place, from the parent and state it was last given, never
-+    reading the item itself); a panic in the drawer is logged instead of
-+    ending the program.
-+  - One lock (`menuMu`) for the menu's items: every add, update, hide,
-+    show, separator add, removal and reset (the package's wrappers), the
-+    switch in `SetOwnerDrawn` and the re-insert before an open hold it, so
++    reading the item itself; an insert that fails is logged and tried once
++    more, as the item could be Quit); a panic in the drawer is logged
++    instead of ending the program.
++  - One lock (`menuMu`) for the menu's items: every add, update (a menu
++    item's picture too: `(*MenuItem).SetIconFromFilePath`), hide, show,
++    separator add, removal and reset (the package's wrappers), the switch
++    in `SetOwnerDrawn`, the re-insert before an open and the reading of the
++    menu to show hold it, so
 +    that the re-insert on the tray's thread and the program's goroutines
 +    never interleave (a hidden item shown again, an item inserted twice).
 +    It is never held across a drawer call or anything that waits for the
@@ -162,10 +167,15 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 +    converted), and a text item again once that is switched off;
 +    `addSeparatorMenuItem` gives an owner-drawn separator
 +    `MFT_SEPARATOR|MFT_OWNERDRAW`; `showMenu` calls
-+    `prepareOwnerDrawnMenu` before `TrackPopupMenu` and tells it when
-+    `TrackPopupMenu` returned; `resetMenu` forgets the owner-drawn items
-+    and separators; the wrappers `addOrUpdateMenuItem`, `addSeparator`,
-+    `hideMenuItem`, `removeMenuItem` and `resetMenu` hold `menuMu`.
++    `prepareOwnerDrawnMenu` before `TrackPopupMenu`, shows the menu it
++    returns (read under `menuMu`: upstream reads `t.menus[0]` without a
++    lock while `resetMenu` replaces the map; while the menu is shown
++    already, no menu, so the second `TrackPopupMenu` fails as before) and
++    tells it when `TrackPopupMenu` returned; `resetMenu` forgets the
++    owner-drawn items and separators; the wrappers `addOrUpdateMenuItem`,
++    `addSeparator`, `hideMenuItem`, `removeMenuItem` and `resetMenu`, and
++    `(*MenuItem).SetIconFromFilePath` (which upstream updates the item
++    without them), hold `menuMu`.
 +- The header comment says the file was modified.
 +
 +### `systray_darwin.m` (macOS)
@@ -319,7 +329,7 @@ diff -aruN a/ownerdraw_other.go b/ownerdraw_other.go
 diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 --- a/ownerdraw_windows.go
 +++ b/ownerdraw_windows.go
-@@ -0,0 +1,434 @@
+@@ -0,0 +1,484 @@
 +//go:build windows
 +
 +// Not upstream code: this file was added to the copy of fyne.io/systray
@@ -330,6 +340,7 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +package systray
 +
 +import (
++	"errors"
 +	"log"
 +	"sync"
 +	"sync/atomic"
@@ -378,10 +389,12 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +}
 +
 +// menuMu is the one lock of the menu's items: every add, update, hide,
-+// show and removal (the package's wrappers in systray_windows.go, from any
-+// goroutine) and the re-insert before each open (prepareOwnerDrawnMenu,
-+// on the tray's thread) hold it, so that a Hide between the re-insert's
-+// removal and its insert, or two inserts of one item, cannot happen.
++// show and removal (the package's wrappers in systray_windows.go and a
++// menu item's SetIconFromFilePath, from any goroutine), the re-insert
++// before each open and the reading of the menu to show (prepareOwnerDrawn-
++// Menu, on the tray's thread) hold it, so that a Hide between the
++// re-insert's removal and its insert, two inserts of one item, or a reset
++// replacing the menu while it is read, cannot happen.
 +//
 +// Why it cannot deadlock with the tray's thread: a thread that waits for
 +// menuMu pumps no messages, so a holder must never wait for the tray's
@@ -416,6 +429,23 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +	menuMu.Lock()
 +	defer menuMu.Unlock()
 +	odReinsertHook = f
++}
++
++// odInsertFault, when set (SetReinsertFaultForTests), is asked before each
++// insert of the re-insert before an open; true: that insert fails as a
++// failing InsertMenuItem would.
++var odInsertFault func(itemID uint32) bool
++
++// errInsertFault is the failure odInsertFault makes.
++var errInsertFault = errors.New("insert failed (test)")
++
++// SetReinsertFaultForTests is for tests only: f is asked before each insert
++// of the re-insert before an open, with the menu's lock held; when it
++// answers true that insert fails (nil: none fails).
++func SetReinsertFaultForTests(f func(itemID uint32) bool) {
++	menuMu.Lock()
++	defer menuMu.Unlock()
++	odInsertFault = f
 +}
 +
 +// SetMenuDrawer sets the drawer of the owner-drawn items; before or after
@@ -642,20 +672,28 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +// since the last time). Windows keeps an owner-drawn item's size until the
 +// item is inserted anew (a SetMenuItemInfo of the same type does not ask
 +// again, CI run 45697510079), so each visible one is removed and inserted
-+// again at its place, with menuMu held. The returned func is called once
-+// TrackPopupMenu has returned.
-+func prepareOwnerDrawnMenu(menu windows.Handle) (done func()) {
++// again at its place, with menuMu held; an insert that fails is tried once
++// more (the item could be Quit). It returns the menu to show, read with
++// menuMu held (resetMenu replaces it: upstream read it without a lock), and
++// a func to call once TrackPopupMenu has returned. While the menu is on the
++// screen already (a click handled in its own loop) it takes no lock and
++// returns no menu: TrackPopupMenu fails then, as a second popup of one
++// thread does.
++func prepareOwnerDrawnMenu() (menu windows.Handle, done func()) {
 +	if !odShown.CompareAndSwap(false, true) {
-+		return func() {} // the menu is on the screen already: leave it be
++		return 0, func() {} // the menu is on the screen already: leave it be
 +	}
 +	done = func() { odShown.Store(false) }
++	menuMu.Lock()
++	menu = wt.menus[0]
++	menuMu.Unlock()
 +	od.mu.Lock()
 +	d := od.drawer
 +	drawn := len(od.items) > 0 || len(od.seps) > 0
 +	hadBrush := od.brush != 0
 +	od.mu.Unlock()
 +	if d == nil || menu == 0 {
-+		return done
++		return menu, done
 +	}
 +	// the drawer's calls, before menuMu is taken
 +	if op, ok := d.(MenuOpener); ok {
@@ -671,6 +709,7 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +
 +	menuMu.Lock()
 +	defer menuMu.Unlock()
++	menu = wt.menus[0] // the menu a reset since put in its place
 +	od.mu.Lock()
 +	items := make([]uint32, 0, len(od.items))
 +	for id := range od.items {
@@ -686,8 +725,27 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +			state[id] = st
 +		}
 +	}
-+	hook := odReinsertHook
++	hook, fault := odReinsertHook, odInsertFault
 +	od.mu.Unlock()
++	// putBack runs insert, and once more when it fails (review N2: a
++	// removed item that is not put back is missing from the menu until its
++	// visibility changes, and it could be Quit); both failures are logged
++	putBack := func(id uint32, what string, insert func() error) {
++		try := func() error {
++			if fault != nil && fault(id) {
++				return errInsertFault
++			}
++			return insert()
++		}
++		err := try()
++		if err == nil {
++			return
++		}
++		log.Printf("systray error: %s %d could not be put back: %s; trying once more", what, id, err)
++		if err := try(); err != nil {
++			log.Printf("systray error: %s %d could not be put back again: %s", what, id, err)
++		}
++	}
 +	for _, id := range items {
 +		st, ok := state[id]
 +		if !ok || wt.getVisibleItemIndex(st.parent, id) == -1 {
@@ -700,21 +758,23 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +			hook(id)
 +		}
 +		// an owner-drawn item has no text: its title is not needed
-+		if err := wt.addOrUpdateMenuItem(id, st.parent, "", st.disabled, st.checked); err != nil {
-+			log.Printf("systray error: menu item %d could not be put back: %s", id, err)
-+		}
++		putBack(id, "menu item", func() error { return wt.addOrUpdateMenuItem(id, st.parent, "", st.disabled, st.checked) })
 +	}
 +	for _, id := range seps {
 +		if wt.getVisibleItemIndex(0, id) == -1 {
 +			continue
 +		}
 +		if err := wt.hideMenuItem(id, 0); err == nil {
-+			if err := wt.addSeparatorMenuItem(id, 0); err != nil {
-+				log.Printf("systray error: separator %d could not be put back: %s", id, err)
-+			}
++			putBack(id, "separator", func() error {
++				err := wt.addSeparatorMenuItem(id, 0)
++				if err != nil {
++					wt.delFromVisibleItems(0, id) // upstream keeps a separator whose insert failed
++				}
++				return err
++			})
 +		}
 +	}
-+	return done
++	return menu, done
 +}
 +
 +// setMenuBackground fills the menu around its items with rgb (on: true)
@@ -2172,14 +2232,18 @@ diff -aruN a/systray_windows.go b/systray_windows.go
  
  	mi.Size = uint32(unsafe.Sizeof(mi))
  
-@@ -743,6 +832,7 @@
+@@ -743,9 +832,10 @@
  		return err
  	}
  	pSetForegroundWindow.Call(uintptr(t.window))
-+	shown := prepareOwnerDrawnMenu(t.menus[0]) // patched (see PATCHED.md)
++	menu, shown := prepareOwnerDrawnMenu() // patched (see PATCHED.md): the menu read under menuMu
  
  	res, _, err = pTrackPopupMenu.Call(
- 		uintptr(t.menus[0]),
+-		uintptr(t.menus[0]),
++		uintptr(menu),
+ 		TPM_BOTTOMALIGN|TPM_LEFTALIGN,
+ 		uintptr(p.X),
+ 		uintptr(p.Y),
 @@ -753,6 +843,7 @@
  		uintptr(t.window),
  		0,
@@ -2238,7 +2302,22 @@ diff -aruN a/systray_windows.go b/systray_windows.go
  		t.muLoadedImages.Unlock()
  	}
  	return h, nil
-@@ -1076,7 +1160,9 @@
+@@ -1055,11 +1139,13 @@
+ 	if err != nil {
+ 		return fmt.Errorf("unable to convert icon to bitmap: %s", err)
+ 	}
++	menuMu.Lock() // patched (see PATCHED.md): one change of the menu at a time
++	defer menuMu.Unlock()
+ 	wt.muMenuItemIcons.Lock()
+ 	wt.menuItemIcons[uint32(item.id)] = h
+ 	wt.muMenuItemIcons.Unlock()
+ 
+-	err = wt.addOrUpdateMenuItem(uint32(item.id), item.parentId(), item.title, item.disabled, item.checked)
++	err = addOrUpdateMenuItemLocked(item) // patched (see PATCHED.md)
+ 	if err != nil {
+ 		return fmt.Errorf("unable to addOrUpdateMenuItem: %s", err)
+ 	}
+@@ -1076,7 +1162,9 @@
  }
  
  func addOrUpdateMenuItem(item *MenuItem) {
@@ -2249,7 +2328,7 @@ diff -aruN a/systray_windows.go b/systray_windows.go
  	if err != nil {
  		log.Printf("systray error: unable to addOrUpdateMenuItem: %s\n", err)
  		return
-@@ -1092,6 +1178,8 @@
+@@ -1092,6 +1180,8 @@
  }
  
  func addSeparator(id uint32, parent uint32) {
@@ -2258,7 +2337,7 @@ diff -aruN a/systray_windows.go b/systray_windows.go
  	err := wt.addSeparatorMenuItem(id, parent)
  	if err != nil {
  		log.Printf("systray error: unable to addSeparator: %s\n", err)
-@@ -1100,6 +1188,8 @@
+@@ -1100,6 +1190,8 @@
  }
  
  func hideMenuItem(item *MenuItem) {
@@ -2267,7 +2346,7 @@ diff -aruN a/systray_windows.go b/systray_windows.go
  	err := wt.hideMenuItem(uint32(item.id), item.parentId())
  	if err != nil {
  		log.Printf("systray error: unable to hideMenuItem: %s\n", err)
-@@ -1108,6 +1198,8 @@
+@@ -1108,6 +1200,8 @@
  }
  
  func removeMenuItem(item *MenuItem) {
@@ -2276,7 +2355,7 @@ diff -aruN a/systray_windows.go b/systray_windows.go
  	err := wt.removeMenuItem(uint32(item.id), item.parentId())
  	if err != nil {
  		log.Printf("systray error: unable to removeMenuItem: %s\n", err)
-@@ -1120,11 +1212,14 @@
+@@ -1120,11 +1214,14 @@
  }
  
  func resetMenu() {
