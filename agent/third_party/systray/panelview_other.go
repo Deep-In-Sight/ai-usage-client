@@ -19,3 +19,9 @@ func (item *MenuItem) SetPanelView(bool) {}
 func RenderPanelViewPNG(uint32, int, bool, int) ([]byte, error) {
 	return nil, errors.New("systray: menu item views are macOS'")
 }
+
+// RaiseInNextPanelViewText does nothing here (a test hook of macOS').
+func RaiseInNextPanelViewText() {}
+
+// ActivateOnMenuOpen does nothing here (a CI test switch of macOS').
+func ActivateOnMenuOpen(bool) {}

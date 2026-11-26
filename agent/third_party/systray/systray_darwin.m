@@ -3,7 +3,8 @@
 //Modified from fyne.io/systray v1.12.2: menu items can have a view that the
 //program draws (panelview_darwin.m): the menu delegate tells the view code
 //when the menu opens, an item is highlighted, an action comes and the menu
-//closes, and set_menu_item_panel gives an item its view. See PATCHED.md.
+//closes, show_menu tells it before the menu shows, and set_menu_item_panel
+//gives an item its view. See PATCHED.md.
 
 #import <Cocoa/Cocoa.h>
 #include "systray.h"
@@ -15,6 +16,7 @@ void aiu_panel_menu_will_open(NSMenu *menu);
 void aiu_panel_will_highlight(NSMenuItem *item);
 void aiu_panel_note_action(void);
 void aiu_panel_menu_did_close(NSMenu *menu);
+void aiu_panel_menu_showing(void);
 
 #if __MAC_OS_X_VERSION_MIN_REQUIRED < 101400
 
@@ -321,6 +323,7 @@ NSMenuItem *find_menu_item(NSMenu *ourMenu, NSNumber *menuId) {
   // Attach the menu and synthesize a click so AppKit positions it natively,
   // then detach it in menuDidClose: so the next click reaches the button
   // action (and the Go tap handlers) again.
+  aiu_panel_menu_showing();
   self->statusItem.menu = self->menu;
   [self->statusItem.button performClick:nil];
 }

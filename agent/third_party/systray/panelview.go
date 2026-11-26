@@ -51,4 +51,8 @@ type PanelViewer interface {
 	// again); MenuClosed: it closed.
 	MenuOpening()
 	MenuClosed()
+	// ViewFailed: an Objective-C exception was caught while an item was
+	// measured or drawn (what: its name and reason); the program should
+	// stop drawing and show a text menu.
+	ViewFailed(what string)
 }

@@ -187,17 +187,22 @@ upstream file only calls them:
   view's scale), `ViewColours` (the system's label, secondary label,
   selection and selected text colours for the view's appearance, in
   sRGB) and `PanelViewer` (`ViewSize`, `DrawView`, `ViewLabel`,
-  `MenuOpening`, `MenuClosed`), what the program gives to decide what
-  each view shows and where.
+  `MenuOpening`, `MenuClosed`, `ViewFailed`), what the program gives to
+  decide what each view shows and where.
 - `panelview_darwin.go` (cgo): `SetPanelViewer(v)`,
   `(*MenuItem).SetPanelView(on)` (the item gets a view, sized again and
   redrawn, unless the menu is open: an open menu keeps what it opened
-  with; off: a text item again) and, for tests only,
-  `RenderPanelViewPNG(id, width, dark, scale)` (one item's view drawn
-  alone into a PNG in the light or dark appearance over the window
-  background colour; on the main thread); the exported callbacks the view
-  calls on the main thread, each of which logs a panic of the viewer
-  instead of letting it end the program.
+  with; off: a text item again, at the menu's close if it is open),
+  `ActivateOnMenuOpen(on)` (for a CI build's test switch only: before the
+  menu shows, the app makes itself an accessory app and the active app,
+  `setActivationPolicy:`, `activateIgnoringOtherApps:` and, from macOS
+  14, `activate`) and, for tests only, `RenderPanelViewPNG(id, width,
+  dark, scale)` (one item's view drawn alone into a PNG in the light or
+  dark appearance over the window background colour; on the main thread)
+  and `RaiseInNextPanelViewText()` (the next text a view draws raises an
+  Objective-C exception); the exported callbacks the view calls on the
+  main thread, each of which logs a panic of the viewer instead of
+  letting it end the program.
 - `panelview_darwin.m` and `panelview.h`: the view `AIUPanelView`
   (flipped; as wide as the menu, `NSViewWidthSizable`; draws with the
   viewer's steps, its colours resolved for its effective appearance and
@@ -208,28 +213,40 @@ upstream file only calls them:
   sRGB `CGImage`; a click (`mouseUp:` on an enabled item) cancels the
   menu's tracking and selects the item as `menuHandler:` does; VoiceOver:
   the view is an accessibility element with the menu item role and the
-  viewer's label. Return and keypad Enter (key codes 36 and 76) on a
-  highlighted view item: the menu does not send the item's action itself
-  (measured on CI, stages 0 and 3 of the drawn panel). The menu of an app
-  that is not active does nothing with Return and hands the highlighted
-  view the keys it does not use, so the view accepts first responder and
-  takes them in `keyDown:` (the arrows and Escape stay the menu's). The
-  menu of an active app closes on Return without the action, so the
-  delegate also remembers the last highlighted item and, when the menu
-  closes with no action taken and the closing event is that key (key-down
-  or key-up), performs the remembered item's action if it is an enabled
-  view item. Escape and every other way of closing do nothing. Only
-  documented AppKit calls.
+  viewer's label, and its press (`accessibilityPerformPress`) on an
+  enabled item is a click. Return and keypad Enter (key codes 36 and 76)
+  on a highlighted view item: the menu does not send the item's action
+  itself (measured on CI, stages 0 and 3 of the drawn panel). The menu of
+  an app that is not active does nothing with Return and hands a view the
+  keys it does not use, so the view accepts first responder and takes
+  them in `keyDown:` (the arrows and Escape stay the menu's), acting on
+  the menu's highlighted item (`highlightedItem`) when that is an enabled
+  view item, whichever view the key came to (Space does nothing, as on
+  the menu's own items: measured). On macOS 26 the view gets Return in an
+  active app's menu too (measured on CI with `ActivateOnMenuOpen`); an
+  active app's menu that closes on Return without the action (stage 0,
+  a view that did not take the key) is covered as well: the delegate
+  remembers the last highlighted item and, when the menu closes with no
+  action taken and the closing event is that key (key-down or key-up),
+  performs the remembered item's action if it is an enabled view item.
+  Escape and every other way of closing do nothing. An Objective-C exception while a
+  view is measured or drawn is caught in the C functions the Go side
+  calls (it never unwinds through Go) and reported to the viewer's
+  `ViewFailed` once the call into Go has returned. Only documented AppKit
+  calls.
 - `panelview_other.go` (not macOS): the same functions doing nothing
   (`RenderPanelViewPNG` returns an error).
 - In `systray_darwin.m`: it includes `panelview.h`; `menuHandler:`
   notes that an action came; `menuWillOpen:` tells the view code first
   (the viewer's `MenuOpening`, then every view sized again);
   `menu:willHighlightItem:` (new) passes the item on; `menuDidClose:`
-  runs the Return fall-back above and tells the viewer (`MenuClosed`)
-  before upstream's detach; the new method `set_menu_item_panel:` and C
-  function `set_menu_item_panel(menuId, on)` give an item its view on
-  the main thread (`runInMainThread`, as every other menu change).
+  runs the Return fall-back above, takes away the views taken off while
+  the menu was open and tells the viewer (`MenuClosed`) before upstream's
+  detach; `show_menu` tells the view code before it attaches and opens
+  the menu (the CI test switch above); the new method
+  `set_menu_item_panel:` and C function `set_menu_item_panel(menuId, on)`
+  give an item its view on the main thread (`runInMainThread`, as every
+  other menu change).
 - The header comment says the file was modified.
 
 ### Everything else

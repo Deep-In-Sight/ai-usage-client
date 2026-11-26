@@ -20,6 +20,7 @@ func (g viewerGlue) ViewSize(id uint32, c systray.ViewCanvas) (int, int) { retur
 func (g viewerGlue) ViewLabel(id uint32) string                          { return g.d.ViewLabel(id) }
 func (g viewerGlue) MenuOpening()                                        { g.d.MenuOpening() }
 func (g viewerGlue) MenuClosed()                                         { g.d.MenuClosed() }
+func (g viewerGlue) ViewFailed(what string)                              { g.d.ViewFailed(what) }
 
 func (g viewerGlue) DrawView(id uint32, c systray.ViewCanvas, w, h, scale int, cols systray.ViewColours, highlighted bool) {
 	g.d.DrawView(id, c, w, h, scale, viewColours(cols), highlighted)

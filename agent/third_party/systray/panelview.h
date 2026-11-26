@@ -17,6 +17,9 @@ extern bool systray_panel_view_draw(int menu_id, int width, int height, int scal
 extern char *systray_panel_view_label(int menu_id);
 extern void systray_panel_menu_opening(void);
 extern void systray_panel_menu_closed(void);
+// an Objective-C exception was caught while measuring or drawing (what:
+// its name and reason)
+extern void systray_panel_view_failed(char *what);
 
 // In systray_darwin.m: gives the item a view (or takes it away), on the
 // main thread.
@@ -34,3 +37,9 @@ void aiu_pixels(int x, int y, int w, int h, const uint8_t *bgra, uint8_t opacity
 // least width points wide, in the light or dark appearance, over the
 // window background colour; for tests, on the main thread.
 void *aiu_render_png(int menuId, int width, bool dark, int scale, int *length);
+// Tests: the next text drawn raises an Objective-C exception (caught and
+// reported as one in the drawing would be).
+void aiu_test_raise_once(void);
+// CI builds' test switch: the app makes itself active before its menu
+// shows.
+void aiu_set_activate(bool on);

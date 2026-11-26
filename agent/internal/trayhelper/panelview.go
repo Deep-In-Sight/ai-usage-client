@@ -96,17 +96,27 @@ func (d *viewDrawer) Failed() bool {
 // recovered ends a panic of what (deferred in each method the tray
 // library calls): logged once, and nothing is drawn from then on.
 func (d *viewDrawer) recovered(what string) {
-	r := recover()
-	if r == nil {
-		return
+	if r := recover(); r != nil {
+		d.fail(what, r)
 	}
+}
+
+// fail stops the drawing for good, logged once.
+func (d *viewDrawer) fail(what string, why any) {
 	d.mu.Lock()
 	first := !d.failed
 	d.failed = true
 	d.mu.Unlock()
 	if first {
-		log.Printf("panel: %s failed (%v); the tray menu is text from now on", what, r)
+		log.Printf("panel: %s failed (%v); the tray menu is text from now on", what, why)
 	}
+}
+
+// ViewFailed: the tray library caught an Objective-C exception while a
+// view was measured or drawn (review A3-M10); the drawing stops as after
+// a panic.
+func (d *viewDrawer) ViewFailed(what string) {
+	d.fail("drawing (Objective-C)", what)
 }
 
 // item is what id draws now: what it held when the open menu opened, else

@@ -1,7 +1,7 @@
 diff -aruN a/PATCHED.md b/PATCHED.md
 --- a/PATCHED.md
 +++ b/PATCHED.md
-@@ -0,0 +1,240 @@
+@@ -0,0 +1,257 @@
 +# fyne.io/systray, patched copy
 +
 +This folder is a copy of [fyne.io/systray](https://github.com/fyne-io/systray)
@@ -191,17 +191,22 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 +  view's scale), `ViewColours` (the system's label, secondary label,
 +  selection and selected text colours for the view's appearance, in
 +  sRGB) and `PanelViewer` (`ViewSize`, `DrawView`, `ViewLabel`,
-+  `MenuOpening`, `MenuClosed`), what the program gives to decide what
-+  each view shows and where.
++  `MenuOpening`, `MenuClosed`, `ViewFailed`), what the program gives to
++  decide what each view shows and where.
 +- `panelview_darwin.go` (cgo): `SetPanelViewer(v)`,
 +  `(*MenuItem).SetPanelView(on)` (the item gets a view, sized again and
 +  redrawn, unless the menu is open: an open menu keeps what it opened
-+  with; off: a text item again) and, for tests only,
-+  `RenderPanelViewPNG(id, width, dark, scale)` (one item's view drawn
-+  alone into a PNG in the light or dark appearance over the window
-+  background colour; on the main thread); the exported callbacks the view
-+  calls on the main thread, each of which logs a panic of the viewer
-+  instead of letting it end the program.
++  with; off: a text item again, at the menu's close if it is open),
++  `ActivateOnMenuOpen(on)` (for a CI build's test switch only: before the
++  menu shows, the app makes itself an accessory app and the active app,
++  `setActivationPolicy:`, `activateIgnoringOtherApps:` and, from macOS
++  14, `activate`) and, for tests only, `RenderPanelViewPNG(id, width,
++  dark, scale)` (one item's view drawn alone into a PNG in the light or
++  dark appearance over the window background colour; on the main thread)
++  and `RaiseInNextPanelViewText()` (the next text a view draws raises an
++  Objective-C exception); the exported callbacks the view calls on the
++  main thread, each of which logs a panic of the viewer instead of
++  letting it end the program.
 +- `panelview_darwin.m` and `panelview.h`: the view `AIUPanelView`
 +  (flipped; as wide as the menu, `NSViewWidthSizable`; draws with the
 +  viewer's steps, its colours resolved for its effective appearance and
@@ -212,28 +217,40 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 +  sRGB `CGImage`; a click (`mouseUp:` on an enabled item) cancels the
 +  menu's tracking and selects the item as `menuHandler:` does; VoiceOver:
 +  the view is an accessibility element with the menu item role and the
-+  viewer's label. Return and keypad Enter (key codes 36 and 76) on a
-+  highlighted view item: the menu does not send the item's action itself
-+  (measured on CI, stages 0 and 3 of the drawn panel). The menu of an app
-+  that is not active does nothing with Return and hands the highlighted
-+  view the keys it does not use, so the view accepts first responder and
-+  takes them in `keyDown:` (the arrows and Escape stay the menu's). The
-+  menu of an active app closes on Return without the action, so the
-+  delegate also remembers the last highlighted item and, when the menu
-+  closes with no action taken and the closing event is that key (key-down
-+  or key-up), performs the remembered item's action if it is an enabled
-+  view item. Escape and every other way of closing do nothing. Only
-+  documented AppKit calls.
++  viewer's label, and its press (`accessibilityPerformPress`) on an
++  enabled item is a click. Return and keypad Enter (key codes 36 and 76)
++  on a highlighted view item: the menu does not send the item's action
++  itself (measured on CI, stages 0 and 3 of the drawn panel). The menu of
++  an app that is not active does nothing with Return and hands a view the
++  keys it does not use, so the view accepts first responder and takes
++  them in `keyDown:` (the arrows and Escape stay the menu's), acting on
++  the menu's highlighted item (`highlightedItem`) when that is an enabled
++  view item, whichever view the key came to (Space does nothing, as on
++  the menu's own items: measured). On macOS 26 the view gets Return in an
++  active app's menu too (measured on CI with `ActivateOnMenuOpen`); an
++  active app's menu that closes on Return without the action (stage 0,
++  a view that did not take the key) is covered as well: the delegate
++  remembers the last highlighted item and, when the menu closes with no
++  action taken and the closing event is that key (key-down or key-up),
++  performs the remembered item's action if it is an enabled view item.
++  Escape and every other way of closing do nothing. An Objective-C exception while a
++  view is measured or drawn is caught in the C functions the Go side
++  calls (it never unwinds through Go) and reported to the viewer's
++  `ViewFailed` once the call into Go has returned. Only documented AppKit
++  calls.
 +- `panelview_other.go` (not macOS): the same functions doing nothing
 +  (`RenderPanelViewPNG` returns an error).
 +- In `systray_darwin.m`: it includes `panelview.h`; `menuHandler:`
 +  notes that an action came; `menuWillOpen:` tells the view code first
 +  (the viewer's `MenuOpening`, then every view sized again);
 +  `menu:willHighlightItem:` (new) passes the item on; `menuDidClose:`
-+  runs the Return fall-back above and tells the viewer (`MenuClosed`)
-+  before upstream's detach; the new method `set_menu_item_panel:` and C
-+  function `set_menu_item_panel(menuId, on)` give an item its view on
-+  the main thread (`runInMainThread`, as every other menu change).
++  runs the Return fall-back above, takes away the views taken off while
++  the menu was open and tells the viewer (`MenuClosed`) before upstream's
++  detach; `show_menu` tells the view code before it attaches and opens
++  the menu (the CI test switch above); the new method
++  `set_menu_item_panel:` and C function `set_menu_item_panel(menuId, on)`
++  give an item its view on the main thread (`runInMainThread`, as every
++  other menu change).
 +- The header comment says the file was modified.
 +
 +### Everything else
@@ -817,7 +834,7 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 diff -aruN a/panelview.go b/panelview.go
 --- a/panelview.go
 +++ b/panelview.go
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,58 @@
 +// Not upstream code: this file was added to the copy of fyne.io/systray
 +// v1.12.2 in agent/third_party/systray of the AI Usage client (see
 +// PATCHED.md). It is under the AI Usage client's MIT licence (LICENSE at
@@ -871,11 +888,15 @@ diff -aruN a/panelview.go b/panelview.go
 +	// again); MenuClosed: it closed.
 +	MenuOpening()
 +	MenuClosed()
++	// ViewFailed: an Objective-C exception was caught while an item was
++	// measured or drawn (what: its name and reason); the program should
++	// stop drawing and show a text menu.
++	ViewFailed(what string)
 +}
 diff -aruN a/panelview.h b/panelview.h
 --- a/panelview.h
 +++ b/panelview.h
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,45 @@
 +// Not upstream code: this file was added to the copy of fyne.io/systray
 +// v1.12.2 in agent/third_party/systray of the AI Usage client (see
 +// PATCHED.md). It is under the AI Usage client's MIT licence (LICENSE at
@@ -895,6 +916,9 @@ diff -aruN a/panelview.h b/panelview.h
 +extern char *systray_panel_view_label(int menu_id);
 +extern void systray_panel_menu_opening(void);
 +extern void systray_panel_menu_closed(void);
++// an Objective-C exception was caught while measuring or drawing (what:
++// its name and reason)
++extern void systray_panel_view_failed(char *what);
 +
 +// In systray_darwin.m: gives the item a view (or takes it away), on the
 +// main thread.
@@ -912,10 +936,16 @@ diff -aruN a/panelview.h b/panelview.h
 +// least width points wide, in the light or dark appearance, over the
 +// window background colour; for tests, on the main thread.
 +void *aiu_render_png(int menuId, int width, bool dark, int scale, int *length);
++// Tests: the next text drawn raises an Objective-C exception (caught and
++// reported as one in the drawing would be).
++void aiu_test_raise_once(void);
++// CI builds' test switch: the app makes itself active before its menu
++// shows.
++void aiu_set_activate(bool on);
 diff -aruN a/panelview_darwin.go b/panelview_darwin.go
 --- a/panelview_darwin.go
 +++ b/panelview_darwin.go
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,178 @@
 +//go:build !ios
 +
 +// Not upstream code: this file was added to the copy of fyne.io/systray
@@ -982,6 +1012,17 @@ diff -aruN a/panelview_darwin.go b/panelview_darwin.go
 +	defer C.free(p)
 +	return C.GoBytes(p, n), nil
 +}
++
++// RaiseInNextPanelViewText makes the next text a view draws raise an
++// Objective-C exception, which is caught and reported to the
++// PanelViewer's ViewFailed as one in the drawing would be. For tests.
++func RaiseInNextPanelViewText() { C.aiu_test_raise_once() }
++
++// ActivateOnMenuOpen: before its menu shows, the program makes itself an
++// accessory app and the active app (macOS gives an active app's menu the
++// keys differently). Only for a CI build's test switch: a released
++// program never calls it.
++func ActivateOnMenuOpen(on bool) { C.aiu_set_activate(C.bool(on)) }
 +
 +// viewCanvas measures with the menu's fonts and draws into the current
 +// graphics context, at scale pixels per point (the main thread only).
@@ -1075,10 +1116,18 @@ diff -aruN a/panelview_darwin.go b/panelview_darwin.go
 +		v.MenuClosed()
 +	}
 +}
++
++//export systray_panel_view_failed
++func systray_panel_view_failed(cWhat *C.char) {
++	defer survive("ViewFailed")
++	if v := currentViewer(); v != nil {
++		v.ViewFailed(C.GoString(cWhat))
++	}
++}
 diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 --- a/panelview_darwin.m
 +++ b/panelview_darwin.m
-@@ -0,0 +1,375 @@
+@@ -0,0 +1,520 @@
 +//go:build !ios
 +
 +// Not upstream code: this file was added to the copy of fyne.io/systray
@@ -1091,12 +1140,18 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +// (panelview_darwin.go and the PanelViewer); this file measures text in
 +// the menu's fonts, resolves the system's colours for the view's
 +// appearance and carries the Go side's drawing steps out. A view item
-+// sends no action by itself: a click is taken in mouseUp:, Return on a
-+// highlighted view item in keyDown: (the menu of an app that is not
-+// active hands the highlighted view the keys it does not use itself, and
-+// does nothing with Return: measured on CI, stage 3), and Return that
-+// closes the menu without the item's action (an active app's menu, stage
-+// 0) when the menu closes.
++// sends no action by itself: a click is taken in mouseUp:, a VoiceOver
++// press in accessibilityPerformPress, Return on the menu's highlighted
++// view item in keyDown: (the menu hands a view the keys it does not use
++// itself, and does nothing with Return: measured on CI in the menu of an
++// app that is not active, stage 3, and of the active app, the stage 3 fix
++// round), and Return that closes the menu without the item's action (an
++// active app's menu whose view did not get the key, stage 0) when the
++// menu closes. An
++// Objective-C exception while measuring or drawing is caught where Go
++// called in (it must not unwind through Go's frames) and reported to the
++// Go side once the call has returned; the Go side then stops drawing and
++// the program shows its text menu.
 +
 +#import <Cocoa/Cocoa.h>
 +#include "systray.h"
@@ -1106,6 +1161,44 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +static BOOL aiuMenuOpen = NO;
 +static BOOL aiuActed = NO;                 // an item's action came while it was open
 +static NSMenuItem *aiuLastHighlighted = nil; // the last item highlighted (nil ones are skipped)
++static NSMutableArray<NSMenuItem *> *aiuDetach = nil; // view items that become text items at the close
++
++static NSString *aiuException = nil; // caught while measuring or drawing, not yet reported
++static BOOL aiuRaiseOnce = NO;       // tests: the next text drawn raises an exception
++static BOOL aiuActivate = NO;        // CI builds' test switch: the app makes itself active
++
++static void aiu_caught(NSException *e) {
++  if (aiuException == nil) {
++    aiuException = [NSString stringWithFormat:@"%@: %@", e.name, e.reason];
++  }
++}
++
++// tells the Go side of an exception caught since the last report (called
++// after the call into Go that measured or drew has returned)
++static void aiu_report(void) {
++  if (aiuException == nil) {
++    return;
++  }
++  char *s = strdup(aiuException.UTF8String ? aiuException.UTF8String : "an exception");
++  aiuException = nil;
++  systray_panel_view_failed(s);
++  free(s);
++}
++
++void aiu_test_raise_once(void) {
++  aiuRaiseOnce = YES;
++}
++
++void aiu_set_activate(bool on) {
++  aiuActivate = on;
++}
++
++// Return and keypad Enter choose the menu's highlighted item. Space does
++// not: the menu's own items do nothing with Space in this menu either
++// (measured on CI, macOS 26: the menu stays open).
++static BOOL aiu_choose_key(unsigned short code) {
++  return code == 36 || code == 76;
++}
 +
 +static NSFont *aiu_font(int font) {
 +  NSFont *menu = [NSFont menuFontOfSize:0];
@@ -1129,16 +1222,28 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +}
 +
 +int aiu_text_width(int font, const char *s, int scale) {
++  int out = 0;
 +  @autoreleasepool {
-+    NSSize sz = [aiu_string(s) sizeWithAttributes:@{NSFontAttributeName : aiu_font(font)}];
-+    return (int)ceil(sz.width * (scale < 1 ? 1 : scale));
++    @try {
++      NSSize sz = [aiu_string(s) sizeWithAttributes:@{NSFontAttributeName : aiu_font(font)}];
++      out = (int)ceil(sz.width * (scale < 1 ? 1 : scale));
++    } @catch (NSException *e) {
++      aiu_caught(e);
++    }
 +  }
++  return out;
 +}
 +
 +int aiu_line_height(int font, int scale) {
++  int out = 0;
 +  @autoreleasepool {
-+    return (int)ceil(aiu_line(aiu_font(font)) * (scale < 1 ? 1 : scale));
++    @try {
++      out = (int)ceil(aiu_line(aiu_font(font)) * (scale < 1 ? 1 : scale));
++    } @catch (NSException *e) {
++      aiu_caught(e);
++    }
 +  }
++  return out;
 +}
 +
 +static NSRect aiu_rect(int x, int y, int w, int h, int scale) {
@@ -1154,37 +1259,48 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +  if (a == 0 || w <= 0 || h <= 0) {
 +    return; // nothing over the menu's own background
 +  }
-+  NSRect rc = aiu_rect(x, y, w, h, scale);
-+  [aiu_colour(r, g, b, a) setFill];
-+  if (radius > 0) {
-+    CGFloat rad = radius / (CGFloat)(scale < 1 ? 1 : scale);
-+    [[NSBezierPath bezierPathWithRoundedRect:rc xRadius:rad yRadius:rad] fill];
-+  } else {
-+    [NSBezierPath fillRect:rc];
++  @try {
++    NSRect rc = aiu_rect(x, y, w, h, scale);
++    [aiu_colour(r, g, b, a) setFill];
++    if (radius > 0) {
++      CGFloat rad = radius / (CGFloat)(scale < 1 ? 1 : scale);
++      [[NSBezierPath bezierPathWithRoundedRect:rc xRadius:rad yRadius:rad] fill];
++    } else {
++      [NSBezierPath fillRect:rc];
++    }
++  } @catch (NSException *e) {
++    aiu_caught(e);
 +  }
 +}
 +
 +void aiu_text(int x, int y, int w, int h, const char *s, int font, uint8_t r, uint8_t g, uint8_t b, uint8_t a, bool right, bool ellipsis, int scale) {
 +  @autoreleasepool {
-+    NSFont *f = aiu_font(font);
-+    NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
-+    ps.alignment = right ? NSTextAlignmentRight : NSTextAlignmentLeft;
-+    ps.lineBreakMode = ellipsis ? NSLineBreakByTruncatingTail : NSLineBreakByClipping;
-+    NSDictionary *attrs = @{NSFontAttributeName : f, NSForegroundColorAttributeName : aiu_colour(r, g, b, a), NSParagraphStyleAttributeName : ps};
-+    NSRect box = aiu_rect(x, y, w, h, scale);
-+    CGFloat line = aiu_line(f);
-+    // vertically centred in its box; the rectangle one line high (a line
-+    // that does not fit its rectangle would not be drawn at all)
-+    NSRect rc = NSMakeRect(box.origin.x, box.origin.y + (box.size.height - line) / 2, box.size.width, ceil(line) + 1);
-+    [aiu_string(s) drawWithRect:rc options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingTruncatesLastVisibleLine attributes:attrs context:nil];
++    @try {
++      if (aiuRaiseOnce) {
++        aiuRaiseOnce = NO;
++        [NSException raise:@"AIUTestException" format:@"raised by a test"];
++      }
++      NSFont *f = aiu_font(font);
++      NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
++      ps.alignment = right ? NSTextAlignmentRight : NSTextAlignmentLeft;
++      ps.lineBreakMode = ellipsis ? NSLineBreakByTruncatingTail : NSLineBreakByClipping;
++      NSDictionary *attrs = @{NSFontAttributeName : f, NSForegroundColorAttributeName : aiu_colour(r, g, b, a), NSParagraphStyleAttributeName : ps};
++      NSRect box = aiu_rect(x, y, w, h, scale);
++      CGFloat line = aiu_line(f);
++      // vertically centred in its box; the rectangle one line high (a line
++      // that does not fit its rectangle would not be drawn at all)
++      NSRect rc = NSMakeRect(box.origin.x, box.origin.y + (box.size.height - line) / 2, box.size.width, ceil(line) + 1);
++      [aiu_string(s) drawWithRect:rc options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingTruncatesLastVisibleLine attributes:attrs context:nil];
++    } @catch (NSException *e) {
++      aiu_caught(e);
++    }
 +  }
 +}
 +
-+void aiu_pixels(int x, int y, int w, int h, const uint8_t *bgra, uint8_t opacity, int scale) {
-+  if (w <= 0 || h <= 0 || bgra == NULL) {
-+    return;
-+  }
-+  @autoreleasepool {
++// a w×h picture of premultiplied bytes at x, y (an exception may leave a
++// Core Graphics object unreleased: the drawing stops for good then)
++static void aiu_pixels_now(int x, int y, int w, int h, const uint8_t *bgra, uint8_t opacity, int scale) {
++  {
 +    CFDataRef data = CFDataCreate(NULL, bgra, (CFIndex)w * h * 4);
 +    CGDataProviderRef provider = CGDataProviderCreateWithCFData(data);
 +    CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
@@ -1203,6 +1319,19 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +    CGImageRelease(img);
 +    [image drawInRect:rc fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:opacity / 255.0 respectFlipped:YES
 +                hints:@{NSImageHintInterpolation : @(NSImageInterpolationNone)}];
++  }
++}
++
++void aiu_pixels(int x, int y, int w, int h, const uint8_t *bgra, uint8_t opacity, int scale) {
++  if (w <= 0 || h <= 0 || bgra == NULL) {
++    return;
++  }
++  @autoreleasepool {
++    @try {
++      aiu_pixels_now(x, y, w, h, bgra, opacity, scale);
++    } @catch (NSException *e) {
++      aiu_caught(e);
++    }
 +  }
 +}
 +
@@ -1243,15 +1372,24 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +  BOOL dark = [[ap bestMatchFromAppearancesWithNames:@[ NSAppearanceNameAqua, NSAppearanceNameDarkAqua ]] isEqualToString:NSAppearanceNameDarkAqua];
 +  uint8_t colours[16] = {0};
 +  uint8_t *c = colours; // a block cannot capture the array itself
-+  [ap performAsCurrentDrawingAppearance:^{
-+    aiu_bytes([NSColor labelColor], c);
-+    aiu_bytes([NSColor secondaryLabelColor], c + 4);
-+    aiu_bytes([NSColor selectedContentBackgroundColor], c + 8);
-+    aiu_bytes([NSColor selectedMenuItemTextColor], c + 12);
-+  }];
-+  int s = [self aiuScale];
-+  NSSize sz = self.bounds.size;
-+  systray_panel_view_draw(self.itemId, (int)ceil(sz.width * s), (int)ceil(sz.height * s), s, colours, dark, hl);
++  BOOL resolved = NO;
++  @try {
++    [ap performAsCurrentDrawingAppearance:^{
++      aiu_bytes([NSColor labelColor], c);
++      aiu_bytes([NSColor secondaryLabelColor], c + 4);
++      aiu_bytes([NSColor selectedContentBackgroundColor], c + 8);
++      aiu_bytes([NSColor selectedMenuItemTextColor], c + 12);
++    }];
++    resolved = YES;
++  } @catch (NSException *e) {
++    aiu_caught(e);
++  }
++  if (resolved) {
++    int s = [self aiuScale];
++    NSSize sz = self.bounds.size;
++    systray_panel_view_draw(self.itemId, (int)ceil(sz.width * s), (int)ceil(sz.height * s), s, colours, dark, hl);
++  }
++  aiu_report();
 +}
 +
 +// the item's action, as menuHandler: sends it: the menu closes first
@@ -1270,17 +1408,20 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +  [self aiuChoose:mi];
 +}
 +
-+// The menu gives the highlighted view the keys it does not handle itself
-+// once the view can take them (its arrows and Escape stay the menu's):
-+// Return or keypad Enter on an enabled, highlighted item is its action.
++// The menu gives a view the keys it does not handle itself once the view
++// can take them (its arrows and Escape stay the menu's). Return or keypad
++// Enter is the action of the menu's highlighted item when that is an
++// enabled view item, whichever view the key came to: the view that has
++// the keys need not be the highlighted one (after a second Down, Up from
++// one of the menu's own items, a row under the pointer).
 +- (BOOL)acceptsFirstResponder {
 +  return YES;
 +}
 +
 +- (void)keyDown:(NSEvent *)event {
-+  NSMenuItem *mi = [self enclosingMenuItem];
-+  if ((event.keyCode == 36 || event.keyCode == 76) && mi != nil && mi.isEnabled && mi.isHighlighted) {
-+    [self aiuChoose:mi];
++  NSMenuItem *h = [[self enclosingMenuItem] menu].highlightedItem;
++  if (aiu_choose_key(event.keyCode) && h != nil && h.isEnabled && [h.view isKindOfClass:[AIUPanelView class]]) {
++    [(AIUPanelView *)h.view aiuChoose:h];
 +    return;
 +  }
 +  [super keyDown:event];
@@ -1312,6 +1453,16 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +  return mi != nil && mi.isEnabled;
 +}
 +
++// VoiceOver's press on an enabled item (a row) is its action, as a click.
++- (BOOL)accessibilityPerformPress {
++  NSMenuItem *mi = [self enclosingMenuItem];
++  if (mi == nil || !mi.isEnabled) {
++    return NO;
++  }
++  [self aiuChoose:mi];
++  return YES;
++}
++
 +@end
 +
 +// the view's size from the Go side (unchanged when it has none)
@@ -1320,16 +1471,27 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +  if (systray_panel_view_size(v.itemId, &w, &h) && w > 0 && h > 0) {
 +    [v setFrameSize:NSMakeSize(w, h)];
 +  }
++  aiu_report();
 +  [v setNeedsDisplay:YES];
 +}
 +
 +// Called on the main thread by systray_darwin.m's set_menu_item_panel:.
++// While the menu is open it keeps what it opened with: an item's view is
++// sized again at the next open, and one taken away goes at the close.
 +void aiu_panel_attach(NSMenuItem *mi, int menuId, bool on) {
++  AIUPanelView *v = [mi.view isKindOfClass:[AIUPanelView class]] ? (AIUPanelView *)mi.view : nil;
 +  if (!on) {
++    if (v != nil && aiuMenuOpen) {
++      if (aiuDetach == nil) {
++        aiuDetach = [NSMutableArray array];
++      }
++      [aiuDetach addObject:mi];
++      return;
++    }
 +    mi.view = nil;
 +    return;
 +  }
-+  AIUPanelView *v = [mi.view isKindOfClass:[AIUPanelView class]] ? (AIUPanelView *)mi.view : nil;
++  [aiuDetach removeObjectIdenticalTo:mi];
 +  if (v != nil && aiuMenuOpen) {
 +    return; // the open menu keeps what it opened with
 +  }
@@ -1356,9 +1518,34 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +  }
 +}
 +
++// A nil item (nothing highlighted) is skipped on purpose: in an active
++// app's menu Return closes the menu without the item's action and the
++// event seen at the close is the key's key-up (stage 0, Z8); whether
++// AppKit takes the highlight away (a nil here) before that close is not
++// known, and recording it would lose the row Return was pressed on. The
++// cost: in that rare case Return pressed after the pointer left a hovered
++// row (nothing highlighted) chooses that row.
 +void aiu_panel_will_highlight(NSMenuItem *item) {
 +  if (item != nil) {
 +    aiuLastHighlighted = item;
++  }
++}
++
++// CI builds' test switch (the active app's menu, judged on CI): the app
++// makes itself an accessory app and the active one before its menu shows.
++void aiu_panel_menu_showing(void) {
++  if (!aiuActivate) {
++    return;
++  }
++  [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
++  // the older call first (it still takes the activation from the active
++  // app where the cooperative one is declined), then macOS 14's
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
++  [NSApp activateIgnoringOtherApps:YES];
++#pragma clang diagnostic pop
++  if (@available(macOS 14.0, *)) {
++    [NSApp activate];
 +  }
 +}
 +
@@ -1367,10 +1554,13 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +}
 +
 +// Return or Enter on a highlighted view item closes the menu without its
-+// action (stage 0, Z8): when no action came and the event that closed the
-+// menu is that key (its key-down or key-up), the item last highlighted,
-+// if it is an enabled view item, gets its action now. Escape and every
-+// other way of closing do nothing.
++// action when the view does not get the key (stage 0, Z8: an active app's
++// menu, a view that did not accept first responder; on macOS 26 the view
++// gets it in the active app's menu too, so this is a fall-back): when no
++// action came and the event that closed the menu is that key (its
++// key-down or key-up), the item last highlighted, if it is an enabled
++// view item, gets its action now. Escape and every other way of closing
++// do nothing.
 +void aiu_panel_menu_did_close(NSMenu *menu) {
 +  NSMenuItem *last = aiuLastHighlighted;
 +  BOOL acted = aiuActed;
@@ -1385,6 +1575,10 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +      [menu performActionForItemAtIndex:i];
 +    }
 +  }
++  for (NSMenuItem *mi in aiuDetach) {
++    mi.view = nil;
++  }
++  [aiuDetach removeAllObjects];
 +  systray_panel_menu_closed();
 +}
 +
@@ -1457,7 +1651,7 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 diff -aruN a/panelview_other.go b/panelview_other.go
 --- a/panelview_other.go
 +++ b/panelview_other.go
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,27 @@
 +//go:build !darwin
 +
 +// Not upstream code: this file was added to the copy of fyne.io/systray
@@ -1479,16 +1673,23 @@ diff -aruN a/panelview_other.go b/panelview_other.go
 +func RenderPanelViewPNG(uint32, int, bool, int) ([]byte, error) {
 +	return nil, errors.New("systray: menu item views are macOS'")
 +}
++
++// RaiseInNextPanelViewText does nothing here (a test hook of macOS').
++func RaiseInNextPanelViewText() {}
++
++// ActivateOnMenuOpen does nothing here (a CI test switch of macOS').
++func ActivateOnMenuOpen(bool) {}
 diff -aruN a/systray_darwin.m b/systray_darwin.m
 --- a/systray_darwin.m
 +++ b/systray_darwin.m
-@@ -1,7 +1,20 @@
+@@ -1,7 +1,22 @@
  //go:build !ios
  
 +//Modified from fyne.io/systray v1.12.2: menu items can have a view that the
 +//program draws (panelview_darwin.m): the menu delegate tells the view code
 +//when the menu opens, an item is highlighted, an action comes and the menu
-+//closes, and set_menu_item_panel gives an item its view. See PATCHED.md.
++//closes, show_menu tells it before the menu shows, and set_menu_item_panel
++//gives an item its view. See PATCHED.md.
 +
  #import <Cocoa/Cocoa.h>
  #include "systray.h"
@@ -1500,10 +1701,11 @@ diff -aruN a/systray_darwin.m b/systray_darwin.m
 +void aiu_panel_will_highlight(NSMenuItem *item);
 +void aiu_panel_note_action(void);
 +void aiu_panel_menu_did_close(NSMenu *menu);
++void aiu_panel_menu_showing(void);
  
  #if __MAC_OS_X_VERSION_MIN_REQUIRED < 101400
  
-@@ -191,13 +204,29 @@
+@@ -191,13 +206,29 @@
  - (IBAction)menuHandler:(id)sender
  {
    NSNumber* menuId = [sender representedObject];
@@ -1533,7 +1735,13 @@ diff -aruN a/systray_darwin.m b/systray_darwin.m
  - (void)add_or_update_menu_item:(MenuItem *)item {
    NSMenu *theMenu = self->menu;
    NSMenuItem *parentItem;
-@@ -297,6 +326,7 @@
+@@ -292,11 +323,13 @@
+   // Attach the menu and synthesize a click so AppKit positions it natively,
+   // then detach it in menuDidClose: so the next click reaches the button
+   // action (and the Go tap handlers) again.
++  aiu_panel_menu_showing();
+   self->statusItem.menu = self->menu;
+   [self->statusItem.button performClick:nil];
  }
  
  - (void)menuDidClose:(NSMenu *)menu {
@@ -1541,7 +1749,7 @@ diff -aruN a/systray_darwin.m b/systray_darwin.m
    // Defer the detach so we don't pull the menu out from under AppKit
    // while it is still tearing the menu down.
    dispatch_async(dispatch_get_main_queue(), ^{
-@@ -460,6 +490,12 @@
+@@ -460,6 +493,12 @@
    runInMainThread(@selector(remove_menu_item:), (id)mId);
  }
  

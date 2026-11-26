@@ -65,6 +65,17 @@ func RenderPanelViewPNG(itemID uint32, width int, dark bool, scale int) ([]byte,
 	return C.GoBytes(p, n), nil
 }
 
+// RaiseInNextPanelViewText makes the next text a view draws raise an
+// Objective-C exception, which is caught and reported to the
+// PanelViewer's ViewFailed as one in the drawing would be. For tests.
+func RaiseInNextPanelViewText() { C.aiu_test_raise_once() }
+
+// ActivateOnMenuOpen: before its menu shows, the program makes itself an
+// accessory app and the active app (macOS gives an active app's menu the
+// keys differently). Only for a CI build's test switch: a released
+// program never calls it.
+func ActivateOnMenuOpen(on bool) { C.aiu_set_activate(C.bool(on)) }
+
 // viewCanvas measures with the menu's fonts and draws into the current
 // graphics context, at scale pixels per point (the main thread only).
 type viewCanvas struct{ scale int }
@@ -155,5 +166,13 @@ func systray_panel_menu_closed() {
 	defer survive("MenuClosed")
 	if v := currentViewer(); v != nil {
 		v.MenuClosed()
+	}
+}
+
+//export systray_panel_view_failed
+func systray_panel_view_failed(cWhat *C.char) {
+	defer survive("ViewFailed")
+	if v := currentViewer(); v != nil {
+		v.ViewFailed(C.GoString(cWhat))
 	}
 }
