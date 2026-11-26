@@ -746,6 +746,31 @@ func TestEveryTestSwitchIsListed(t *testing.T) {
 	}
 }
 
+// Review B3-I2: the tray helper's test switch (AI_USAGE_TEST_ACTIVE_MENU)
+// makes a CI build's helper the active app at its menu's open; any other
+// build ignores it.
+func TestActiveMenuSwitchOnlyInACIBuild(t *testing.T) {
+	old := activateOnMenuOpen
+	t.Cleanup(func() { activateOnMenuOpen = old })
+	set := Env{Getenv: func(k string) string {
+		if k == testActiveMenuEnv {
+			return "1"
+		}
+		return ""
+	}}
+	unset := Env{Getenv: func(string) string { return "" }}
+	for _, ci := range []bool{false, true} {
+		if ci {
+			asCIBuild(t)
+		}
+		n := 0
+		activateOnMenuOpen = func() { n++ }
+		helperSwitches(set)
+		helperSwitches(unset)
+		eq(t, n, map[bool]int{false: 0, true: 1}[ci])
+	}
+}
+
 // A CI build logs every test switch that is set; any other build logs
 // none (the release check looks for these lines).
 func TestCIBuildLogsItsSwitches(t *testing.T) {

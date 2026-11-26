@@ -111,4 +111,13 @@ func TestAccessibleText(t *testing.T) {
 	eq(t, AccessibleText(Item{Kind: "more", Label: "More limits on the dashboard"}), "More limits on the dashboard")
 	eq(t, AccessibleText(Item{Kind: "info", Text: "Server connected"}), "Server connected")
 	eq(t, AccessibleText(Item{Kind: "action", Text: "Quit"}), "Quit")
+	// what only the colour and the opacity show is said too (review
+	// A3-M6): warning, critical, numbers that are not current
+	eq(t, AccessibleText(row("warning", 81)), "5-hour, 42%, warning, Resets Fri 21:20 · in 2h 20m")
+	r := row("critical", 100)
+	r.Stale = true
+	eq(t, AccessibleText(r), "5-hour, 42%, critical, Resets Fri 21:20 · in 2h 20m, not current")
+	h = header()
+	h.Stale = true
+	eq(t, AccessibleText(h), "Claude, team-a@… · 3 PCs, Updated 18:52, not current")
 }

@@ -3,6 +3,7 @@ package panel
 import (
 	"strings"
 
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/text"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
 )
 
@@ -58,19 +59,26 @@ func Items(p trayproto.Panel) map[string]Item {
 }
 
 // AccessibleText is what a screen reader says for a drawn item (macOS
-// gives it to VoiceOver as the item's label): its texts in reading order,
-// a comma between them; a header's problem line after its time.
+// gives it to VoiceOver as the item's label and makes it the menu item's
+// title): its texts in reading order, a comma between them; a header's
+// problem line after its time; what only the colour or the opacity shows,
+// in words (review A3-M6): a row's warning or critical level after its
+// percent, "not current" last for a section whose numbers are old.
 func AccessibleText(it Item) string {
 	var parts []string
 	switch it.Kind {
 	case "header":
 		parts = []string{it.Name, it.Account, it.Updated, it.Problem}
 	case "row":
-		parts = []string{it.Label, it.PercentText, it.Detail}
+		level := map[string]string{"warning": text.SaysWarning, "critical": text.SaysCritical}[it.Level]
+		parts = []string{it.Label, it.PercentText, level, it.Detail}
 	case "more":
 		parts = []string{it.Label}
 	default:
 		parts = []string{it.Text}
+	}
+	if it.Stale && (it.Kind == "header" || it.Kind == "row") {
+		parts = append(parts, text.SaysNotCurrent)
 	}
 	return strings.Join(slicesNonEmpty(parts), ", ")
 }

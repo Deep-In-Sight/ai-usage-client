@@ -25,3 +25,5 @@ func (g viewerGlue) ViewFailed(what string)                              { g.d.V
 func (g viewerGlue) DrawView(id uint32, c systray.ViewCanvas, w, h, scale int, cols systray.ViewColours, highlighted bool) {
 	g.d.DrawView(id, c, w, h, scale, viewColours(cols), highlighted)
 }
+
+func activateOnMenuOpen() { systray.ActivateOnMenuOpen(true) }

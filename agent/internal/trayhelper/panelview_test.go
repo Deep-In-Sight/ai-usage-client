@@ -261,6 +261,28 @@ func TestMacDrawerPanicStopsTheDrawing(t *testing.T) {
 	eq(t, strings.Count(logged.String(), "the tray menu is text from now on"), 1)
 }
 
+// Review A3-M10: an Objective-C exception the tray library caught while a
+// view was drawn stops the drawing as a panic does: logged once, nothing
+// drawn from then on, Failed (the helper shows the text menu).
+func TestMacDrawerStopsOnAnObjectiveCException(t *testing.T) {
+	d := newViewDrawer()
+	it := panel.Item{Kind: "row", Label: "5-hour", PercentText: "42%", Level: "normal"}
+	d.Set(1, &it)
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	eq(t, d.Failed(), false)
+	d.ViewFailed("NSInternalInconsistencyException: a test")
+	d.ViewFailed("again")
+	eq(t, d.Failed(), true)
+	c := &fakeCanvas{scale: 1}
+	d.DrawView(1, c, 320, 64, 1, macColours, false)
+	eq(t, len(c.calls), 0)
+	log.SetOutput(os.Stderr)
+	eq(t, strings.Count(logged.String(), "the tray menu is text from now on"), 1)
+	eq(t, strings.Contains(logged.String(), "NSInternalInconsistencyException: a test"), true)
+}
+
 // RF4 on macOS: the helper's goroutine sets the items while the main
 // thread opens the menu, sizes and draws them (-race on Linux).
 func TestViewDrawerWhileViewChanges(t *testing.T) {

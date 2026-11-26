@@ -23,6 +23,7 @@ $vars = @{
     'AI_USAGE_TEST_FAKE_PROVIDERS' = 'claude,codex'
     'AI_USAGE_TEST_DUMP_VIEW'      = (Join-Path $tmp 'view.json')
     'AI_USAGE_TEST_CODEX_FALLBACK' = (Join-Path $tmp 'codex.exe')
+    'AI_USAGE_TEST_ACTIVE_MENU'    = '1'
 }
 try {
     $o = Join-Path $tmp 'version.txt'

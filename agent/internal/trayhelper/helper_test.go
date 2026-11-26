@@ -50,10 +50,12 @@ type fakeUI struct {
 	// (macOS)
 	nativeActions atomic.Bool
 	// store is what each drawn item draws, as the real ui's drawer keeps
-	// it (by a number per item); probes are what an open of the menu would
-	// take from it (its snapshot) at each moment one could come: after
-	// each write to it (review N1)
-	store  drawStore
+	// it (by a number per item; the macOS drawer, whose store is the
+	// Windows drawer's); probes are what an open of the menu would take
+	// from it (the macOS drawer's MenuOpening snapshot, the Windows
+	// drawer's is the same copy of its store) at each moment one could
+	// come: after each write to it (review N1, A3-M1)
+	store  viewDrawer
 	nextID uint32
 	probes []map[uint32]panel.Item
 }
@@ -148,9 +150,13 @@ func (u *fakeUI) SetDrawnData(sets []drawnData) {
 	u.probe()
 }
 
-// probe keeps what an open would take now (review N1).
+// probe keeps what an open would take now (review N1, A3-M1).
 func (u *fakeUI) probe() {
-	snap := u.store.snapshot()
+	u.store.MenuOpening()
+	u.store.mu.Lock()
+	snap := u.store.open
+	u.store.mu.Unlock()
+	u.store.MenuClosed()
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.probes = append(u.probes, snap)

@@ -37,6 +37,13 @@ type Options struct {
 	IconDir  string // Windows: where its icon files go (in the data folder)
 }
 
+// ActivateOnMenuOpen: before its menu shows, the helper makes itself the
+// active app (macOS, whose menus take Return differently in the active
+// app; elsewhere nothing). Only a CI build's test switch calls it
+// (internal/cli, AI_USAGE_TEST_ACTIVE_MENU): CI judges Return in an
+// active app's menu.
+func ActivateOnMenuOpen() { activateOnMenuOpen() }
+
 // ExitNoTray: this build has no tray (macOS without cgo).
 const ExitNoTray = 3
 
@@ -500,6 +507,13 @@ func (h *helper) apply(v trayproto.Msg) {
 		_, seen := h.shown[id]
 		if drawing && hiddenUnderHeader(id, drawn) {
 			it.Visible = false
+		}
+		// macOS: a view item's own title is its view's label, what
+		// VoiceOver reads for the menu item and type-select matches, not
+		// the text menu's line with its bar characters (review A3-M2);
+		// the text menu (a rebuild) has the lines again
+		if d, ok := drawn[id]; ok && !h.d.ui.DrawsActions() {
+			it.Text = panel.AccessibleText(d)
 		}
 		titled := !seen || it.Text != old.Text
 		if titled {

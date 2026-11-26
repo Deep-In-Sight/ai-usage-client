@@ -26,9 +26,28 @@ func trayHelperCmd(env Env, args []string) int {
 	log.SetOutput(env.Stderr)
 	log.SetFlags(0)
 	defer func() { log.SetOutput(out); log.SetFlags(flags) }()
+	helperSwitches(env)
 	in := env.Stdin
 	if in == nil {
 		in = os.Stdin
 	}
 	return trayhelper.Run(env.ctx(), in, env.Stdout, token)
+}
+
+// testActiveMenuEnv: the tray helper of a CI build (version 0.0.0-ci)
+// makes itself the active app before its menu shows (macOS), so that CI
+// judges Return in an active app's menu (tools/macmenu). Any other build
+// ignores it.
+const testActiveMenuEnv = "AI_USAGE_TEST_ACTIVE_MENU"
+
+// activateOnMenuOpen is trayhelper.ActivateOnMenuOpen (tests replace it).
+var activateOnMenuOpen = trayhelper.ActivateOnMenuOpen
+
+// helperSwitches applies the test switches a CI build's tray helper reads
+// (testSwitches).
+func helperSwitches(env Env) {
+	if isCIBuild() && env.Getenv(testActiveMenuEnv) != "" {
+		log.Printf("CI build: test switch %s on", testActiveMenuEnv)
+		activateOnMenuOpen()
+	}
 }

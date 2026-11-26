@@ -56,6 +56,8 @@ const (
 	dtEndEllipsis = 0x8000
 )
 
+func activateOnMenuOpen() {}
+
 // newItemDrawer is the Windows drawer, registered with the tray library.
 func newItemDrawer() itemDrawer {
 	d := newWinDrawer(loadMenuTheme)

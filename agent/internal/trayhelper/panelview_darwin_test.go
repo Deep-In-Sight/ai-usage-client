@@ -24,7 +24,11 @@ import (
 
 // AppKit draws on the main thread: the tests run on their goroutines and
 // hand drawing to the main one (locked to the main thread by the tray
-// library's init), which waits for it here.
+// library's init), which waits for it here. A closure run there must not
+// call t.Fatal or t.FailNow (or panic): that would end the main
+// goroutine's loop and leave the next onMain waiting until go test's
+// time-out; the loop ends the test binary at once instead, saying why
+// (review B3-m12).
 var mainCalls = make(chan func())
 
 func TestMain(m *testing.M) {
@@ -33,11 +37,23 @@ func TestMain(m *testing.M) {
 	for {
 		select {
 		case f := <-mainCalls:
-			f()
+			onMainThread(f)
 		case code := <-done:
 			os.Exit(code)
 		}
 	}
+}
+
+func onMainThread(f func()) {
+	returned := false
+	defer func() {
+		if !returned {
+			fmt.Fprintf(os.Stderr, "FAIL: a call on the main thread did not return (panic %v, or t.FailNow/runtime.Goexit inside onMain)\n", recover())
+			os.Exit(1)
+		}
+	}()
+	f()
+	returned = true
 }
 
 func onMain(f func()) {
@@ -50,12 +66,14 @@ func onMain(f func()) {
 }
 
 // traced is what one view drew (its steps, the metrics and the text
-// missing from them, judged on the main thread with the real fonts).
+// missing from them, judged on the main thread with the real fonts; the
+// lines a header's problem wraps to there).
 type traced struct {
-	ops     []panel.Op
-	m       panel.Metrics
-	w, h    int
-	missing []string
+	ops          []panel.Op
+	m            panel.Metrics
+	w, h         int
+	missing      []string
+	problemLines int
 }
 
 // macDrawer is the macOS drawer, registered with the tray library, that
@@ -70,7 +88,8 @@ func macDrawer(t *testing.T) (*viewDrawer, map[uint32]*traced) {
 	seen := map[uint32]*traced{}
 	d.trace = func(id uint32, ops []panel.Op, m panel.Metrics, tm panel.Measurer, w, h int) {
 		it, _ := d.item(id)
-		seen[id] = &traced{ops: ops, m: m, w: w, h: h, missing: panelcheck.Missing(it, ops, m, tm, w, h)}
+		seen[id] = &traced{ops: ops, m: m, w: w, h: h, missing: panelcheck.Missing(it, ops, m, tm, w, h),
+			problemLines: len(panel.Wrap(it.Problem, panel.Regular, m.Width-2*m.Pad, tm))}
 	}
 	return d, seen
 }
@@ -108,6 +127,7 @@ type macPanel struct {
 	items map[string]panel.Item
 	seen  map[uint32]*traced
 	width int
+	bg    color.NRGBA // the window background, from a view that draws nothing
 }
 
 func drawMacPanel(t *testing.T, in tray.MenuInputs, dark bool, scale int) macPanel {
@@ -156,7 +176,10 @@ func drawMacPanel(t *testing.T, in tray.MenuInputs, dark bool, scale int) macPan
 		height += p.Bounds().Dy()
 	}
 	out := image.NewNRGBA(image.Rect(0, 0, width*scale, height))
-	bg := pics[0].NRGBAAt(1, 1) // the window background under the views
+	// the window background under the views: a view that draws nothing
+	// (an id the drawer does not know), not a pixel of a view (review
+	// B3-m8: a view that filled its background would set it)
+	bg := render(t, 999, width, dark, scale).NRGBAAt(1, 1)
 	top := map[string]int{}
 	y := 0
 	for i, id := range order {
@@ -178,7 +201,7 @@ func drawMacPanel(t *testing.T, in tray.MenuInputs, dark bool, scale int) macPan
 		}
 		y += p.Bounds().Dy()
 	}
-	return macPanel{pic: out, top: top, ids: ids, items: items, seen: seen, width: width}
+	return macPanel{pic: out, top: top, ids: ids, items: items, seen: seen, width: width, bg: bg}
 }
 
 func (p macPanel) save(t *testing.T, path string) {
@@ -240,9 +263,12 @@ func opaque(c, bg color.NRGBA) color.NRGBA {
 // them, light and dark, at 1× (points): the bars' fill to FillWidth and
 // then the track, the critical bar across and its percent in red, the
 // header pictures (F7), the stale group at 0.6, the problem line in the
-// appearance's colour, every text whole (B-I1), every view as wide as the
-// widest and at least 320. With PANEL_PICTURE_DIR set the four pictures
-// are written there (CI keeps them for the owner).
+// appearance's colour, every text whole (B-I1), every view at least 320
+// wide. That every view is as wide as the widest holds here by
+// construction (the test asks for that width: it proves only that a view
+// is drawn at the width it is given); the real menu's widths are judged on
+// CI by tools/macmenu (panel.mac_menu). With PANEL_PICTURE_DIR set the
+// four pictures are written there (CI keeps them for the owner).
 func TestPanelViewPictureMac(t *testing.T) {
 	dir := os.Getenv("PANEL_PICTURE_DIR")
 	m := panel.MetricsAt(96)
@@ -275,9 +301,11 @@ func TestPanelViewPictureMac(t *testing.T) {
 					t.Fatalf("%s: %s drawn %d wide, not the menu's %d", where, id, tr.w, p.width)
 				}
 			}
-			bg := p.at("h.claude", 1, 1)
-			if got := p.at("h.claude", p.width-2, 1); got != bg {
-				t.Fatalf("%s: the header fills its background: %v, the menu's %v", where, got, bg)
+			bg := p.bg
+			for _, xy := range [][2]int{{1, 1}, {p.width - 2, 1}, {p.width / 2, 2}} {
+				if got := p.at("h.claude", xy[0], xy[1]); got != bg {
+					t.Fatalf("%s: the header fills its background: %v at %v, the window's %v", where, got, xy, bg)
+				}
 			}
 			trackOn := func(over color.NRGBA) color.NRGBA { return opaque(panel.Track, over) }
 			stale := fx.name == "states"
@@ -384,16 +412,22 @@ func macColour(t *testing.T, dark bool) color.NRGBA {
 	return color.NRGBA{0, 0, 0, 0xd8}
 }
 
-// Plan Task 9: a header with a problem draws it under itself in the
-// problem's colour and is taller by the problem line; a header with a long
-// account is wider than 320 and cuts nothing (A-I1); a line that cannot
-// be clicked wraps at the panel's width instead of widening it (A-I2).
+// Plan Task 9: a header with a problem (States' h.codex) draws it under
+// itself in the problem's colour and is taller by exactly the problem
+// line (Problem; each further line it wraps to a line more); a header with
+// a long account is wider than 320 and cuts nothing (A-I1); a line that
+// cannot be clicked wraps at the panel's width instead of widening it
+// (A-I2).
 func TestHeaderViewDrawsTheProblem(t *testing.T) {
 	m := panel.MetricsAt(96)
 	d, seen := macDrawer(t)
-	plain := panel.Item{Kind: "header", Provider: "codex", Name: "Codex", Account: "user@… · 2 PCs · Plus", Updated: "Updated 19:00"}
-	prob := plain
-	prob.Problem = "Sign-in expired: open Codex to renew it"
+	states := macItems(panelfixture.States())
+	prob := states["h.codex"]
+	if prob.Problem == "" {
+		t.Fatal("States' h.codex has no problem line")
+	}
+	plain := prob
+	plain.Problem = ""
 	long := plain
 	long.Account = "firstname.lastname.…@… · 12 PCs · Enterprise"
 	long.Updated = "Updated Mon 15:30"
@@ -403,8 +437,15 @@ func TestHeaderViewDrawsTheProblem(t *testing.T) {
 		d.Set(uint32(i+1), &it)
 	}
 	a, b := render(t, 1, 0, false, 1), render(t, 2, 0, false, 1)
-	if got, want := b.Bounds().Dy()-a.Bounds().Dy(), m.Problem; got < want {
-		t.Fatalf("the header with a problem is %d pt taller, want at least %d", got, want)
+	lines := seen[2].problemLines
+	got := b.Bounds().Dy() - a.Bounds().Dy()
+	switch {
+	case lines < 1:
+		t.Fatalf("the problem %q wraps to %d lines", prob.Problem, lines)
+	case lines == 1 && got != m.Problem:
+		t.Fatalf("the header with a one-line problem is %d pt taller, want %d", got, m.Problem)
+	case lines > 1 && got < m.Problem+(lines-1)*12:
+		t.Fatalf("the header with a %d-line problem is %d pt taller, want at least %d", lines, got, m.Problem+(lines-1)*12)
 	}
 	n := 0
 	for y := a.Bounds().Dy(); y < b.Bounds().Dy(); y++ {
@@ -431,7 +472,26 @@ func TestHeaderViewDrawsTheProblem(t *testing.T) {
 	if miss := seen[4].missing; len(miss) > 0 {
 		t.Fatalf("server line: %v", miss)
 	}
-	t.Logf("header %d, with problem %d, long account %d wide, server line %dx%d", a.Bounds().Dy(), b.Bounds().Dy(), l.Bounds().Dx(), s.Bounds().Dx(), s.Bounds().Dy())
+	t.Logf("header %d, with problem %d (%d lines), long account %d wide, server line %dx%d", a.Bounds().Dy(), b.Bounds().Dy(), lines, l.Bounds().Dx(), s.Bounds().Dx(), s.Bounds().Dy())
+}
+
+// Review A3-M10: an Objective-C exception raised while a view draws is
+// caught in the tray library (it never unwinds through Go) and stops the
+// drawing as a panic does: the drawer fails, so the helper shows its text
+// menu.
+func TestObjectiveCExceptionStopsTheDrawing(t *testing.T) {
+	d, _ := macDrawer(t)
+	it := macItems(panelfixture.Combined())["h.claude"]
+	d.Set(1, &it)
+	render(t, 1, 0, false, 1)
+	if d.Failed() {
+		t.Fatal("failed before the exception")
+	}
+	onMain(systray.RaiseInNextPanelViewText)
+	render(t, 1, 0, false, 1)
+	if !d.Failed() {
+		t.Fatal("the drawer did not hear of the exception")
+	}
 }
 
 // On a Retina screen the views draw at two pixels per point: the same

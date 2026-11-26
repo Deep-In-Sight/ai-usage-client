@@ -40,6 +40,7 @@ env -i PATH=/usr/bin:/bin HOME="$tmp/u" \
   AI_USAGE_TEST_FAKE_PROVIDERS=claude,codex \
   AI_USAGE_TEST_DUMP_VIEW="$tmp/view.json" \
   AI_USAGE_TEST_CODEX_FALLBACK="$tmp/codex" \
+  AI_USAGE_TEST_ACTIVE_MENU=1 \
   timeout -s TERM 6 "$f" run --headless > "$tmp/run.txt" 2>&1 || true
 log="$data/agent.log"
 grep -q "ai-usage $want started" "$log" 2>/dev/null || fail "the run did not start: $(head -c 300 "$tmp/run.txt")"

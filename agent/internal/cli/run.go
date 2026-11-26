@@ -384,7 +384,7 @@ func codexFallback(env Env, codexHome string) *codex.AppServer {
 // 0.0.0-ci) reads; any other build reads none of them. A CI build logs
 // each one that is set, and tools/check-release.sh sets them all on a
 // release executable and fails if it logs one (ruling F4).
-var testSwitches = []string{testHelpersEnv, testDumpViewEnv, testCodexCLIEnv}
+var testSwitches = []string{testHelpersEnv, testDumpViewEnv, testCodexCLIEnv, testActiveMenuEnv}
 
 func logTestSwitches(env Env, logger *log.Logger) {
 	if !isCIBuild() {

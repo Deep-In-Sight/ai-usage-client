@@ -44,6 +44,14 @@ const (
 	BlockedAlone    = "Blocked" // blocked, no reset time reported
 )
 
+// What a screen reader says after a drawn row's or header's texts for
+// what the usage panel shows only by colour or opacity (review A3-M6).
+const (
+	SaysWarning    = "warning"
+	SaysCritical   = "critical"
+	SaysNotCurrent = "not current"
+)
+
 // Problem lines of a provider's section (design 6.5).
 const (
 	ClaudeExpired = "Sign-in expired: open Claude Code to renew it"

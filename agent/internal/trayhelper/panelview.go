@@ -67,13 +67,13 @@ func (m canvasMeasurer) LineHeight(f panel.Font) int          { return m.c.LineH
 // the main thread. While the menu is open every view draws what it held
 // when the menu opened (one panel, never half old and half new; the next
 // open shows the new values, as on Windows); a view added to the open
-// menu draws what it holds now. After a panic it draws nothing more for
-// the helper's life: the helper shows the text menu instead (Failed).
+// menu draws what it holds now. After a panic, or an Objective-C exception
+// the tray library caught (ViewFailed), it draws nothing more for the
+// helper's life: the helper shows the text menu instead (Failed).
 type viewDrawer struct {
 	drawStore
 
 	mu     sync.Mutex
-	isOpen bool
 	open   map[uint32]panel.Item
 	failed bool
 	// trace, when set (tests only), gets each DrawView's steps and the
@@ -146,14 +146,14 @@ func (d *viewDrawer) MenuOpening() {
 	open := d.snapshot()
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.isOpen, d.open = true, open
+	d.open = open
 }
 
 // MenuClosed: views draw what they hold again.
 func (d *viewDrawer) MenuClosed() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.isOpen, d.open = false, nil
+	d.open = nil
 }
 
 // ViewSize is the item's size in points: panel.Size at 96 DPI (a point

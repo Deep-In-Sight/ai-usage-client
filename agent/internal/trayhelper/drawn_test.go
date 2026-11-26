@@ -129,6 +129,12 @@ func TestMacDrawsThePanelAndKeepsTheActions(t *testing.T) {
 	eq(t, *items["server"].drawn, panel.Item{Kind: "info", Text: v.Panel.Server, Dim: true})
 	eq(t, items["p.codex"].visible, false)
 	eq(t, items["h.codex"].drawn.Problem, text.CodexExpired)
+	// a drawn item's own title is its view's label (review A3-M2): what
+	// VoiceOver reads for the menu item and type-select matches, never
+	// the text menu's bar characters
+	for _, id := range []string{"h.claude", "r.claude.0", "r.claude.1", "r.claude.2", "h.codex", "r.codex.0", "r.codex.1", "server"} {
+		eq(t, items[id].title, panel.AccessibleText(*items[id].drawn))
+	}
 	for _, id := range []string{"newversion", "dashboard", "refresh", "autostart", "remove", "quit"} {
 		if items[id].drawnSets != 0 {
 			t.Fatalf("%s is drawn: the actions stay the menu's own", id)
@@ -309,6 +315,43 @@ func TestTextMenuWhenTheUIStopsDrawing(t *testing.T) {
 	eq(t, items["p.codex"].title, text.CodexExpired)
 }
 
+// Review B3-m13, A3-M2: the same on macOS, whose actions stay the menu's
+// own: after the drawer failed the problem line is a text item again and
+// every item's title is the text menu's line again.
+func TestMacTextMenuWhenTheUIStopsDrawing(t *testing.T) {
+	r := drawnRun(t, true, "darwin")
+	r.ui.nativeActions.Store(true)
+	v := fixtureView(panelfixture.States())
+	r.send(v)
+	eq(t, r.next().Type, trayproto.TypeReady)
+	_, items, _, _, _, _ := r.ui.snapshot()
+	if d := items["h.codex"].drawn; d == nil || items["h.codex"].title != panel.AccessibleText(*d) {
+		t.Fatalf("not drawn first: %q %+v", items["h.codex"].title, d)
+	}
+	r.ui.draws.Store(false)
+	waitFor(t, "the text menu", func() bool {
+		layout, items, _, _, _, resets := r.ui.snapshot()
+		return resets == 1 && !strings.Contains(strings.Join(layout, " "), "=") && layout[len(layout)-1] == "quit" && items["quit"].visible
+	})
+	layout, items, _, _, _, _ := r.ui.snapshot()
+	eq(t, strings.Join(layout, " "), "newversion h.claude r.claude.0 r.claude.1 r.claude.2 r.claude.3 r.claude.4 p.claude - "+
+		"h.codex r.codex.0 r.codex.1 r.codex.2 r.codex.3 r.codex.4 p.codex - server - dashboard refresh autostart remove quit")
+	byID := map[string]trayproto.Item{}
+	for _, it := range v.Items {
+		byID[it.ID] = it
+	}
+	for id := range items {
+		if items[id].drawn != nil {
+			t.Fatalf("%s still drawn", id)
+		}
+		if byID[id].Visible {
+			eq(t, items[id].title, byID[id].Text)
+		}
+	}
+	eq(t, items["p.codex"].visible, true)
+	eq(t, items["p.codex"].title, text.CodexExpired)
+}
+
 // Review A-m8: on a ui that does not draw (Linux, macOS), a hidden item
 // whose text changes gets its title and nothing else: the menu is exactly
 // as before the drawn panel.
@@ -406,7 +449,16 @@ func TestDarkOnlyWhenAppsAreDark(t *testing.T) {
 // other): the data of every drawn item that changes is set at once,
 // before any item is switched.
 func TestAnOpenSeesOneViewOrTheOther(t *testing.T) {
-	r := drawnRun(t, true, "windows")
+	for _, goos := range []string{"windows", "darwin"} {
+		t.Run(goos, func(t *testing.T) { anOpenSeesOneViewOrTheOther(t, goos) })
+	}
+}
+
+// anOpenSeesOneViewOrTheOther: on macOS (review A3-M1) the snapshot taken
+// at MenuOpening comes from the one step that sets every changed item.
+func anOpenSeesOneViewOrTheOther(t *testing.T, goos string) {
+	r := drawnRun(t, true, goos)
+	r.ui.nativeActions.Store(goos == "darwin")
 	r.send(fixtureView(panelfixture.Combined()))
 	eq(t, r.next().Type, trayproto.TypeReady)
 	old := r.ui.store.snapshot()
