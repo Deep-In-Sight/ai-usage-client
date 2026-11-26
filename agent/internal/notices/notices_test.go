@@ -587,9 +587,18 @@ func TestReadmeListsUbuntu2604(t *testing.T) {
 		"To turn it on again, switch on AI Usage Panel in the Extensions app",
 		"`gnome-extensions enable ai-usage-panel@localhost`",
 		"Removing AI Usage and installing it again counts as a new install",
+		// review B-M1: a stock Ubuntu may lack the Extensions app; B-M8: an
+		// install with no GNOME session running takes two logins; B-M7: the
+		// panel's helper writes the extension's folder
+		"`gnome-extensions disable ai-usage-panel@localhost`",
+		"the agent writes the extension at your next GNOME login, and the usage panel appears at the login after that.",
+		"the helper that passes the panel to the extension also writes the AI Usage Panel extension into your extensions folder",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README does not say %q", want)
 		}
+	}
+	if strings.Contains(readme, "no sign-in, no file, no network") {
+		t.Error("README says a helper gets no file: the GNOME panel's helper writes the extension's folder")
 	}
 }

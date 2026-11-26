@@ -172,8 +172,9 @@ On Ubuntu 22.04, 24.04 and 26.04 the agent also puts the usage panel's
 GNOME Shell extension, AI Usage Panel, in your own extensions folder
 (`~/.local/share/gnome-shell/extensions/ai-usage-panel@localhost`). Run
 from a GNOME session, install says "The AI Usage panel appears after
-you log out and log in again."; run from elsewhere (over SSH, for
-example), the agent writes the extension at your next GNOME login instead.
+you log out and log in again."; run while no GNOME session is running
+(over SSH, for example), the agent writes the extension at your next GNOME
+login, and the usage panel appears at the login after that.
 
 Run the same command again to upgrade. The PC stays the same device on the
 dashboard and nothing waiting to be sent is lost.
@@ -225,7 +226,9 @@ How the panel looks on each OS:
   again, the usage panel appears in the top bar and the tray icon goes
   away. Clawd with Claude's percentage and the ring with Codex's sit side
   by side; click either to open the panel. To turn the panel off, switch
-  off AI Usage Panel in the Extensions app; the tray icon comes back. It
+  off AI Usage Panel in the Extensions app; the tray icon comes back. If
+  your Ubuntu has no Extensions app, run
+  `gnome-extensions disable ai-usage-panel@localhost` instead. It
   stays off at the next login: the agent turns the extension on once, at
   the first login after it is installed, and never again after you turned
   it off. To turn it on again, switch on AI Usage Panel in the Extensions
@@ -302,9 +305,13 @@ every icon has the same menu.
   one helper passes the panel to the extension instead). If the desktop's
   tray goes away, only the helper ends; the agent goes on collecting and
   starts it again. The helper gets nothing but what to draw: no sign-in,
-  no file, no network, and of the agent's environment only what a tray
-  icon needs to reach the desktop (display, session bus, locale, the OS's
-  own settings). Its command line is just `ai-usage tray-helper`, so other
+  no network, and of the agent's environment only what a tray icon needs
+  to reach the desktop (display, session bus, locale, the OS's own
+  settings). On Windows it keeps its icon pictures in the agent's
+  settings folder, and on Ubuntu the helper that
+  passes the panel to the extension also writes the AI Usage Panel
+  extension into your extensions folder and asks GNOME to turn it on
+  once. Its command line is just `ai-usage tray-helper`, so other
   users of the PC cannot see which service it shows.
 - The agent keeps a log, `agent.log` in its settings folder (`status`
   prints where); the previous one is `agent.log.1`. It never holds sign-in
