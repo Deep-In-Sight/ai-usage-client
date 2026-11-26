@@ -3,7 +3,7 @@
 //
 // Run from anywhere:  gjs -m gnome-extension/tests/test_link.js
 
-import {createLink} from '../ai-usage-panel@localhost/link.js';
+import {createLink, runEach} from '../ai-usage-panel@localhost/link.js';
 
 let failures = 0;
 let checks = 0;
@@ -136,6 +136,34 @@ function attachNow(link) {
     equal(link.current(g2), false, 'nothing is current after close');
     equal(link.mayShow(), false, 'a closed link shows nothing');
     equal(link.startAttach(), 0, 'a closed link attaches nothing');
+}
+
+// -- runEach (disable()'s steps): each step runs whatever throws before
+// it, and what throws is reported; the button's step is the last, so it
+// goes whatever happened (review A-m4)
+{
+    const ran = [];
+    const errors = [];
+    runEach([
+        () => ran.push('detach'),
+        () => {
+            throw new Error('the link');
+        },
+        () => ran.push('unwatch'),
+        () => {
+            throw new Error('the proxy');
+        },
+        () => ran.push('button'),
+    ], e => errors.push(e.message));
+    equal(ran.join(' '), 'detach unwatch button', 'every step runs');
+    equal(errors.join(', '), 'the link, the proxy', 'each throw is reported');
+    let last = false;
+    runEach([() => {
+        throw new Error('first');
+    }, () => {
+        last = true;
+    }], null);
+    equal(last, true, 'without a reporter the next step runs too');
 }
 
 print(`${checks - failures}/${checks} checks passed`);

@@ -105,3 +105,18 @@ class Link {
 export function createLink() {
     return new Link();
 }
+
+// runEach runs each step in order; one that throws is passed to failed
+// (when given) and the next step runs all the same. disable() ends with
+// the button's step, so the button goes whatever threw before it (review
+// A-m4): one left in the top bar after disable() stays there, frozen.
+export function runEach(steps, failed) {
+    for (const step of steps) {
+        try {
+            step();
+        } catch (e) {
+            if (failed)
+                failed(e);
+        }
+    }
+}

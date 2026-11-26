@@ -28,7 +28,7 @@ const Main = imports.ui.main;
 const PanelMenu = imports.ui.panelMenu;
 const PopupMenu = imports.ui.popupMenu;
 
-const {createLink} = imports.misc.extensionUtils.getCurrentExtension().imports.link;
+const {createLink, runEach} = imports.misc.extensionUtils.getCurrentExtension().imports.link;
 const {PROTOCOL, clickable, fillWidth, isDarkBackground, isEmpty, layoutKey, levelClass, menuUpdate, parseView, textOpacity, topEntries, useOrientation} = imports.misc.extensionUtils.getCurrentExtension().imports.view;
 
 const BUS_NAME = 'local.AIUsage.Panel';
@@ -546,23 +546,34 @@ class PanelClient {
             this._proxy.ClickRemote(id, () => {});
     }
 
+    // Each step runs whatever throws before it, and the button goes last
+    // whatever happened (review A-m4): a button left in the top bar after
+    // disable() would stay there, frozen.
     destroy() {
-        try {
-            this._detach();
-        } catch (e) {
-            // the agent may already be gone
-        }
-        this._link.close();
-        if (this._watchId !== 0) {
-            Gio.bus_unwatch_name(this._watchId);
-            this._watchId = 0;
-        }
-        this._dropProxy();
-        this._view = null;
-        if (this._button) {
-            this._button.destroy();
-            this._button = null;
-        }
+        runEach([
+            () => {
+                try {
+                    this._detach();
+                } catch (e) {
+                    // the agent may already be gone
+                }
+            },
+            () => this._link.close(),
+            () => {
+                if (this._watchId !== 0) {
+                    const id = this._watchId;
+                    this._watchId = 0;
+                    Gio.bus_unwatch_name(id);
+                }
+            },
+            () => this._dropProxy(),
+            () => {
+                this._view = null;
+                const button = this._button;
+                this._button = null;
+                button?.destroy();
+            },
+        ], e => console.log(`${this._uuid}: disable: ${e.message}`));
     }
 }
 
