@@ -106,6 +106,35 @@ func TestPanelItemsAreDrawnOnWindowsAndMac(t *testing.T) {
 	}
 }
 
+// Review N6 (stage 3): Windows draws every item and keeps each one's own
+// title the text menu's line (its strings stay what they were before the
+// drawn panel); only macOS, whose view items VoiceOver reads by their
+// titles, gives a drawn item its view's label.
+func TestWindowsKeepsTheTextTitlesWhileDrawing(t *testing.T) {
+	v := fixtureView(panelfixture.States())
+	byID := map[string]trayproto.Item{}
+	for _, it := range v.Items {
+		byID[it.ID] = it
+	}
+	r := drawnRun(t, true, "windows")
+	r.send(v)
+	eq(t, r.next().Type, trayproto.TypeReady)
+	_, items, _, _, _, _ := r.ui.snapshot()
+	n := 0
+	for id := range panel.Items(*v.Panel) {
+		if items[id].drawn == nil {
+			continue
+		}
+		n++
+		if items[id].title != byID[id].Text {
+			t.Fatalf("%s: title %q, want the text menu's %q", id, items[id].title, byID[id].Text)
+		}
+	}
+	if n < 7 {
+		t.Fatalf("%d drawn headers and rows", n)
+	}
+}
+
 // Plan Task 9 (design 6.3, review A-I2): on a ui that draws but keeps the
 // text items its own (macOS), the headers, rows and the lines that cannot
 // be clicked (the server line, the sign-in prompt) are drawn; newversion
