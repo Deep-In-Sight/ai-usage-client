@@ -223,8 +223,12 @@ func TestShimCheckIsBounded(t *testing.T) {
 	go func() {
 		_ = sharedread.Do(p, func(*os.File) error { close(holding); <-release; return nil })
 	}()
-	<-holding
 	defer close(release)
+	select { // a read refused at once never holds (it hung here before the sharedread fix)
+	case <-holding:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the holding read did not start")
+	}
 	start := time.Now()
 	eq(t, isShim(p), false)
 	if d := time.Since(start); d > time.Second {

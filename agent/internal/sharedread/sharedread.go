@@ -72,16 +72,22 @@ func do(path string, limit time.Duration, fn func(*os.File) error) error {
 	busyMu.Unlock()
 	done := make(chan error, 1)
 	go func() {
-		defer func() {
-			busyMu.Lock()
-			delete(busy, path)
-			busyMu.Unlock()
+		// the file is free before the result is sent: a caller that reads
+		// it again as soon as Do returns is not refused (the goroutine can
+		// be descheduled between the two, as on a loaded CI runner)
+		err := func() error {
+			defer func() {
+				busyMu.Lock()
+				delete(busy, path)
+				busyMu.Unlock()
+			}()
+			f, err := Open(path)
+			if err == nil {
+				err = fn(f)
+				f.Close()
+			}
+			return err
 		}()
-		f, err := Open(path)
-		if err == nil {
-			err = fn(f)
-			f.Close()
-		}
 		done <- err
 	}()
 	t := time.NewTimer(limit)

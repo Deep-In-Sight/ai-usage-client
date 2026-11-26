@@ -41,3 +41,21 @@ func TestAHungReadIsBoundedInTime(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// A read that has ended leaves its file free for the next one: when Do
+// returns, a second Do on the same file at once is not refused as a
+// hung read (macOS CI once failed creds'
+// TestAccountFileOverCapExplainsMissingAccount so: the read's goroutine
+// sent its result before it freed the file, and was descheduled between
+// the two).
+func TestBackToBackReadsAreNotRefused(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(p, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2000 {
+		if err := Do(p, func(*os.File) error { return nil }); err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+	}
+}
