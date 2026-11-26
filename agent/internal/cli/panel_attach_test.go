@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -81,6 +82,25 @@ type loopRig struct {
 	modes   []string
 	opened  []string
 	nIcons  int
+	logs    lockedBuffer // the loop's log
+}
+
+// lockedBuffer is a log's output, read while the loop writes it.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
 
 var yes, no = func() *bool { b := true; return &b }(), func() *bool { b := false; return &b }()
@@ -112,7 +132,7 @@ func newLoopRig(t *testing.T, snap status.Snapshot, prepare func(te *testEnv)) *
 		Log: log.New(io.Discard, "", 0)})
 	cfg := mustParse(t, `{"server_urls":["http://192.0.2.10:8700"],"ingest_key":"k-0123456789"}`)
 	r.loop = &trayLoop{env: te.Env, ctrl: newController(cfg, snap, nil, nil), sup: sup, updates: r.updates,
-		log: log.New(io.Discard, "", 0), remove: func() error { return nil },
+		log: log.New(&r.logs, "", 0), remove: func() error { return nil },
 		setMode: func(m string) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -627,6 +647,27 @@ func TestEnabledWritesMarkerOnce(t *testing.T) {
 	must(t, err)
 	if !st.ModTime().Equal(old) {
 		t.Fatalf("rewritten at %v", st.ModTime())
+	}
+}
+
+// An Enable without a clear yes (why "unclear") is done all the same (the
+// marker), and the log does not say the extension was turned on (review of
+// fix round 3).
+func TestUnclearEnableIsNotLoggedAsTurnedOn(t *testing.T) {
+	r := newLoopRig(t, claudeInUse(), nil)
+	b := r.bridge()
+	b.say(trayproto.Msg{Type: trayproto.TypeShell, Enabled: true, Why: "unclear"})
+	r.handled(func(e supervisor.Event) bool { return e.Enabled })
+	eq(t, r.marker(paths.PanelEnabledFile), true)
+	if l := r.logs.String(); strings.Contains(l, "turned on") || !strings.Contains(l, "no clear answer") {
+		t.Fatalf("log:\n%s", l)
+	}
+	r2 := newLoopRig(t, claudeInUse(), nil)
+	b2 := r2.bridge()
+	b2.say(trayproto.Msg{Type: trayproto.TypeShell, Enabled: true})
+	r2.handled(func(e supervisor.Event) bool { return e.Enabled })
+	if l := r2.logs.String(); !strings.Contains(l, "usage panel: the extension was turned on") {
+		t.Fatalf("log:\n%s", l)
 	}
 }
 

@@ -8,10 +8,13 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -475,6 +478,23 @@ func TestNoShellVersionWithinWait(t *testing.T) {
 	}
 }
 
+// Review of fix round 3: after the 30 s wait a new shell is asked for its
+// version again within a second when its first answer had none (a shell
+// that owns its name before its version is there), not after 30 s.
+func TestNewShellAfterTheWaitIsAskedAgainSoon(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	r.owned()
+	r.waiter()
+	r.clk.Advance(ShellWait)
+	notSupported(t, r.next(), "no shell")
+	r.shell = fakeshell.Start(t, r.bus.Addr, fakeshell.Options{Version: "46.0", VersionLater: true})
+	r.waiter() // the failed ask waits to be asked again
+	r.shell.PublishVersion()
+	r.clk.Advance(versionRetry)
+	r.ready("gnome46")
+	r.attached()
+}
+
 // A shell that comes on the bus during the wait is served.
 func TestShellAfterTheBridge(t *testing.T) {
 	r := newRig(t, rigOptions{})
@@ -637,6 +657,81 @@ func TestEnableWithoutADefiniteNoIsDone(t *testing.T) {
 	r2.none()
 	if calls := r2.shell.Calls(); !slices.Equal(calls, []string{"EnableExtension " + gnomeext.UUID}) {
 		t.Fatalf("%q", calls)
+	}
+}
+
+// Review of fix round 3: an EnableExtension that never reached the shell
+// (the shell left the bus between its version and the call: the bus
+// answers ServiceUnknown or NameHasNoOwner) is not done: no Enabled line,
+// so the next start asks again.
+func TestEnableNeverDeliveredIsNotDone(t *testing.T) {
+	left := make(chan struct{})
+	var once sync.Once
+	r := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", EnableOK: true, OnVersion: func(s *fakeshell.Shell) {
+		once.Do(func() { s.Leave(t); close(left) }) // gone before the version is answered
+	}}, enableOnce: true})
+	<-left
+	r.ready("gnome46")
+	r.none()
+	if calls := r.shell.Calls(); len(calls) != 0 {
+		t.Fatalf("the shell got %q", calls)
+	}
+}
+
+// The classification of an Enable's result: done (the Enabled line; why
+// "unclear" when only an error came, so the main process does not log it
+// as turned on) or not (the next start asks again).
+func TestEnableOutcome(t *testing.T) {
+	writeErr := &net.OpError{Op: "write", Net: "unix", Err: syscall.EPIPE}
+	readErr := &net.OpError{Op: "read", Net: "unix", Err: syscall.ECONNRESET}
+	for _, c := range []struct {
+		name string
+		ok   bool
+		err  error
+		done bool
+		why  string
+	}{
+		{"turned on", true, nil, true, ""},
+		{"a definite no", false, nil, false, ""},
+		{"no owner", false, dbus.Error{Name: "org.freedesktop.DBus.Error.ServiceUnknown"}, false, ""},
+		{"no owner, no auto-start", false, &dbus.Error{Name: "org.freedesktop.DBus.Error.NameHasNoOwner"}, false, ""},
+		{"closed before it was sent", false, dbus.ErrClosed, false, ""},
+		{"a failed write", false, writeErr, false, ""},
+		{"the shell's error", false, dbus.Error{Name: "org.freedesktop.DBus.Error.NoReply"}, true, "unclear"},
+		{"no answer in time", false, context.DeadlineExceeded, true, "unclear"},
+		{"the connection broke while waiting", false, readErr, true, "unclear"},
+		{"EOF while waiting", false, io.EOF, true, "unclear"},
+	} {
+		done, why := enableOutcome(c.ok, c.err)
+		if done != c.done || why != c.why {
+			t.Errorf("%s: done %v why %q, want %v %q", c.name, done, why, c.done, c.why)
+		}
+	}
+}
+
+// Review of fix round 3: an Enable result that is waiting already when the
+// bridge is told to quit is still reported (the main process writes its
+// marker; without it the next start would turn the extension on again).
+func TestEnableResultWaitingAtQuitIsTold(t *testing.T) {
+	for _, r := range []enableResult{{done: true}, {done: true, why: "unclear"}} {
+		var out bytes.Buffer
+		b := &bridge{out: &out}
+		ch := make(chan enableResult, 1)
+		ch <- r
+		b.leaving(ch)
+		m, err := trayproto.Decode(bufio.NewReader(&out))
+		if err != nil || m.Type != trayproto.TypeShell || !m.Enabled || m.Why != r.why {
+			t.Fatalf("%+v: told %+v (%v)", r, m, err)
+		}
+	}
+	var out bytes.Buffer
+	b := &bridge{out: &out}
+	ch := make(chan enableResult, 1)
+	ch <- enableResult{}
+	b.leaving(ch)
+	b.leaving(make(chan enableResult, 1)) // nothing waiting: nothing told, at once
+	if out.Len() != 0 {
+		t.Fatalf("told %q", out.String())
 	}
 }
 

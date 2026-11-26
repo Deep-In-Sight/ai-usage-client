@@ -2,6 +2,7 @@ package trayhelper
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -398,4 +399,60 @@ func TestDarkOnlyWhenAppsAreDark(t *testing.T) {
 	light.Background.R = 0xee // the system's own
 	eq(t, menuTheme{}.palette(light), light)
 	eq(t, followDarkMode, true)
+}
+
+// Review N1: an open of the menu while a view is applied takes the new
+// view or the old one, never a mix (a header from one, rows from the
+// other): the data of every drawn item that changes is set at once,
+// before any item is switched.
+func TestAnOpenSeesOneViewOrTheOther(t *testing.T) {
+	r := drawnRun(t, true, "windows")
+	r.send(fixtureView(panelfixture.Combined()))
+	eq(t, r.next().Type, trayproto.TypeReady)
+	old := r.ui.store.snapshot()
+	r.ui.takeProbes()
+
+	in := panelfixture.Combined()
+	c := in.Snap.Providers[provider.Claude]
+	for i, p := range []float64{57, 21} {
+		c.Rows[i].Percent = new(float64)
+		*c.Rows[i].Percent = p
+	}
+	in.Snap.Providers[provider.Claude] = c
+	x := in.Snap.Providers[provider.Codex]
+	x.Rows[0].Percent = new(float64)
+	*x.Rows[0].Percent = 3
+	in.Snap.Providers[provider.Codex] = x
+	r.send(fixtureView(in))
+	waitFor(t, "the new view", func() bool {
+		_, items, _, _, _, _ := r.ui.snapshot()
+		return items["r.codex.0"].drawn != nil && items["r.codex.0"].drawn.PercentText == "3%"
+	})
+	now := r.ui.store.snapshot()
+	var changed []uint32
+	for id, it := range now {
+		if o, ok := old[id]; !ok || !reflect.DeepEqual(o, it) {
+			changed = append(changed, id)
+		}
+	}
+	if len(changed) < 3 {
+		t.Fatalf("only %d items changed", len(changed))
+	}
+	probes := r.ui.takeProbes()
+	if len(probes) == 0 {
+		t.Fatal("no write to the drawer's store")
+	}
+	for n, p := range probes {
+		news := 0
+		for _, id := range changed {
+			if reflect.DeepEqual(p[id], now[id]) {
+				news++
+			} else if !reflect.DeepEqual(p[id], old[id]) {
+				t.Fatalf("probe %d: item %d is neither the old nor the new view", n, id)
+			}
+		}
+		if news != 0 && news != len(changed) {
+			t.Fatalf("probe %d: an open would take %d of the %d changed items new, the others old", n, news, len(changed))
+		}
+	}
 }

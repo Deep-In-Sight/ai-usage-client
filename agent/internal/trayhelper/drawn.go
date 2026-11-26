@@ -50,7 +50,8 @@ func hiddenUnderHeader(id string, drawn map[string]panel.Item) bool {
 // drawStore is what each drawn item draws, by its menu id. The helper sets
 // an item's data whole while the tray's thread may be drawing it (the menu
 // can be open across a new view, RF4): a draw reads one version or the
-// other, never a mix.
+// other, never a mix; and it sets the data of all the items a view changes
+// at once (SetAll), so an open takes one view or the other (review N1).
 type drawStore struct {
 	mu   sync.Mutex
 	byID map[uint32]panel.Item
@@ -68,6 +69,19 @@ func (s *drawStore) Set(id uint32, it *panel.Item) {
 		s.byID = map[uint32]panel.Item{}
 	}
 	s.byID[id] = *it
+}
+
+// SetAll keeps each item's data, all under one lock: a snapshot taken
+// meanwhile has all of them or none (review N1).
+func (s *drawStore) SetAll(items map[uint32]panel.Item) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.byID == nil {
+		s.byID = map[uint32]panel.Item{}
+	}
+	for id, it := range items {
+		s.byID[id] = it
+	}
 }
 
 // Clear forgets every item (the menu was rebuilt: its ids are not used

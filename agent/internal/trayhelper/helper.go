@@ -479,6 +479,18 @@ func (h *helper) apply(v trayproto.Msg) {
 		}
 		h.build(shape, byID, drawing)
 	}
+	// the data of every drawn item that changes, at once: an open that
+	// comes while the items are set takes this view or the last one, never
+	// a header of one and rows of the other (review N1)
+	var sets []drawnData
+	for _, id := range trayproto.ItemIDs {
+		m, ok := h.items[id]
+		d, isDrawn := drawn[id]
+		if last, set := h.drawn[id]; ok && isDrawn && (!set || !reflect.DeepEqual(last, d)) {
+			sets = append(sets, drawnData{m, d})
+		}
+	}
+	h.d.ui.SetDrawnData(sets)
 	for _, id := range trayproto.ItemIDs {
 		m, ok := h.items[id]
 		if !ok {

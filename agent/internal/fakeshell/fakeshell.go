@@ -197,6 +197,11 @@ type Shell struct {
 	actives   int         // GetActive calls answered
 	onCall    func(call string)
 	disableEr bool
+	// the shell's own properties (Options.VersionLater, OnVersion)
+	version     string
+	versionUp   bool
+	onVersion   func(*Shell)
+	userExtsOff bool
 }
 
 // Options say how the shell answers.
@@ -226,6 +231,12 @@ type Options struct {
 	// (its properties, EnableExtension, DisableExtension) until the test
 	// ends: a shell that is stuck.
 	Hang bool
+	// VersionLater: ShellVersion is missing until PublishVersion (a shell
+	// that owns its name before it has its version); OnVersion, when set,
+	// is called with the shell each time ShellVersion is read, before it
+	// is answered.
+	VersionLater bool
+	OnVersion    func(*Shell)
 }
 
 // Start connects a shell to the bus at addr; it leaves the bus when the
@@ -258,7 +269,12 @@ func Start(t testing.TB, addr string, o Options) *Shell {
 	if !o.NoUserExtensions {
 		props[ExtensionsIface] = map[string]*prop.Prop{"UserExtensionsEnabled": {Value: !o.UserExtensionsOff, Writable: false, Emit: prop.EmitFalse}}
 	}
-	if len(props) > 0 && !o.Hang {
+	switch {
+	case o.Hang:
+	case o.VersionLater || o.OnVersion != nil:
+		s.version, s.versionUp, s.onVersion, s.userExtsOff = o.Version, !o.VersionLater, o.OnVersion, o.UserExtensionsOff
+		must(conn.Export(shellProps{s}, "/org/gnome/Shell", "org.freedesktop.DBus.Properties"))
+	case len(props) > 0:
 		_, err := prop.Export(conn, "/org/gnome/Shell", props)
 		must(err)
 	}
@@ -333,6 +349,41 @@ type ActiveGate struct {
 	open    chan struct{}
 	once    sync.Once
 	hangs   bool // Options.Hang's: DisableExtension waits on it too
+}
+
+// shellProps is the shell's properties for Options.VersionLater and
+// OnVersion: ShellVersion (once published) and UserExtensionsEnabled.
+type shellProps struct{ s *Shell }
+
+func (p shellProps) Get(iface, name string) (dbus.Variant, *dbus.Error) {
+	p.s.mu.Lock()
+	v, up, f, off := p.s.version, p.s.versionUp, p.s.onVersion, p.s.userExtsOff
+	p.s.mu.Unlock()
+	switch {
+	case iface == ShellName && name == "ShellVersion" && up && v != "":
+		if f != nil {
+			f(p.s)
+		}
+		return dbus.MakeVariant(v), nil
+	case iface == ExtensionsIface && name == "UserExtensionsEnabled":
+		return dbus.MakeVariant(!off), nil
+	}
+	return dbus.Variant{}, dbus.NewError("org.freedesktop.DBus.Error.UnknownProperty", []any{"no property " + iface + "." + name})
+}
+
+func (p shellProps) GetAll(iface string) (map[string]dbus.Variant, *dbus.Error) {
+	return map[string]dbus.Variant{}, nil
+}
+
+func (p shellProps) Set(iface, name string, v dbus.Variant) *dbus.Error {
+	return dbus.NewError("org.freedesktop.DBus.Error.PropertyReadOnly", []any{name})
+}
+
+// PublishVersion makes ShellVersion readable (Options.VersionLater).
+func (s *Shell) PublishVersion() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.versionUp = true
 }
 
 // hangingProps is the stuck shell's properties: no Get is answered.

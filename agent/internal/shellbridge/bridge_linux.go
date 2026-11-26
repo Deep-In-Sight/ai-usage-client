@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"os"
 	"time"
 
@@ -240,6 +241,10 @@ func (b *bridge) run(ctx context.Context, lines <-chan trayproto.Msg) int {
 	waiting, asking, late := true, false, false
 	deadline := b.o.Clock.After(ShellWait)
 	var retry <-chan time.Time
+	// after ShellWait a new owner of org.gnome.Shell is asked again every
+	// versionRetry until this, as at the start (a shell owns its name a
+	// moment before it has its version), then every lateRetry
+	var fastUntil time.Time
 	versions := make(chan version, 1)
 	ask := func() {
 		if !waiting || asking || retry != nil || b.owner == "" {
@@ -254,7 +259,8 @@ func (b *bridge) run(ctx context.Context, lines <-chan trayproto.Msg) int {
 		}()
 	}
 	ask()
-	enabled := make(chan bool, 1)
+	enabled := make(chan enableResult, 1)
+	defer b.leaving(enabled)
 	for {
 		select {
 		case <-ctx.Done():
@@ -280,6 +286,9 @@ func (b *bridge) run(ctx context.Context, lines <-chan trayproto.Msg) int {
 			}
 			if b.owner != before {
 				retry = nil // another shell: asked at once
+				if b.owner != "" {
+					fastUntil = b.o.Clock.Now().Add(ShellWait)
+				}
 			}
 			ask()
 		case <-deadline:
@@ -299,7 +308,7 @@ func (b *bridge) run(ctx context.Context, lines <-chan trayproto.Msg) int {
 			asking = false
 			switch {
 			case !waiting:
-			case v.err != nil && late:
+			case v.err != nil && late && !b.o.Clock.Now().Before(fastUntil):
 				retry = b.o.Clock.After(lateRetry)
 			case v.err != nil:
 				retry = b.o.Clock.After(versionRetry)
@@ -310,10 +319,8 @@ func (b *bridge) run(ctx context.Context, lines <-chan trayproto.Msg) int {
 				waiting, deadline = false, nil
 				b.ready(v.major, v.text, enabled)
 			}
-		case ok := <-enabled:
-			if ok {
-				b.send(trayproto.Msg{Type: trayproto.TypeShell, Enabled: true})
-			}
+		case r := <-enabled:
+			b.reportEnabled(r)
 		case a := <-b.locks:
 			b.lockAnswer(a)
 		case <-b.settle:
@@ -352,13 +359,9 @@ func (b *bridge) notYet(why string) {
 // ready: a supported shell. The extension's files are made current for it
 // (design 6.6: at every start), the main process hears that the shell is
 // supported (it may then judge an attach wait without an attach: review
-// I1), and the extension is turned on once when the hello asked for it.
-// Only a definite "no" of EnableExtension ((false,): the shell has not read
-// the extension yet) leaves the turning on to the next start; an error or
-// no answer in time may have turned it on all the same (Disable once did),
-// so it counts as done: the user's own "off" is never undone (review A-I1,
-// design 6.6).
-func (b *bridge) ready(major int, v string, enabled chan<- bool) {
+// I1), and the extension is turned on once when the hello asked for it
+// (enableOutcome says when that counts as done).
+func (b *bridge) ready(major int, v string, enabled chan<- enableResult) {
 	log.Printf("GNOME Shell %s", v)
 	if dir, err := gnomeext.Dir(b.o.Getenv, b.o.Home); err != nil {
 		log.Printf("the panel extension's folder: %v", err)
@@ -377,16 +380,64 @@ func (b *bridge) ready(major int, v string, enabled chan<- bool) {
 		c, cancel := context.WithTimeout(context.Background(), b.enableTimeout)
 		defer cancel()
 		ok, err := gnomeext.Enable(c, b.conn, gnomeext.UUID)
+		done, why := enableOutcome(ok, err)
 		switch {
-		case err != nil:
-			log.Printf("turning the panel extension on: %v (it may have taken effect: not asked again)", err)
-		case !ok:
-			log.Print("the shell has not read the panel extension yet (it does at the next login)")
-		default:
+		case err == nil && ok:
 			log.Print("turned the panel extension on")
+		case err == nil:
+			log.Print("the shell has not read the panel extension yet (it does at the next login)")
+		case !done:
+			log.Printf("turning the panel extension on: %v (the call never reached the shell: asked again at the next start)", err)
+		default:
+			log.Printf("turning the panel extension on: %v (it may have taken effect: not asked again)", err)
 		}
-		enabled <- ok || err != nil
+		enabled <- enableResult{done, why}
 	}()
+}
+
+// enableResult is an Enable's outcome: done (the main process writes its
+// gnome-panel-enabled marker and no later start asks again) and, when done
+// without a clear yes, why "unclear".
+type enableResult struct {
+	done bool
+	why  string
+}
+
+// enableOutcome: a yes is done; a definite "no" ((false,): the shell has
+// not read the extension yet) and an error that proves the call never
+// reached the shell (the bus answered that nobody owns org.gnome.Shell, the
+// connection was closed before it was sent, or the write failed) are not:
+// the next start asks again. Any other error, or no answer in time, may
+// have turned it on all the same (Disable once did), so it is done, why
+// "unclear": the user's own "off" is never undone (review A-I1, design 6.6).
+func enableOutcome(ok bool, err error) (done bool, why string) {
+	var op *net.OpError
+	switch name := dbusErrorName(err); {
+	case err == nil:
+		return ok, ""
+	case name == "org.freedesktop.DBus.Error.ServiceUnknown" || name == "org.freedesktop.DBus.Error.NameHasNoOwner",
+		errors.Is(err, dbus.ErrClosed), errors.As(err, &op) && op.Op == "write":
+		return false, ""
+	}
+	return true, "unclear"
+}
+
+// reportEnabled tells the main process an Enable that counts as done.
+func (b *bridge) reportEnabled(r enableResult) {
+	if r.done {
+		b.send(trayproto.Msg{Type: trayproto.TypeShell, Enabled: true, Why: r.why})
+	}
+}
+
+// leaving: the bridge ends; an Enable result that is waiting already is
+// still told (it may have come with the quit), so that the main process
+// writes its marker and no later start turns the extension on again.
+func (b *bridge) leaving(enabled <-chan enableResult) {
+	select {
+	case r := <-enabled:
+		b.reportEnabled(r)
+	default:
+	}
 }
 
 // line handles a line of the main process.

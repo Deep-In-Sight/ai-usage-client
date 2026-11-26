@@ -80,7 +80,8 @@ type Event struct {
 	// The bridge's shell line (Provider BridgeSlot): the panel extension
 	// attached (true) or went away (false); a GNOME Shell the panel
 	// supports answered (Supported true) or the shell is not one (false);
-	// turning the extension on succeeded (Enabled). Why says why attached
+	// turning the extension on counts as done (Enabled; Why "unclear":
+	// without a clear yes, it may have taken effect). Why says why attached
 	// or supported is false ("detach", "owner", "ping", "unsupported 44.2",
 	// "no shell": the bridge then waits on for a shell).
 	Attached  *bool
@@ -748,7 +749,7 @@ func (s *Supervisor) read(id provider.ID, gen int, p Proc) {
 			// before its line was read: still never asked again, and the
 			// main process writes its marker (review m4)
 			s.bridgeEnabled = true
-			s.queue.put(Event{Provider: id, Enabled: true})
+			s.queue.put(Event{Provider: id, Enabled: true, Why: m.Why})
 		}
 		if current {
 			switch {

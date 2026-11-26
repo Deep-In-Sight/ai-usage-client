@@ -49,6 +49,13 @@ type fakeUI struct {
 	// nativeActions: a ui that draws keeps the text items its own
 	// (macOS)
 	nativeActions atomic.Bool
+	// store is what each drawn item draws, as the real ui's drawer keeps
+	// it (by a number per item); probes are what an open of the menu would
+	// take from it (its snapshot) at each moment one could come: after
+	// each write to it (review N1)
+	store  drawStore
+	nextID uint32
+	probes []map[uint32]panel.Item
 }
 
 type fakeItem struct {
@@ -62,6 +69,8 @@ type fakeItem struct {
 	clicked                   chan struct{}
 	drawn                     *panel.Item // what SetDrawn last gave (nil: a text item)
 	drawnSets                 int
+	ui                        *fakeUI
+	num                       uint32 // its number in ui.store
 	// sets: the calls in order ("title", "visible=false", "drawn", ...)
 	sets []string
 }
@@ -102,7 +111,8 @@ func (u *fakeUI) endSession() {
 func (u *fakeUI) AddItem(id string, checkbox bool) uiItem {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	it := &fakeItem{id: id, checkbox: checkbox, clicked: make(chan struct{})}
+	u.nextID++
+	it := &fakeItem{id: id, checkbox: checkbox, clicked: make(chan struct{}), ui: u, num: u.nextID}
 	u.layout = append(u.layout, id)
 	u.items[id] = it
 	return it
@@ -126,6 +136,33 @@ func (u *fakeUI) Reset() {
 	}
 	u.layout, u.items = nil, map[string]*fakeItem{}
 	u.resets++
+	u.store.Clear()
+}
+
+func (u *fakeUI) SetDrawnData(sets []drawnData) {
+	all := map[uint32]panel.Item{}
+	for _, s := range sets {
+		all[s.item.(*fakeItem).num] = s.it
+	}
+	u.store.SetAll(all)
+	u.probe()
+}
+
+// probe keeps what an open would take now (review N1).
+func (u *fakeUI) probe() {
+	snap := u.store.snapshot()
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.probes = append(u.probes, snap)
+}
+
+// takeProbes are the probes since the last call.
+func (u *fakeUI) takeProbes() []map[uint32]panel.Item {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	p := u.probes
+	u.probes = nil
+	return p
 }
 func (u *fakeUI) SetIcon(img []byte) {
 	u.mu.Lock()
@@ -175,9 +212,11 @@ func (i *fakeItem) SetVisible(b bool) {
 		i.sets = append(i.sets, "visible=false")
 	}
 }
+
+// SetDrawn does what the real ui's does: the drawer gets the item's data,
+// then the item is switched to drawn (where an open can come between).
 func (i *fakeItem) SetDrawn(it *panel.Item) {
 	i.mu.Lock()
-	defer i.mu.Unlock()
 	if it != nil {
 		c := *it
 		it = &c
@@ -185,6 +224,11 @@ func (i *fakeItem) SetDrawn(it *panel.Item) {
 	i.drawn = it
 	i.drawnSets++
 	i.sets = append(i.sets, "drawn")
+	i.mu.Unlock()
+	if i.ui != nil {
+		i.ui.store.Set(i.num, it)
+		i.ui.probe()
+	}
 }
 func (i *fakeItem) SetChecked(b bool) { i.mu.Lock(); i.checked = b; i.mu.Unlock() }
 func (i *fakeItem) SetImage(b []byte) { i.mu.Lock(); i.image = b; i.mu.Unlock() }

@@ -357,7 +357,7 @@ func (l *trayLoop) mode() string {
 func (l *trayLoop) bridgeEvent(e supervisor.Event) {
 	switch {
 	case e.Enabled:
-		l.markEnabled()
+		l.markEnabled(e.Why)
 	case e.Supported != nil && *e.Supported:
 		l.shellUp, l.waited = true, false
 	case e.Attached != nil && *e.Attached:
@@ -473,13 +473,19 @@ func (l *trayLoop) mark() {
 }
 
 // markEnabled writes the gnome-panel-enabled marker once: no bridge turns
-// the extension on again (design 6.6).
-func (l *trayLoop) markEnabled() {
+// the extension on again (design 6.6). why "unclear": the shell gave no
+// clear yes (it may have turned it on), which the log says instead of
+// "turned on".
+func (l *trayLoop) markEnabled(why string) {
 	p := l.env.Dirs.File(paths.PanelEnabledFile)
 	if _, err := os.Stat(p); !errors.Is(err, fs.ErrNotExist) {
 		return
 	}
-	l.log.Print("usage panel: the extension was turned on")
+	if why == "" {
+		l.log.Print("usage panel: the extension was turned on")
+	} else {
+		l.log.Print("usage panel: turning the extension on gave no clear answer (it may have taken effect); not asked again")
+	}
 	if err := os.WriteFile(p, nil, 0o600); err != nil {
 		l.log.Printf("usage panel: %v", err)
 	}

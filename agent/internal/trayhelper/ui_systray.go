@@ -43,6 +43,20 @@ func (u systrayUI) Reset() {
 	}
 }
 
+// SetDrawnData gives the drawer every item's data under one lock.
+func (u systrayUI) SetDrawnData(sets []drawnData) {
+	if u.drawer == nil || len(sets) == 0 {
+		return
+	}
+	all := make(map[uint32]panel.Item, len(sets))
+	for _, s := range sets {
+		if i, ok := s.item.(systrayItem); ok {
+			all[i.m.ID()] = s.it
+		}
+	}
+	u.drawer.SetAll(all)
+}
+
 func (u systrayUI) AddItem(_ string, checkbox bool) uiItem {
 	if checkbox {
 		return systrayItem{systray.AddMenuItemCheckbox("", "", false), u.iconDir, u.drawer}

@@ -84,7 +84,8 @@ type Msg struct {
 	Text    string `json:"text,omitempty"`    // notice
 	ID      string `json:"id,omitempty"`      // click: the item's id
 	// waiting: "no StatusNotifierWatcher", "no taskbar", …; shell: "detach",
-	// "ping", "owner", "unsupported 44.2", "no shell"
+	// "ping", "owner", "unsupported 44.2", "no shell"; with Enabled,
+	// "unclear": no clear yes came (an error or no answer in time)
 	Why string `json:"why,omitempty"`
 	// Fields added after v0.9.0 (design 6.5); every one is left out when
 	// not set, so older lines read the same.
@@ -93,7 +94,7 @@ type Msg struct {
 	Panel      *Panel `json:"panel,omitempty"`       // view: the usage panel, the same for every helper
 	Attached   *bool  `json:"attached,omitempty"`    // shell: the panel extension attached (true) or went away (false)
 	Supported  *bool  `json:"supported,omitempty"`   // shell: true once a GNOME Shell the panel supports answered, false when it is not one (or none came)
-	Enabled    bool   `json:"enabled,omitempty"`     // shell: turning the extension on succeeded
+	Enabled    bool   `json:"enabled,omitempty"`     // shell: turning the extension on counts as done (Why "unclear": it may have)
 }
 
 // Panel is the usage panel (design 6.1): the finished view the Windows and

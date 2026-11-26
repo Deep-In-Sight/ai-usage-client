@@ -406,7 +406,8 @@ func (g gatedReader) Read(b []byte) (int, error) {
 
 // Review m4: a bridge that says enabled and ends at once (its line read
 // after its end was handled) still spends the enable-once: the event
-// comes, and the next bridge's hello does not ask again.
+// comes (with its why: "unclear", an Enable without a clear yes), and the
+// next bridge's hello does not ask again.
 func TestEnabledLineAfterTheBridgeEnded(t *testing.T) {
 	gate := make(chan struct{})
 	var first atomic.Bool
@@ -417,7 +418,7 @@ func TestEnabledLineAfterTheBridgeEnded(t *testing.T) {
 			fp := newFakeProc(p, uid, token, false)
 			h.spawns <- fp
 			if p == BridgeSlot && first.Swap(false) {
-				return &gatedProc{fp, gatedReader{gate, strings.NewReader(`{"v":1,"type":"shell","enabled":true}` + "\n")}}, nil
+				return &gatedProc{fp, gatedReader{gate, strings.NewReader(`{"v":1,"type":"shell","enabled":true,"why":"unclear"}` + "\n")}}, nil
 			}
 			return fp, nil
 		}
@@ -430,7 +431,7 @@ func TestEnabledLineAfterTheBridgeEnded(t *testing.T) {
 	b.exit(trayproto.ExitSessionLost)
 	h.event(isExitOf(BridgeSlot))
 	close(gate)
-	if e := h.event(func(e Event) bool { return e.Enabled }); e.Provider != BridgeSlot {
+	if e := h.event(func(e Event) bool { return e.Enabled }); e.Provider != BridgeSlot || e.Why != "unclear" {
 		t.Fatalf("%+v", e)
 	}
 	h.clk.Advance(lostDelay)

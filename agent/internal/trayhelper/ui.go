@@ -37,6 +37,17 @@ type ui interface {
 	Shown() bool
 	// IconSize is the notification area's icon size (Windows; 0 elsewhere).
 	IconSize() int
+	// SetDrawnData gives the drawer the data of all these items at once
+	// (one lock: an open of the menu takes all of them or none, review
+	// N1); each item's SetDrawn then switches it. Nothing on a ui that
+	// does not draw.
+	SetDrawnData(sets []drawnData)
+}
+
+// drawnData is one item's new drawing in a view.
+type drawnData struct {
+	item uiItem
+	it   panel.Item
 }
 
 type uiItem interface {
@@ -55,6 +66,8 @@ type uiItem interface {
 // drawer; nil where the ui does not draw).
 type itemDrawer interface {
 	Set(id uint32, it *panel.Item)
+	// SetAll keeps each item's data, all under one lock.
+	SetAll(items map[uint32]panel.Item)
 	// Clear forgets every item (the menu is rebuilt).
 	Clear()
 	// Failed reports that the drawing stopped for good (a panic): the
