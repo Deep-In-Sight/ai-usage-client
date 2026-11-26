@@ -46,6 +46,9 @@ type Item struct {
 	ChildLabel string `json:"child_label,omitempty"`
 	// the view's own AXEnabled (its menu item's isEnabled)
 	ChildEnabled bool `json:"child_enabled,omitempty"`
+	// the view's own size (0 when it has none)
+	ChildW float64 `json:"child_w,omitempty"`
+	ChildH float64 `json:"child_h,omitempty"`
 }
 
 // Facts are what one run measured.
@@ -142,6 +145,14 @@ func viewLabel(it Item) string {
 	return it.Label
 }
 
+// viewSize is a view item's size: its view's own, else the menu item's.
+func viewSize(it Item) (w, h float64) {
+	if it.ChildW > 0 && it.ChildH > 0 {
+		return it.ChildW, it.ChildH
+	}
+	return it.Rect.W, it.Rect.H
+}
+
 // viewRole is the role of what says that label.
 func viewRole(it Item) string {
 	if it.ChildLabel != "" {
@@ -209,8 +220,9 @@ func judge(f Facts, want []Expected) []string {
 		if viewRole(it) != "AXMenuItem" {
 			p = append(p, fmt.Sprintf("%s: its view's role is %q, want AXMenuItem", w.ID, viewRole(it)))
 		}
-		if it.Rect.W < float64(m.Width) || math.Abs(it.Rect.W-widest) > 0.5 {
-			p = append(p, fmt.Sprintf("%s: %.0f pt wide, want the menu's %.0f (at least %d)", w.ID, it.Rect.W, widest, m.Width))
+		vw, vh := viewSize(it)
+		if vw < float64(m.Width) || math.Abs(vw-widest) > 0.5 {
+			p = append(p, fmt.Sprintf("%s: %.0f pt wide, want the menu's %.0f (at least %d)", w.ID, vw, widest, m.Width))
 		}
 		var h float64
 		switch w.Kind {
@@ -219,11 +231,11 @@ func judge(f Facts, want []Expected) []string {
 		case "row":
 			h = float64(m.Row)
 		}
-		if h > 0 && math.Abs(it.Rect.H-h) > 0.5 {
-			p = append(p, fmt.Sprintf("%s: %.0f pt high, want %.0f", w.ID, it.Rect.H, h))
+		if h > 0 && math.Abs(vh-h) > 0.5 {
+			p = append(p, fmt.Sprintf("%s: %.0f pt high, want %.0f", w.ID, vh, h))
 		}
-		if h == 0 && it.Rect.H < float64(m.Item)-0.5 {
-			p = append(p, fmt.Sprintf("%s: %.0f pt high, want at least %d", w.ID, it.Rect.H, m.Item))
+		if h == 0 && vh < float64(m.Item)-0.5 {
+			p = append(p, fmt.Sprintf("%s: %.0f pt high, want at least %d", w.ID, vh, m.Item))
 		}
 		if w.Kind == "header" && it.ChildEnabled {
 			p = append(p, fmt.Sprintf("%s: a header can be clicked", w.ID))
@@ -298,14 +310,15 @@ func judgeAgent(f Facts) []string {
 		if viewLabel(it) == "" {
 			continue
 		}
+		vw, vh := viewSize(it)
 		switch {
-		case math.Abs(it.Rect.H-float64(m.Header)) <= 0.5:
+		case math.Abs(vh-float64(m.Header)) <= 0.5:
 			headers++
-		case math.Abs(it.Rect.H-float64(m.Row)) <= 0.5:
+		case math.Abs(vh-float64(m.Row)) <= 0.5:
 			rows++
 		}
-		if it.Rect.W < float64(m.Width) || math.Abs(it.Rect.W-widest) > 0.5 {
-			p = append(p, fmt.Sprintf("%q: %.0f pt wide, want the menu's %.0f", viewLabel(it), it.Rect.W, widest))
+		if vw < float64(m.Width) || math.Abs(vw-widest) > 0.5 {
+			p = append(p, fmt.Sprintf("%q: %.0f pt wide, want the menu's %.0f", viewLabel(it), vw, widest))
 		}
 	}
 	if headers < 1 || rows < 1 {
@@ -447,7 +460,8 @@ func summary(f Facts, agent bool) string {
 		if viewLabel(it) != "" {
 			v = "*"
 		}
-		fmt.Fprintf(&b, " %s%s %.0fx%.0f", name, v, it.Rect.W, it.Rect.H)
+		w, h := viewSize(it)
+		fmt.Fprintf(&b, " %s%s %.0fx%.0f", name, v, w, h)
 	}
 	for _, id := range []string{"r.claude.0", "r.codex.0"} {
 		if bar, ok := f.Bars[id]; ok {

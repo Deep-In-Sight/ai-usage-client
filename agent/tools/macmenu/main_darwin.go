@@ -244,8 +244,8 @@ static int mm_put(char *buf, int len, int n, const char *line) {
 
 // The status item's open menu: "menu|x|y|w|h", then for each item
 // "item|role|title|description|enabled|selected|x|y|w|h|child role|child
-// description|child enabled" (its first child: a view item's view). 0: no
-// open menu.
+// description|child enabled|child width|child height" (its first child: a
+// view item's view). 0: no open menu.
 static int mm_menu(int pid, char *buf, int n) {
 	buf[0] = 0;
 	AXUIElementRef s = mm_status(pid);
@@ -282,6 +282,7 @@ static int mm_menu(int pid, char *buf, int n) {
 					mm_rect(it, ir);
 					int en = mm_bool(it, "AXEnabled"), sel = mm_bool(it, "AXSelected");
 					int cen = -1;
+					double cr[4] = {0, 0, 0, 0};
 					crole[0] = 0;
 					clabel[0] = 0;
 					CFTypeRef ck = mm_attr(it, "AXChildren");
@@ -290,11 +291,12 @@ static int mm_menu(int pid, char *buf, int n) {
 						mm_named(c, "AXRole", crole, sizeof crole);
 						mm_named(c, "AXDescription", clabel, sizeof clabel);
 						cen = mm_bool(c, "AXEnabled");
+						mm_rect(c, cr);
 					}
 					if (ck != NULL) {
 						CFRelease(ck);
 					}
-					snprintf(line, sizeof line, "item|%s|%s|%s|%d|%d|%.1f|%.1f|%.1f|%.1f|%s|%s|%d\n", irole, title, desc, en, sel, ir[0], ir[1], ir[2], ir[3], crole, clabel, cen);
+					snprintf(line, sizeof line, "item|%s|%s|%s|%d|%d|%.1f|%.1f|%.1f|%.1f|%s|%s|%d|%.1f|%.1f\n", irole, title, desc, en, sel, ir[0], ir[1], ir[2], ir[3], crole, clabel, cen, cr[2], cr[3]);
 					len = mm_put(buf, len, n, line);
 				}
 			}
@@ -867,9 +869,9 @@ func readMenu(f *Facts, pid int) {
 		switch {
 		case parts[0] == "menu" && len(parts) == 5:
 			f.Menu = Rect{num(1), num(2), num(3), num(4)}
-		case parts[0] == "item" && len(parts) == 13:
+		case parts[0] == "item" && len(parts) == 15:
 			f.Items = append(f.Items, Item{Role: parts[1], Title: parts[2], Label: parts[3], Enabled: parts[4] == "1", Selected: parts[5] == "1",
-				Rect: Rect{num(6), num(7), num(8), num(9)}, ChildRole: parts[10], ChildLabel: parts[11], ChildEnabled: parts[12] == "1"})
+				Rect: Rect{num(6), num(7), num(8), num(9)}, ChildRole: parts[10], ChildLabel: parts[11], ChildEnabled: parts[12] == "1", ChildW: num(13), ChildH: num(14)})
 		}
 	}
 	if f.Menu.W <= 0 || f.Menu.H <= 0 {

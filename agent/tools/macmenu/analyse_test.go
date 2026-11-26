@@ -68,6 +68,9 @@ func good() (Facts, []Expected) {
 		}
 		it.ChildEnabled = w.View && it.Enabled
 		it.Rect = Rect{105, y, 336, h}
+		if w.View {
+			it.ChildW, it.ChildH = 336, h
+		}
 		y += h
 		f.Items = append(f.Items, it)
 	}
@@ -97,11 +100,13 @@ func TestJudgeFindsEachFault(t *testing.T) {
 		"not opened":     {func(f *Facts) { f.Opened = "" }, "did not open"},
 		"no view":        {func(f *Facts) { f.Items[1].ChildLabel, f.Items[1].ID = "", "" }, "r.claude.0: no menu item whose view says"},
 		"text role":      {func(f *Facts) { f.Items[1].ChildRole = "AXStaticText" }, "role is \"AXStaticText\""},
-		"narrow":         {func(f *Facts) { f.Items[1].Rect.W = 300 }, "r.claude.0: 300 pt wide"},
+		"narrow":         {func(f *Facts) { f.Items[1].Rect.W, f.Items[1].ChildW = 300, 300 }, "r.claude.0: 300 pt wide"},
+		"narrow view":    {func(f *Facts) { f.Items[0].ChildW = 316 }, "h.claude: 316 pt wide, want the menu's 336"},
+		"view low":       {func(f *Facts) { f.Items[0].ChildH = 36 }, "h.claude: 36 pt high, want 32"},
 		"not the menu's": {func(f *Facts) { f.Items[0].Rect.W = 500 }, "want the menu's 500"},
-		"row height":     {func(f *Facts) { f.Items[1].Rect.H = 22 }, "r.claude.0: 22 pt high, want 64"},
-		"header height":  {func(f *Facts) { f.Items[0].Rect.H = 40 }, "h.claude: 40 pt high, want 32"},
-		"server low":     {func(f *Facts) { f.Items[7].Rect.H = 20 }, "server: 20 pt high, want at least 30"},
+		"row height":     {func(f *Facts) { f.Items[1].Rect.H, f.Items[1].ChildH = 22, 22 }, "r.claude.0: 22 pt high, want 64"},
+		"header height":  {func(f *Facts) { f.Items[0].Rect.H, f.Items[0].ChildH = 40, 40 }, "h.claude: 40 pt high, want 32"},
+		"server low":     {func(f *Facts) { f.Items[7].Rect.H, f.Items[7].ChildH = 20, 20 }, "server: 20 pt high, want at least 30"},
 		"header clicks":  {func(f *Facts) { f.Items[0].ChildEnabled = true }, "a header can be clicked"},
 		"header sends":   {func(f *Facts) { f.HeaderClick = "h.claude" }, "a click on Claude's header sent \"h.claude\""},
 		"header closes":  {func(f *Facts) { f.HeaderStayed = false }, "the menu closed on a click on Claude's header"},
