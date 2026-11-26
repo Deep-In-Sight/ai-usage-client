@@ -93,11 +93,30 @@ func wantsBridge(goos string, getenv func(string) string) bool {
 }
 
 // panelEnableOnce: the bridge may turn the panel extension on, because no
-// bridge has done so yet (no gnome-panel-enabled marker; design 6.6). Asked
-// at each start of the bridge (ruling F15).
-func (env Env) panelEnableOnce() bool {
-	_, err := os.Stat(env.Dirs.File(paths.PanelEnabledFile))
-	return errors.Is(err, fs.ErrNotExist)
+// bridge has done so yet (no gnome-panel-enabled marker; design 6.6) and
+// the marker can be written once it has. Asked at each start of the bridge
+// (ruling F15). The check comes first (review A-m5): with a data folder the
+// agent cannot write, the marker would never be there and every login
+// would turn the extension on again, undoing the user's "off"; the agent
+// then never turns it on (it can be turned on by hand). lg (nil: none)
+// gets that reason.
+func (env Env) panelEnableOnce(lg *log.Logger) bool {
+	if _, err := os.Stat(env.Dirs.File(paths.PanelEnabledFile)); !errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	// an empty file next to the marker, as the marker is written
+	f, err := os.CreateTemp(env.Dirs.Data, "."+paths.PanelEnabledFile+"-check-*")
+	if err == nil {
+		name := f.Name()
+		err = errors.Join(f.Close(), os.Remove(name))
+	}
+	if err != nil {
+		if lg != nil {
+			lg.Printf("usage panel: the data folder cannot be written (%v): the extension is not turned on, since the agent could not remember that it did", err)
+		}
+		return false
+	}
+	return true
 }
 
 // inUse: the provider's sign-in is there (an expired one too: the account

@@ -227,7 +227,7 @@ func runCmd(env Env, args []string) int {
 		notice = text.Notice(env.goos())
 	}
 	sup := supervisor.New(supervisor.Options{Spawn: env.helperSpawner(logger), IconDir: env.iconDir,
-		Standby: watchesDesktop(env.goos()), BridgeEnableOnce: env.panelEnableOnce, Clock: env.Clock, Log: logger})
+		Standby: watchesDesktop(env.goos()), BridgeEnableOnce: func() bool { return env.panelEnableOnce(logger) }, Clock: env.Clock, Log: logger})
 	loop := &trayLoop{env: env, ctrl: ctrl, sup: sup, updates: updates, log: logger, setMode: e.SetClientMode,
 		known: []provider.ID{provider.Claude, provider.Codex}, extra: testHelpers(env),
 		bridge: bridgeReady && wantsBridge(env.goos(), env.Getenv)}

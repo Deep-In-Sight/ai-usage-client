@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -128,7 +129,7 @@ func newLoopRig(t *testing.T, snap status.Snapshot, prepare func(te *testEnv)) *
 		r.opened = append(r.opened, u)
 		return nil
 	}
-	sup := supervisor.New(supervisor.Options{Spawn: r.spawn, BridgeEnableOnce: te.Env.panelEnableOnce, Clock: r.clk,
+	sup := supervisor.New(supervisor.Options{Spawn: r.spawn, BridgeEnableOnce: func() bool { return te.Env.panelEnableOnce(nil) }, Clock: r.clk,
 		Log: log.New(io.Discard, "", 0)})
 	cfg := mustParse(t, `{"server_urls":["http://192.0.2.10:8700"],"ingest_key":"k-0123456789"}`)
 	r.loop = &trayLoop{env: te.Env, ctrl: newController(cfg, snap, nil, nil), sup: sup, updates: r.updates,
@@ -687,6 +688,38 @@ func TestHelloEnableOnceFollowsMarker(t *testing.T) {
 	r.handled(bridgeExit)
 	r.clk.Advance(time.Second)
 	eq(t, r.bridge().hello.EnableOnce, false)
+}
+
+// Review A-m5: the agent turns the extension on only when it can write the
+// gnome-panel-enabled marker afterwards. With a data folder it cannot
+// write, the marker would never be there and every later login would
+// turn the extension on again, the user's "off" undone; so it never asks.
+// The check leaves nothing in the folder.
+func TestNoEnableWhenTheMarkerCannotBeWritten(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a folder made read-only by its mode is POSIX's")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a read-only folder")
+	}
+	dir := t.TempDir()
+	env := Env{Dirs: paths.Dirs{Data: dir}}
+	eq(t, env.panelEnableOnce(nil), true)
+	left, err := os.ReadDir(dir)
+	must(t, err)
+	eq(t, len(left), 0)
+	must(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	var logs strings.Builder
+	eq(t, env.panelEnableOnce(log.New(&logs, "", 0)), false)
+	if !strings.Contains(logs.String(), "usage panel: the data folder cannot be written") {
+		t.Fatalf("log: %q", logs.String())
+	}
+	eq(t, env.panelEnableOnce(nil), false)
+	// the marker there: never again, whatever the folder
+	must(t, os.Chmod(dir, 0o755))
+	must(t, os.WriteFile(env.Dirs.File(paths.PanelEnabledFile), nil, 0o600))
+	eq(t, env.panelEnableOnce(nil), false)
 }
 
 // client.mode is "tray" while the panel is attached, though no icon is up.
