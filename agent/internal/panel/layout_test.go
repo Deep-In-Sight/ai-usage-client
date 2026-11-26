@@ -90,6 +90,11 @@ func TestSizes(t *testing.T) {
 		{"header and problem", Item{Kind: "header", Name: "Codex", Problem: "Sign-in expired: open Codex to renew it"}, 320, 32 + 28},
 		{"header and a long problem", Item{Kind: "header", Name: "Codex", Problem: strings.Repeat("word ", 12)}, 320, 32 + 28 + 18},
 		{"row", row("normal", 42), 320, 64},
+		// a row is as wide as its texts need, as a header is (review
+		// A-m6): its reset line, or its label, 8 px and its percent
+		{"long reset line", Item{Kind: "row", Label: "5-hour", PercentText: "100%", Detail: strings.Repeat("x", 44)}, 16 + 44*7 + 16, 64},
+		{"long label", Item{Kind: "row", Label: strings.Repeat("y", 40), PercentText: "42%", Detail: "Resets Fri 21:20"}, 16 + 40*8 + 8 + 3*8 + 16, 64},
+		{"long label, no percent", Item{Kind: "row", Label: strings.Repeat("y", 40)}, 16 + 40*8 + 16, 64},
 		{"more", Item{Kind: "more", Label: "More limits on the dashboard"}, 320, 30},
 		{"action", Item{Kind: "action", Text: "Refresh now", Enabled: true}, 320, 30},
 		{"info", Item{Kind: "info", Text: "Server connected", Dim: true}, 320, 30},

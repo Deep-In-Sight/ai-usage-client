@@ -62,8 +62,8 @@ type Measurer interface {
 
 // Size is an item's size: what Windows is told when it measures the item,
 // and the height Layout fills. The width is the panel's, or more when a
-// header's or an action's text needs it (Windows widens the menu to its
-// widest item: nothing is cut, design 2); a line that cannot be clicked
+// header's, a row's or an action's text needs it (Windows widens the menu
+// to its widest item: nothing is cut, design 2); a line that cannot be clicked
 // (the server line, the sign-in prompt) wraps at the panel's text width
 // instead, as a header's problem line does, so the panel keeps its width
 // in the usual team case. The height grows with the menu font and the
@@ -78,7 +78,7 @@ func Size(it Item, m Metrics, tm Measurer) (w, h int) {
 		}
 		return max(m.Width, headerWidth(it, m, tm)), h
 	case "row":
-		return m.Width, max(m.Row, rowBlock(m, tm)+2*m.px(4))
+		return max(m.Width, rowWidth(it, m, tm)), max(m.Row, rowBlock(m, tm)+2*m.px(4))
 	case "action":
 		return max(m.Width, m.Pad+m.Check+tm.TextWidth(Regular, it.Text)+m.Pad), textHeight(m, line)
 	case "info":
@@ -97,6 +97,18 @@ func Size(it Item, m Metrics, tm Measurer) (w, h int) {
 func headerWidth(it Item, m Metrics, tm Measurer) int {
 	return m.Pad + m.Picture + m.px(8) + tm.TextWidth(Bold, it.Name) + m.px(8) + tm.TextWidth(Regular, it.Account) +
 		m.px(8) + tm.TextWidth(Regular, it.Updated) + m.Pad
+}
+
+// rowWidth is what a row's lines need, as a header's does (review A-m6:
+// with a large menu font a blocked limit's reset line is wider than the
+// panel): its label, 8 px and its percent; its reset line; between the
+// pads.
+func rowWidth(it Item, m Metrics, tm Measurer) int {
+	first := tm.TextWidth(SemiBold, it.Label)
+	if it.PercentText != "" {
+		first += m.px(8) + tm.TextWidth(Bold, it.PercentText)
+	}
+	return m.Pad + max(first, tm.TextWidth(Regular, it.Detail)) + m.Pad
 }
 
 // SeparatorSize is a separator's size (it adds no width).

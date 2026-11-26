@@ -25,9 +25,12 @@ func (f measurer) TextWidth(font panel.Font, s string) int {
 }
 func (f measurer) LineHeight(panel.Font) int { return f.s(16) }
 
+var full = 100.0
+
 // wholeItems are the fixtures' items and the longest texts a real menu
 // gets: the longest account with the PCs and a plan, a wrapped problem,
-// the server line naming two fetching PCs, every action.
+// the server line naming two fetching PCs, a blocked limit's reset line,
+// every action.
 func wholeItems() map[string]panel.Item {
 	out := map[string]panel.Item{
 		"long account": {Kind: "header", Provider: "codex", Name: "Codex", Account: "firstname.lastname.…@… · 12 PCs · Enterprise", Updated: "Updated Mon 15:30"},
@@ -36,6 +39,7 @@ func wholeItems() map[string]panel.Item {
 		"prompt":       {Kind: "info", Text: "Sign in to Claude Code or Codex"},
 		"checked":      {Kind: "action", Text: "Start at login", Enabled: true, Checkbox: true, Checked: true},
 		"long action":  {Kind: "action", Text: strings.Repeat("Remove AI Usage ", 4), Enabled: true},
+		"blocked":      {Kind: "row", Provider: "claude", Label: "5-hour", PercentText: "100%", Detail: "Blocked · resets Fri 19:35 · in 35m", Level: "critical", Percent: &full},
 	}
 	for n, in := range map[string]tray.MenuInputs{"combined": panelfixture.Combined(), "states": panelfixture.States()} {
 		p := tray.BuildPanel(in)
@@ -53,17 +57,22 @@ func wholeItems() map[string]panel.Item {
 // Review B-I1: at the size Size gives (and wider, as Windows widens an
 // item), every text of every item is drawn whole: in a box as wide as the
 // text and as high as its line, inside the item. The clamp in Layout
-// stays as a guard; a step it had to cut fails here.
+// stays as a guard; a step it had to cut fails here. Also with text half
+// as large again as the DPI's (Windows' "Make text bigger" grows the menu
+// font, not the DPI): a row widens the panel then, as a header does
+// (review A-m6).
 func TestLayoutDrawsEveryTextWhole(t *testing.T) {
 	for _, dpi := range []int{96, 120, 144, 192} {
-		m, tm := panel.MetricsAt(dpi), measurer{dpi}
-		for name, it := range wholeItems() {
-			w, h := panel.Size(it, m, tm)
-			for _, extra := range []int{0, 43} {
-				for _, sel := range []bool{false, true} {
-					ops := panel.Layout(it, m, tm, w+extra, h, panel.DarkPalette, sel)
-					if miss := panelcheck.Missing(it, ops, m, tm, w+extra, h); len(miss) > 0 {
-						t.Fatalf("dpi %d %s (%dx%d): %s", dpi, name, w+extra, h, strings.Join(miss, "; "))
+		for _, text := range []int{dpi, dpi * 3 / 2} {
+			m, tm := panel.MetricsAt(dpi), measurer{text}
+			for name, it := range wholeItems() {
+				w, h := panel.Size(it, m, tm)
+				for _, extra := range []int{0, 43} {
+					for _, sel := range []bool{false, true} {
+						ops := panel.Layout(it, m, tm, w+extra, h, panel.DarkPalette, sel)
+						if miss := panelcheck.Missing(it, ops, m, tm, w+extra, h); len(miss) > 0 {
+							t.Fatalf("dpi %d, text at %d %s (%dx%d): %s", dpi, text, name, w+extra, h, strings.Join(miss, "; "))
+						}
 					}
 				}
 			}

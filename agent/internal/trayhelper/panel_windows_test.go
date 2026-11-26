@@ -118,10 +118,14 @@ func (t *testDrawer) ended() int {
 
 // longestItems are the longest texts a real menu gets: the longest
 // account with the PCs and a plan, the server line naming two fetching
-// PCs with Windows' default host names.
+// PCs with Windows' default host names; and a row whose reset line is
+// longer than the panel is wide (what a blocked limit's line becomes with
+// "Make text bigger": review A-m6).
 var longestItems = map[string]panel.Item{
 	"long account": {Kind: "header", Provider: "codex", Name: "Codex", Account: "firstname.lastname.…@… · 12 PCs · Enterprise", Updated: "Updated Mon 15:30"},
 	"two hosts":    {Kind: "info", Text: "Server connected · Claude from DESKTOP-ABCDEFG · Codex from DESKTOP-HIJKLMN", Dim: true},
+	"long row": {Kind: "row", Provider: "claude", Label: "5-hour", PercentText: "100%", Level: "critical",
+		Detail: "Blocked · resets Fri 19:35 · in 35m · Blocked · resets Fri 19:35 · in 35m"},
 }
 
 // calcWidth is the width DrawTextW gives s in the drawer's font at dpi.
@@ -187,6 +191,10 @@ func TestMeasureMatchesDrawAtEveryDPI(t *testing.T) {
 					calcWidth(t, d.winDrawer, c.dc, dpi, panel.Regular, it.Account) + calcWidth(t, d.winDrawer, c.dc, dpi, panel.Regular, it.Updated)
 				if int(w) < need {
 					t.Fatalf("dpi %d: the longest account's header is %d wide, its line needs %d", dpi, w, need)
+				}
+			case name == "long row":
+				if need := 2*m.Pad + calcWidth(t, d.winDrawer, c.dc, dpi, panel.Regular, it.Detail); int(w) < need || int(w) <= m.Width {
+					t.Fatalf("dpi %d: the long row is %d wide, its reset line needs %d", dpi, w, need)
 				}
 			case int(w) != m.Width:
 				t.Fatalf("dpi %d %s: %d wide, the panel is %d", dpi, name, w, m.Width)
