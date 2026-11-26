@@ -234,7 +234,9 @@ type Options struct {
 	// VersionLater: ShellVersion is missing until PublishVersion (a shell
 	// that owns its name before it has its version); OnVersion, when set,
 	// is called with the shell each time ShellVersion is read, before it
-	// is answered.
+	// is answered, on the bus's handler goroutine (no t.Fatal there: Leave
+	// and Release call it). With either, NoUserExtensions is not honoured
+	// (UserExtensionsEnabled is answered) and GetAll answers nothing.
 	VersionLater bool
 	OnVersion    func(*Shell)
 }

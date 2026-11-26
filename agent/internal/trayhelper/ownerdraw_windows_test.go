@@ -55,6 +55,17 @@ type fakeMenuDrawer struct {
 	measures int
 	grow     int32           // added to every height measured from now on
 	dpis     map[uint32]bool // every DPI Measure and Draw were given
+	opening  func()          // run (once) by the next MenuOpening, on the tray's thread
+}
+
+func (f *fakeMenuDrawer) MenuOpening() {
+	f.mu.Lock()
+	run := f.opening
+	f.opening = nil
+	f.mu.Unlock()
+	if run != nil {
+		run()
+	}
 }
 
 func (f *fakeMenuDrawer) Measure(id, dpi uint32) (int32, int32) {
@@ -119,6 +130,9 @@ type ownerDrawResult struct {
 	// menu, and how often its insert was tried (review N2)
 	EpsilonShown bool
 	EpsilonTries int
+	// the background of the menu that opened when the menu was rebuilt
+	// between the drawer's calls and the re-insert (review of stage 5a M2)
+	ResetBackground uint32
 }
 
 // openMenu posts the tray icon's right-click to the tray's window, as a
@@ -325,14 +339,15 @@ func TestOwnerDrawChild(t *testing.T) {
 		epsilon := systray.AddMenuItem("Epsilon", "")
 		epsilon.SetOwnerDrawn(true)
 		var triesMu sync.Mutex
+		tries := 0
 		systray.SetReinsertFaultForTests(func(id uint32) bool {
 			if id != epsilon.ID() {
 				return false
 			}
 			triesMu.Lock()
 			defer triesMu.Unlock()
-			res.EpsilonTries++
-			return res.EpsilonTries == 1 // the first insert fails
+			tries++
+			return tries == 1 // the first insert fails
 		})
 		w, m = openMenu()
 		if w == 0 {
@@ -343,6 +358,9 @@ func TestOwnerDrawChild(t *testing.T) {
 		_, _, res.EpsilonShown = itemType(m, epsilon.ID())
 		closeMenu(w)
 		systray.SetReinsertFaultForTests(nil)
+		triesMu.Lock() // written on the tray's thread (review of stage 5a M9)
+		res.EpsilonTries = tries
+		triesMu.Unlock()
 
 		// what Windows sends every top-level window when the colour mode changes
 		const hwndBroadcast, wmSettingChange, smtoAbortIfHung = 0xffff, 0x001A, 0x0002
@@ -353,6 +371,26 @@ func TestOwnerDrawChild(t *testing.T) {
 		f.mu.Lock()
 		res.Areas = slices.Clone(f.areas)
 		f.mu.Unlock()
+
+		// review of stage 5a M2: the menu rebuilt (ResetMenu, as the
+		// helper does when a provider appears) after the drawer's calls
+		// and before the re-insert still opens with the drawer's
+		// background (it was set on the menu of the first read, gone by
+		// then). Last: the rebuilt menu has only Zeta.
+		f.mu.Lock()
+		f.opening = func() {
+			systray.ResetMenu()
+			systray.AddMenuItem("Zeta", "").SetOwnerDrawn(true)
+		}
+		f.mu.Unlock()
+		w, m = openMenu()
+		if w == 0 {
+			res.Error = "no menu window after the rebuild"
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+		res.ResetBackground = menuBackground(m)
+		closeMenu(w)
 	}, func() {
 		b, _ := json.Marshal(res)
 		os.Stdout.WriteString("\nownerdraw-result " + string(b) + "\n")
@@ -459,6 +497,10 @@ func TestOwnerDrawnItemIsOwnerDrawn(t *testing.T) {
 	// review N2
 	if !res.EpsilonShown || res.EpsilonTries != 2 {
 		t.Fatalf("Epsilon, its first insert failed: in the menu %v, inserts tried %d (want 2)", res.EpsilonShown, res.EpsilonTries)
+	}
+	// review of stage 5a M2 (1<<31: no background of the drawer's)
+	if res.ResetBackground != 0x00123456 {
+		t.Fatalf("the menu rebuilt while it was being opened has background %#x, want 0x123456", res.ResetBackground)
 	}
 	t.Logf("measures: first open %d, second %d; separator drawn %v", res.MeasuresFirst, res.MeasuresAgain, res.SepHeights)
 }

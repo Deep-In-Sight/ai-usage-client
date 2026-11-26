@@ -371,13 +371,15 @@ func prepareOwnerDrawnMenu() (menu windows.Handle, done func()) {
 	if dec, ok := d.(MenuDecorator); ok && drawn {
 		rgb, background = dec.MenuBackground()
 	}
-	if background || hadBrush {
-		setMenuBackground(menu, rgb, background)
-	}
 
 	menuMu.Lock()
 	defer menuMu.Unlock()
 	menu = wt.menus[0] // the menu a reset since put in its place
+	// on the menu that opens (review of stage 5a M2: the first read's menu
+	// may be gone); SetMenuInfo on a menu not shown calls nothing back
+	if (background || hadBrush) && menu != 0 {
+		setMenuBackground(menu, rgb, background)
+	}
 	od.mu.Lock()
 	items := make([]uint32, 0, len(od.items))
 	for id := range od.items {

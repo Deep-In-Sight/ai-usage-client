@@ -1,7 +1,7 @@
 diff -aruN a/PATCHED.md b/PATCHED.md
 --- a/PATCHED.md
 +++ b/PATCHED.md
-@@ -0,0 +1,257 @@
+@@ -0,0 +1,259 @@
 +# fyne.io/systray, patched copy
 +
 +This folder is a copy of [fyne.io/systray](https://github.com/fyne-io/systray)
@@ -139,8 +139,10 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 +    owner-drawn items and separators only (`ODT_MENU`);
 +    `WM_SETTINGCHANGE`'s text to the drawer; before the menu opens (not
 +    again while it is shown): the drawer's `MenuOpening`, the drawer's
-+    background colour (`SetMenuInfo`, `MIM_BACKGROUND`; the system's once
-+    nothing in the menu is owner-drawn) and a fresh measure of every
++    background colour (`SetMenuInfo`, `MIM_BACKGROUND`, set under `menuMu`
++    on the menu that then opens, as a reset may have replaced the one
++    there before; the system's once nothing in the menu is owner-drawn)
++    and a fresh measure of every
 +    visible owner-drawn item and separator (Windows keeps an owner-drawn
 +    item's size until it is inserted anew, so each is removed and inserted
 +    again at its place, from the parent and state it was last given, never
@@ -150,8 +152,8 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 +  - One lock (`menuMu`) for the menu's items: every add, update (a menu
 +    item's picture too: `(*MenuItem).SetIconFromFilePath`), hide, show,
 +    separator add, removal and reset (the package's wrappers), the switch
-+    in `SetOwnerDrawn`, the re-insert before an open and the reading of the
-+    menu to show hold it, so
++    in `SetOwnerDrawn`, the re-insert before an open, the setting of the
++    background and the reading of the menu to show hold it, so
 +    that the re-insert on the tray's thread and the program's goroutines
 +    never interleave (a hidden item shown again, an item inserted twice).
 +    It is never held across a drawer call or anything that waits for the
@@ -346,7 +348,7 @@ diff -aruN a/ownerdraw_other.go b/ownerdraw_other.go
 diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 --- a/ownerdraw_windows.go
 +++ b/ownerdraw_windows.go
-@@ -0,0 +1,484 @@
+@@ -0,0 +1,486 @@
 +//go:build windows
 +
 +// Not upstream code: this file was added to the copy of fyne.io/systray
@@ -720,13 +722,15 @@ diff -aruN a/ownerdraw_windows.go b/ownerdraw_windows.go
 +	if dec, ok := d.(MenuDecorator); ok && drawn {
 +		rgb, background = dec.MenuBackground()
 +	}
-+	if background || hadBrush {
-+		setMenuBackground(menu, rgb, background)
-+	}
 +
 +	menuMu.Lock()
 +	defer menuMu.Unlock()
 +	menu = wt.menus[0] // the menu a reset since put in its place
++	// on the menu that opens (review of stage 5a M2: the first read's menu
++	// may be gone); SetMenuInfo on a menu not shown calls nothing back
++	if (background || hadBrush) && menu != 0 {
++		setMenuBackground(menu, rgb, background)
++	}
 +	od.mu.Lock()
 +	items := make([]uint32, 0, len(od.items))
 +	for id := range od.items {

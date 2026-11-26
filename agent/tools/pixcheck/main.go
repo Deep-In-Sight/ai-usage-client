@@ -245,6 +245,7 @@ type Bar struct {
 	Base              color.NRGBA // the panel's bar colour Colour is (at Alpha over what is under it)
 	TrackColour       color.NRGBA // the track's colour (when Track > 0)
 	Height            int         // rows of the fill's colour down the fill's middle column
+	BoxHeight         int         // rows that are not the background down the bar's middle column: the track's height where it is higher than the fill
 	Round             bool        // the corner pixels of its two outermost columns at each end show the background more than the bar
 }
 
@@ -257,8 +258,8 @@ func (b Bar) String() string {
 	if b.Round {
 		ends = "round"
 	}
-	return fmt.Sprintf("bar y=%d x=%d fill=%d track=%d colour=%s alpha=%.2f bg=%s base=%s trackcolour=%s height=%d ends=%s",
-		b.Y, b.X, b.Fill, b.Track, hex(b.Colour), b.Alpha, hex(b.Bg), hex(b.Base), tc, b.Height, ends)
+	return fmt.Sprintf("bar y=%d x=%d fill=%d track=%d colour=%s alpha=%.2f bg=%s base=%s trackcolour=%s height=%d ends=%s box=%d",
+		b.Y, b.X, b.Fill, b.Track, hex(b.Colour), b.Alpha, hex(b.Bg), hex(b.Base), tc, b.Height, ends, b.BoxHeight)
 }
 
 const (
@@ -431,7 +432,9 @@ func Bars(img *image.NRGBA) []Bar {
 }
 
 // shape measures b's height down the middle column of its fill (the rows
-// of the fill's colour: a fill lower than its track shows) and whether its
+// of the fill's colour: a fill lower than its track shows), the height of
+// its box down the bar's middle column (the track and the fill on it: a
+// track higher than its fill shows, review of stage 5a M1) and whether its
 // ends are round: in the bar's box (the rows that are not the background
 // down its middle column), the top and bottom pixels of the two outermost
 // columns at each end are nearer the background than the pixel of b's
@@ -454,6 +457,7 @@ func shape(img *image.NRGBA, b Bar) Bar {
 	top, bottom := extent(b.X+(b.Fill+b.Track)/2, func(c color.NRGBA) bool { return !near(c, b.Bg, 8) })
 	ft, fb := extent(b.X+b.Fill/2, func(c color.NRGBA) bool { return near(c, b.Colour, runTol) })
 	b.Height = fb - ft + 1
+	b.BoxHeight = bottom - top + 1
 	end := b.X + b.Fill + b.Track
 	b.Round = bottom-top+1 > 2 && b.Fill+b.Track >= 4
 	for _, x := range []int{b.X, b.X + 1, end - 2, end - 1} {
@@ -553,6 +557,9 @@ func Judge(bars []Bar, wants []Want) []string {
 		}
 		if b.Height != panel.BarHeight {
 			probs = append(probs, fmt.Sprintf("bar%d:height=%d(want_%d)", i, b.Height, panel.BarHeight))
+		}
+		if b.BoxHeight != panel.BarHeight {
+			probs = append(probs, fmt.Sprintf("bar%d:box_height=%d(want_%d)", i, b.BoxHeight, panel.BarHeight))
 		}
 		if !b.Round {
 			probs = append(probs, fmt.Sprintf("bar%d:square_ends", i))

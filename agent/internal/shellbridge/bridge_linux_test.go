@@ -668,7 +668,14 @@ func TestEnableNeverDeliveredIsNotDone(t *testing.T) {
 	left := make(chan struct{})
 	var once sync.Once
 	r := newRig(t, rigOptions{shell: &fakeshell.Options{Version: "46.0", EnableOK: true, OnVersion: func(s *fakeshell.Shell) {
-		once.Do(func() { s.Leave(t); close(left) }) // gone before the version is answered
+		// gone before the version is answered; on the bus's handler
+		// goroutine, so no t.Fatal here (review of stage 5a M5)
+		once.Do(func() {
+			if _, err := s.Conn.ReleaseName(fakeshell.ShellName); err != nil {
+				t.Error(err)
+			}
+			close(left)
+		})
 	}}, enableOnce: true})
 	<-left
 	r.ready("gnome46")

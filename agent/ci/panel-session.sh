@@ -11,9 +11,10 @@
 #                          five bars 42/13/7/100/8 % (pixcheck judge: ±2 px
 #                          of one common length, the colours #d97757 ×4 and
 #                          #f66151, the track rgba(128,128,128,0.32) over
-#                          the background, the fill 8 px high, round ends),
-#                          the critical row's percent text in #f66151; the
-#                          server line wraps at the bars' width, nothing cut
+#                          the background, the fill and the track 8 px
+#                          high, round ends), the critical row's percent
+#                          text in #f66151; the server line wraps at the
+#                          bars' width (twice its text: two lines or more)
 #   panel.header_colour    a header's name in a row label's colour (review I1)
 #   panel.open_redraw      a view with the same items and another percent
 #                          while the menu is open: GetView again, the same
@@ -466,20 +467,20 @@ case "$cpx" in ''|*[!0-9]*) p="$p critical_text=[$pt $cpx]" ;; *) [ "$cpx" -ge 1
 case "$npx" in ''|*[!0-9]*) p="$p normal_text=[$npx]" ;; *) [ "$npx" -eq 0 ] || p="$p normal_text_red=$npx" ;; esac
 # the server line (found by the fixture's text) wraps at the bars' width
 # and loses nothing (ruling A-I2): given twice its text, it stays at most
-# 300 px wide, takes two lines or more and is not cut short
+# 300 px wide and takes two lines or more (no ellipsis check: the layout
+# read right after the text changed is the old one, review of stage 5a M3)
 srv=$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['server']))" "$GITHUB_WORKSPACE/agent/internal/tray/testdata/panel-combined.json")
-sl=$(ev "(() => { const want = $srv; const out = []; const walk = x => { if (x.clutter_text && x.text === want) out.push(x); for (const c of x.get_children()) walk(c); }; walk($B.menu.box); const l = out[0]; if (!l) return 'none'; const t = l.clutter_text; const one = l.get_preferred_height(-1)[1]; l.text = want + ' ' + want; const w = l.get_preferred_width(-1)[1]; const h = l.get_preferred_height(w)[1]; let cut = 'n/a'; try { cut = String(t.get_layout().is_ellipsized()); } catch (e) { } l.text = want; return [Math.round(w), Math.round(h), Math.round(one), String(t.line_wrap), cut, Math.round(l.width)].join(' '); })()")
-read -r sw sh s1 swrap scut snow <<< "$sl"
+sl=$(ev "(() => { const want = $srv; const out = []; const walk = x => { if (x.clutter_text && x.text === want) out.push(x); for (const c of x.get_children()) walk(c); }; walk($B.menu.box); const l = out[0]; if (!l) return 'none'; const t = l.clutter_text; const one = l.get_preferred_height(-1)[1]; l.text = want + ' ' + want; const w = l.get_preferred_width(-1)[1]; const h = l.get_preferred_height(w)[1]; l.text = want; return [Math.round(w), Math.round(h), Math.round(one), String(t.line_wrap), Math.round(l.width)].join(' '); })()")
+read -r sw sh s1 swrap snow <<< "$sl"
 case "$sw$sh$s1" in
   ''|*[!0-9]*) p="$p server_line=[$sl]" ;;
   *)
     [ "$swrap" = true ] || p="$p server_line_does_not_wrap"
     [ "$sw" -le 301 ] || p="$p server_line_${sw}px_wide"
     [ "$sh" -ge $((s1 * 18 / 10)) ] || p="$p server_line_one_line=${sh}/${s1}"
-    [ "$scut" != true ] || p="$p server_line_cut"
     ;;
 esac
-verdict panel.picture_combined "${p:+ $p}" "bars ${jb#*|}; critical percent [$ctext] $cpx px of #f66151, a normal percent $npx; server line twice as long: ${sw:-?}x${sh:-?} px (a line ${s1:-?}, wraps ${swrap:-?}, cut ${scut:-?}, shown ${snow:-?} px wide); menu $mr; the extension's dark flag: $dark; picture panel-combined-$LABEL.png"
+verdict panel.picture_combined "${p:+ $p}" "bars ${jb#*|}; critical percent [$ctext] $cpx px of #f66151, a normal percent $npx; server line twice as long: ${sw:-?}x${sh:-?} px (a line ${s1:-?}, wraps ${swrap:-?}, shown ${snow:-?} px wide); menu $mr; the extension's dark flag: $dark; picture panel-combined-$LABEL.png"
 
 # review I1: the header's name has a row label's colour (no :insensitive)
 hc=$(ev "(() => { $JS const b = $B; const n = find(b.menu.box, 'ai-usage-name')[0]; const l = find(b.menu.box, 'ai-usage-label')[0]; const fg = a => { const c = a.get_theme_node().get_foreground_color(); return [c.red, c.green, c.blue, c.alpha].join('/'); }; let it = n; while (it && !(it.has_style_class_name && it.has_style_class_name('popup-menu-item'))) it = it.get_parent(); return [rect(n), rect(l), fg(n), fg(l), n.opacity, l.opacity, it ? (it.get_style_pseudo_class() || '-') : 'none'].join(' '); })()")
@@ -884,7 +885,9 @@ verdict panel.privacy "$p" "agent.log: $(grep -m1 -o 'CI build: no request to An
 rc=$?
 sleep 3
 st=$(state); b=$(ev "String(!!$B)")
-en=$(gsettings get org.gnome.shell enabled-extensions 2>&1)
+# stdout only: a GLib message on stderr would make a good list unreadable
+# (review of stage 5a M7); stderr goes into the details
+en=$(gsettings get org.gnome.shell enabled-extensions 2> "$out/gsettings-remove-$LABEL.err")
 p=""
 [ "$rc" -eq 0 ] || p="$p rc=$rc"
 [ ! -e "$exts/$uuid" ] || p="$p folder_left"
@@ -896,7 +899,7 @@ pl=$(enabled_list_has "$en" "$uuid")
 case "$pl" in
   no) ;;
   yes) p="$p still_in_enabled_extensions" ;;
-  *) p="$p enabled_list_unreadable=[$(printf '%s' "$en" | tr '\n' ' ' | cut -c1-120)]" ;;
+  *) p="$p enabled_list_unreadable=[$(printf '%s' "$en" | tr '\n' ' ' | cut -c1-120)] stderr=[$(tr '\n' ' ' < "$out/gsettings-remove-$LABEL.err" | cut -c1-120)]" ;;
 esac
 [ "$(agent_count)" -eq 0 ] && [ "$(pgrep -f "^$exe tray-helper" | wc -l)" -eq 0 ] || p="$p processes_left"
 [ ! -e "$data" ] || p="$p data_left"

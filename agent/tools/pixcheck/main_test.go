@@ -302,6 +302,16 @@ func TestJudgeFindsWhatIsWrong(t *testing.T) {
 		// column, not the track's), and ends rounder than a nicked corner
 		{"fill 6 px high", wantCombined, "bar0:height=6", func(b []drawnBar) []drawnBar { b[0].fillH = 6; return b }},
 		{"full bar 6 px high", wantCombined, "bar3:height=6", func(b []drawnBar) []drawnBar { b[3].fillH = 6; return b }},
+		// review of stage 5a, M1: the track's height is judged too (a
+		// track higher than its fill, which stays 8 px)
+		{"track 10 px, fill 8 px", wantCombined, "bar1:box_height=10", func(b []drawnBar) []drawnBar {
+			b[1].h, b[1].fillH = 10, barH
+			return b
+		}},
+		{"track 10 px, full fill 8 px", wantCombined, "bar3:box_height=10", func(b []drawnBar) []drawnBar {
+			b[3].h, b[3].fillH = 10, barH
+			return b
+		}},
 		{"corners nicked", wantCombined, "bar1:square_ends", func(b []drawnBar) []drawnBar { b[1].nicked = true; return b }},
 		{"short full bar", wantCombined, "bar3:length=250", func(b []drawnBar) []drawnBar {
 			b[3].w, b[3].fill = 250, 250
