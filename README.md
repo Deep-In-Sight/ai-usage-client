@@ -172,9 +172,16 @@ On Ubuntu 22.04, 24.04 and 26.04 the agent also puts the usage panel's
 GNOME Shell extension, AI Usage Panel, in your own extensions folder
 (`~/.local/share/gnome-shell/extensions/ai-usage-panel@localhost`). Run
 from a GNOME session, install says "The AI Usage panel appears after
-you log out and log in again."; run while no GNOME session is running
-(over SSH, for example), the agent writes the extension at your next GNOME
-login, and the usage panel appears at the login after that.
+you log out and log in again."; run from another desktop's session, the
+agent writes the extension at your next GNOME login, and the usage panel
+appears at the login after that. Run from a shell without a desktop
+session (over SSH, for example, even while you are logged in to GNOME on
+that PC), install sets the agent up as for Linux without a desktop: it
+writes no extension, and the agent shows no icon and no usage panel. To
+get the icon and the usage panel on that PC, run the same command again
+from a terminal in your GNOME session. That install replaces the systemd
+service with the desktop autostart and goes on as an install from a GNOME
+session does.
 
 Run the same command again to upgrade. The PC stays the same device on the
 dashboard and nothing waiting to be sent is lost.

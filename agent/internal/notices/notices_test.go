@@ -588,15 +588,23 @@ func TestReadmeListsUbuntu2604(t *testing.T) {
 		"`gnome-extensions enable ai-usage-panel@localhost`",
 		"Removing AI Usage and installing it again counts as a new install",
 		// review B-M1: a stock Ubuntu may lack the Extensions app; B-M8: an
-		// install with no GNOME session running takes two logins; B-M7: the
-		// panel's helper writes the extension's folder
+		// install from another desktop's session takes two GNOME logins;
+		// re-review Important 1: an install over SSH is a headless install
+		// (no extension, no icon, no panel) until it is run again from the
+		// GNOME session; B-M7: the panel's helper writes the extension's
+		// folder
 		"`gnome-extensions disable ai-usage-panel@localhost`",
-		"the agent writes the extension at your next GNOME login, and the usage panel appears at the login after that.",
+		"run from another desktop's session, the agent writes the extension at your next GNOME login, and the usage panel appears at the login after that.",
+		"Run from a shell without a desktop session (over SSH, for example, even while you are logged in to GNOME on that PC), install sets the agent up as for Linux without a desktop: it writes no extension, and the agent shows no icon and no usage panel.",
+		"run the same command again from a terminal in your GNOME session. That install replaces the systemd service with the desktop autostart",
 		"the helper that passes the panel to the extension also writes the AI Usage Panel extension into your extensions folder",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README does not say %q", want)
 		}
+	}
+	if strings.Contains(readme, "(over SSH, for example), the agent writes the extension") {
+		t.Error("README says an install over SSH brings the panel: it is a headless install, with no extension and no panel")
 	}
 	if strings.Contains(readme, "no sign-in, no file, no network") {
 		t.Error("README says a helper gets no file: the GNOME panel's helper writes the extension's folder")
