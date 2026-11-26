@@ -37,6 +37,11 @@
     color: #9a6700;
 }
 
+/* the lines that cannot be clicked (the server line, the sign-in prompt) */
+.ai-usage-info {
+    max-width: 300px;   /* wraps at the bars' width */
+}
+
 .ai-usage-row {
     spacing: 4px;
 }

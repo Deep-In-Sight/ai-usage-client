@@ -325,9 +325,13 @@ class AIUsagePanelIndicator extends PanelMenu.Button {
     }
 
     // A line of text that is not clickable: the sign-in prompt, the dim
-    // server line.
+    // server line. It wraps at the bars' width, as the problem line does,
+    // so a long server line (two PCs that fetch) neither widens the menu
+    // nor loses text (ruling A-I2).
     _aiuInfo(pick, dim, view) {
         const item = steady(new PopupMenu.PopupMenuItem('', {reactive: false, can_focus: false}));
+        item.label.add_style_class_name('ai-usage-info');
+        item.label.clutter_text.line_wrap = true;
         if (dim)
             item.label.add_style_class_name('ai-usage-small');
         item.label.opacity = textOpacity(dim, false);
