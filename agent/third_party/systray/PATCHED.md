@@ -25,10 +25,13 @@ client's MIT licence (`LICENSE` at the repository's root).
 
 Added files: this `PATCHED.md`, `systray_patch_test.go` (tests of the
 Linux and BSD changes), `trayicon/` (`trayicon_windows.go` and its
-test, see Windows below), and `ownerdraw.go`, `ownerdraw_windows.go` and
-`ownerdraw_other.go` (owner-drawn menu items, see Windows below). Each
-added Go file starts with a comment saying it is not upstream code and is
-under the AI Usage client's MIT licence.
+test, see Windows below), `ownerdraw.go`, `ownerdraw_windows.go` and
+`ownerdraw_other.go` (owner-drawn menu items, see Windows below), and
+`panelview.go`, `panelview_darwin.go`, `panelview_darwin.m`,
+`panelview.h` and `panelview_other.go` (menu items with a view, see
+macOS below). Each added Go, Objective-C and C file starts with a comment
+saying it is not upstream code and is under the AI Usage client's MIT
+licence.
 
 ### `systray_unix.go` (Linux and BSD)
 
@@ -161,9 +164,67 @@ extra properties.
     `hideMenuItem`, `removeMenuItem` and `resetMenu` hold `menuMu`.
 - The header comment says the file was modified.
 
+### `systray_darwin.m` (macOS)
+
+Menu items with a view (the AI Usage usage panel draws its headers, rows
+and the lines that cannot be clicked in the macOS menu; its actions stay
+the menu's own items). The new files hold the API and the view; the
+upstream file only calls them:
+
+- `panelview.go` (every OS): the types `ViewCanvas` (the menu's fonts,
+  measuring, and the steps a view carries out: a fill with rounded
+  corners, a line of text, a premultiplied picture; in pixels at the
+  view's scale), `ViewColours` (the system's label, secondary label,
+  selection and selected text colours for the view's appearance, in
+  sRGB) and `PanelViewer` (`ViewSize`, `DrawView`, `ViewLabel`,
+  `MenuOpening`, `MenuClosed`), what the program gives to decide what
+  each view shows and where.
+- `panelview_darwin.go` (cgo): `SetPanelViewer(v)`,
+  `(*MenuItem).SetPanelView(on)` (the item gets a view, sized again and
+  redrawn, unless the menu is open: an open menu keeps what it opened
+  with; off: a text item again) and, for tests only,
+  `RenderPanelViewPNG(id, width, dark, scale)` (one item's view drawn
+  alone into a PNG in the light or dark appearance over the window
+  background colour; on the main thread); the exported callbacks the view
+  calls on the main thread, each of which logs a panic of the viewer
+  instead of letting it end the program.
+- `panelview_darwin.m` and `panelview.h`: the view `AIUPanelView`
+  (flipped; as wide as the menu, `NSViewWidthSizable`; draws with the
+  viewer's steps, its colours resolved for its effective appearance and
+  drawn again when that changes; highlighted only when its item is
+  enabled and highlighted; at the window's backing scale), text
+  measured and drawn in the menu font and its bold and semi-bold faces
+  (`menuFontOfSize:`, `systemFontOfSize:weight:`), pictures through an
+  sRGB `CGImage`; a click (`mouseUp:` on an enabled item) cancels the
+  menu's tracking and selects the item as `menuHandler:` does; VoiceOver:
+  the view is an accessibility element with the menu item role and the
+  viewer's label. Return and keypad Enter (key codes 36 and 76) on a
+  highlighted view item: the menu does not send the item's action itself
+  (measured on CI, stages 0 and 3 of the drawn panel). The menu of an app
+  that is not active does nothing with Return and hands the highlighted
+  view the keys it does not use, so the view accepts first responder and
+  takes them in `keyDown:` (the arrows and Escape stay the menu's). The
+  menu of an active app closes on Return without the action, so the
+  delegate also remembers the last highlighted item and, when the menu
+  closes with no action taken and the closing event is that key (key-down
+  or key-up), performs the remembered item's action if it is an enabled
+  view item. Escape and every other way of closing do nothing. Only
+  documented AppKit calls.
+- `panelview_other.go` (not macOS): the same functions doing nothing
+  (`RenderPanelViewPNG` returns an error).
+- In `systray_darwin.m`: it includes `panelview.h`; `menuHandler:`
+  notes that an action came; `menuWillOpen:` tells the view code first
+  (the viewer's `MenuOpening`, then every view sized again);
+  `menu:willHighlightItem:` (new) passes the item on; `menuDidClose:`
+  runs the Return fall-back above and tells the viewer (`MenuClosed`)
+  before upstream's detach; the new method `set_menu_item_panel:` and C
+  function `set_menu_item_panel(menuId, on)` give an item its view on
+  the main thread (`runInMainThread`, as every other menu change).
+- The header comment says the file was modified.
+
 ### Everything else
 
-The macOS code is untouched. To update the library, copy the new
-upstream release over this folder, re-apply the changes, and record the
-new diff with `tools/systray-patch.sh --write` (after changing the version
-and hash in that script).
+To update the library, copy the new upstream release over this folder,
+re-apply the changes, and record the new diff with
+`tools/systray-patch.sh --write` (after changing the version and hash in
+that script).

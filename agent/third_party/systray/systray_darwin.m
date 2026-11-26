@@ -1,7 +1,20 @@
 //go:build !ios
 
+//Modified from fyne.io/systray v1.12.2: menu items can have a view that the
+//program draws (panelview_darwin.m): the menu delegate tells the view code
+//when the menu opens, an item is highlighted, an action comes and the menu
+//closes, and set_menu_item_panel gives an item its view. See PATCHED.md.
+
 #import <Cocoa/Cocoa.h>
 #include "systray.h"
+#include "panelview.h"
+
+// The AI Usage usage panel's menu items with a view (panelview_darwin.m).
+void aiu_panel_attach(NSMenuItem *item, int menuId, bool on);
+void aiu_panel_menu_will_open(NSMenu *menu);
+void aiu_panel_will_highlight(NSMenuItem *item);
+void aiu_panel_note_action(void);
+void aiu_panel_menu_did_close(NSMenu *menu);
 
 #if __MAC_OS_X_VERSION_MIN_REQUIRED < 101400
 
@@ -191,11 +204,27 @@ withParentMenuId: (int)theParentMenuId
 - (IBAction)menuHandler:(id)sender
 {
   NSNumber* menuId = [sender representedObject];
+  aiu_panel_note_action();
   systray_menu_item_selected(menuId.intValue);
 }
 
 - (void)menuWillOpen:(NSMenu *)menu {
+  aiu_panel_menu_will_open(menu);
   systray_menu_will_open();
+}
+
+- (void)menu:(NSMenu *)menu willHighlightItem:(NSMenuItem *)item {
+  aiu_panel_will_highlight(item);
+}
+
+- (void) set_menu_item_panel:(NSArray*)idAndOn
+{
+  NSNumber* menuId = [idAndOn objectAtIndex:0];
+  NSNumber* on = [idAndOn objectAtIndex:1];
+  NSMenuItem* menuItem = find_menu_item(menu, menuId);
+  if (menuItem != NULL) {
+    aiu_panel_attach(menuItem, menuId.intValue, on.boolValue);
+  }
 }
 
 - (void)add_or_update_menu_item:(MenuItem *)item {
@@ -297,6 +326,7 @@ NSMenuItem *find_menu_item(NSMenu *ourMenu, NSNumber *menuId) {
 }
 
 - (void)menuDidClose:(NSMenu *)menu {
+  aiu_panel_menu_did_close(menu);
   // Defer the detach so we don't pull the menu out from under AppKit
   // while it is still tearing the menu down.
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -458,6 +488,12 @@ void hide_menu_item(int menuId) {
 void remove_menu_item(int menuId) {
   NSNumber *mId = [NSNumber numberWithInt:menuId];
   runInMainThread(@selector(remove_menu_item:), (id)mId);
+}
+
+void set_menu_item_panel(int menuId, bool on) {
+  NSNumber *mId = [NSNumber numberWithInt:menuId];
+  NSNumber *mOn = [NSNumber numberWithBool:on];
+  runInMainThread(@selector(set_menu_item_panel:), @[mId, mOn]);
 }
 
 void show_menu() {
