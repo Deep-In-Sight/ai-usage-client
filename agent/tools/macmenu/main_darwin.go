@@ -164,6 +164,76 @@ static int mm_press(int pid) {
 	return err == kAXErrorSuccess || err == kAXErrorCannotComplete;
 }
 
+// The view of the item at index in the status item's open menu (that
+// item's first child), held for mm_press_held and mm_held_there
+// (retained; the one held before is released). 0: there is none.
+static AXUIElementRef mm_held = NULL;
+
+static int mm_hold(int pid, int index) {
+	if (mm_held != NULL) {
+		CFRelease(mm_held);
+		mm_held = NULL;
+	}
+	AXUIElementRef s = mm_status(pid);
+	if (s == NULL) {
+		return 0;
+	}
+	CFTypeRef menus = mm_attr(s, "AXChildren");
+	if (menus != NULL && CFGetTypeID(menus) == CFArrayGetTypeID()) {
+		CFArrayRef ms = (CFArrayRef)menus;
+		for (CFIndex i = 0; i < CFArrayGetCount(ms); i++) {
+			AXUIElementRef m = (AXUIElementRef)CFArrayGetValueAtIndex(ms, i);
+			char role[128];
+			mm_named(m, "AXRole", role, sizeof role);
+			if (strcmp(role, "AXMenu") != 0) {
+				continue;
+			}
+			CFTypeRef kids = mm_attr(m, "AXChildren");
+			if (kids != NULL && CFGetTypeID(kids) == CFArrayGetTypeID() && index >= 0 && index < CFArrayGetCount((CFArrayRef)kids)) {
+				AXUIElementRef it = (AXUIElementRef)CFArrayGetValueAtIndex((CFArrayRef)kids, index);
+				CFTypeRef ck = mm_attr(it, "AXChildren");
+				if (ck != NULL && CFGetTypeID(ck) == CFArrayGetTypeID() && CFArrayGetCount((CFArrayRef)ck) > 0) {
+					mm_held = (AXUIElementRef)CFRetain(CFArrayGetValueAtIndex((CFArrayRef)ck, 0));
+				}
+				if (ck != NULL) {
+					CFRelease(ck);
+				}
+			}
+			if (kids != NULL) {
+				CFRelease(kids);
+			}
+			break;
+		}
+	}
+	if (menus != NULL) {
+		CFRelease(menus);
+	}
+	CFRelease(s);
+	if (mm_held != NULL) {
+		AXUIElementSetMessagingTimeout(mm_held, 2.0f);
+	}
+	return mm_held != NULL;
+}
+
+// presses the held view as VoiceOver does (AXPress): its AXError (0
+// success; -1 nothing held)
+static int mm_press_held(void) {
+	if (mm_held == NULL) {
+		return -1;
+	}
+	return (int)AXUIElementPerformAction(mm_held, CFSTR("AXPress"));
+}
+
+// the held view still answers (its VoiceOver label is read)
+static int mm_held_there(void) {
+	char label[1024];
+	if (mm_held == NULL) {
+		return 0;
+	}
+	mm_named(mm_held, "AXDescription", label, sizeof label);
+	return label[0] != 0;
+}
+
 // a window of pid at a window level (the status item's, a menu's)
 static int mm_window(int pid, int status, double *r) {
 	int level = status ? CGWindowLevelForKey(kCGStatusWindowLevelKey) : CGWindowLevelForKey(kCGPopUpMenuWindowLevelKey);
@@ -329,6 +399,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -712,6 +783,13 @@ func drive(exe, pic string) (f Facts, err error) {
 	time.Sleep(500 * time.Millisecond)
 	f.SpaceView, f.SpaceViewClosed = choose(&f, pid, msgs, keySpace, "space-view")
 
+	// VoiceOver's press on 5-hour, twice back to back in the open menu,
+	// then once on the closed menu's view (review N4)
+	if !again(&f, pid, msgs, "voiceover") {
+		return f, errors.New("the menu did not open again for VoiceOver's press")
+	}
+	voiceOver(&f, pid, msgs, want)
+
 	// the running helper gets the States view, then the Combined one
 	// again: the menu opened after each shows it (review B3-I4)
 	for _, fx := range []string{"states", "combined"} {
@@ -728,6 +806,40 @@ func drive(exe, pic string) (f Facts, err error) {
 	stopped = true
 	f.Active, f.ActiveSwitch = activeReturn(&f, exe, base)
 	return f, nil
+}
+
+// voiceOver presses 5-hour's view through the accessibility interface, as
+// VoiceOver does: twice back to back while the menu is open (one action
+// per open: one click, and the menu closes), then once more after it
+// closed (the tree keeps a closed menu: nothing may be sent).
+func voiceOver(f *Facts, pid int, msgs <-chan trayproto.Msg, want []Expected) {
+	g := Facts{WinSeen: f.WinSeen}
+	readMenu(&g, pid)
+	f.Errors = append(f.Errors, g.Errors...)
+	match(g.Items, want)
+	at := slices.IndexFunc(g.Items, func(it Item) bool { return it.ID == "r.claude.0" })
+	if at < 0 || C.mm_hold(C.int(pid), C.int(at)) == 0 {
+		f.AXOpen = "not pressed: no view of 5-hour in the accessibility tree"
+		trace(f, "voiceover-none")
+		closeMenu(f, pid)
+		return
+	}
+	drain(msgs)
+	e1 := C.mm_press_held()
+	e2 := C.mm_press_held()
+	f.AXOpen = clicks(msgs, 3*time.Second)
+	f.AXOpenClosed = closed(f, pid, 2*time.Second)
+	trace(f, "voiceover-open")
+	if !f.AXOpenClosed {
+		closeMenu(f, pid)
+	}
+	time.Sleep(800 * time.Millisecond)
+	drain(msgs)
+	f.AXClosedThere = C.mm_held_there() != 0
+	e3 := C.mm_press_held()
+	f.AXClosed = clicks(msgs, 2*time.Second)
+	f.AXErrors = fmt.Sprintf("%d,%d then %d", int(e1), int(e2), int(e3))
+	trace(f, "voiceover-closed")
 }
 
 // again waits a moment after the last step, forgets what the helper sent

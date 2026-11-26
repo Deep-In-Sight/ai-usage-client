@@ -262,11 +262,22 @@ static void aiu_bytes(NSColor *c, uint8_t *out) {
   aiu_report();
 }
 
-// the item's action, as menuHandler: sends it: the menu closes first
-- (void)aiuChoose:(NSMenuItem *)mi {
+// The item's action, as menuHandler: sends it: the menu closes first. It
+// acts only while the menu is open, and once per open, whichever way it
+// came (a click, Return, a VoiceOver press): a key repeat queued before the
+// menu closed, or Return and a VoiceOver press together, must not send two;
+// and the accessibility tree keeps a closed menu (measured on CI, stage 3),
+// so a press on one of its rows must not act with no menu shown. Both
+// flags are read before cancelTracking, which may run menuDidClose: (and
+// reset them) before it returns. YES: the action was sent.
+- (BOOL)aiuChoose:(NSMenuItem *)mi {
+  if (!aiuMenuOpen || aiuActed) {
+    return NO;
+  }
   aiuActed = YES;
   [[mi menu] cancelTracking];
   systray_menu_item_selected(self.itemId);
+  return YES;
 }
 
 // a click on an enabled item (a row) is its action; a header ignores it
@@ -323,14 +334,14 @@ static void aiu_bytes(NSColor *c, uint8_t *out) {
   return mi != nil && mi.isEnabled;
 }
 
-// VoiceOver's press on an enabled item (a row) is its action, as a click.
+// VoiceOver's press on an enabled item (a row) is its action, as a click
+// (none on a closed menu's row: aiuChoose:).
 - (BOOL)accessibilityPerformPress {
   NSMenuItem *mi = [self enclosingMenuItem];
   if (mi == nil || !mi.isEnabled) {
     return NO;
   }
-  [self aiuChoose:mi];
-  return YES;
+  return [self aiuChoose:mi];
 }
 
 @end

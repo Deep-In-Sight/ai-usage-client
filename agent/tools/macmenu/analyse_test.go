@@ -49,6 +49,7 @@ func good() (Facts, []Expected) {
 	want := expected(panelfixture.Combined())
 	f := Facts{AXTrusted: true, PostEvents: true, ScreenCapture: true, Opened: "click", Menu: Rect{100, 25, 336, 600}, Scale: 1,
 		Active: "sent=r.claude.0 closed=true", ActiveSwitch: true, HeaderStayed: true, Click: "r.claude.0", ClickClosed: true, DownSelected: "r.claude.0", Return: "r.claude.0", ReturnClosed: true, EscapeClosed: true,
+		AXOpen: "r.claude.0", AXOpenClosed: true, AXClosedThere: true, AXErrors: "0,-25205 then -25205",
 		Down2: "r.claude.1", Down2Closed: true, UpSelected: "r.codex.1", Up: "r.codex.1", UpClosed: true, Pointer: "r.claude.1", PointerClosed: true,
 		NativeHL: &Shape{Left: 5, Right: 5, Corner: 3, Colour: "#0064e1"}, ViewHL: &Shape{Left: 5, Right: 5, Corner: 3, Colour: "#0064e1"},
 		Highlight: "#0064e1", HeaderBg: "#ececec", Picture: 60, Bars: map[string][2]int{"r.claude.0": {120, 121}, "r.codex.0": {304, 304}}}
@@ -180,6 +181,11 @@ func TestJudgeFindsEachFault(t *testing.T) {
 		"no return":       {func(f *Facts) { f.Return = "" }, "Return on the highlighted 5-hour sent \"\""},
 		"escape selects":  {func(f *Facts) { f.Escape = "r.claude.0" }, "Escape sent"},
 		"escape open":     {func(f *Facts) { f.EscapeClosed = false }, "stayed open after Escape"},
+		// review N4: one action per open, none from a closed menu
+		"ax doubled":   {func(f *Facts) { f.AXOpen = "r.claude.0,r.claude.0" }, "two VoiceOver presses on 5-hour in the open menu sent \"r.claude.0,r.claude.0\", want r.claude.0 once"},
+		"ax nothing":   {func(f *Facts) { f.AXOpen = "" }, "two VoiceOver presses on 5-hour in the open menu sent \"\""},
+		"ax open":      {func(f *Facts) { f.AXOpenClosed = false }, "stayed open after a VoiceOver press"},
+		"ax on closed": {func(f *Facts) { f.AXClosed = "r.claude.0" }, "a VoiceOver press on 5-hour of the closed menu sent \"r.claude.0\", want nothing"},
 	} {
 		f, want := good()
 		c.change(&f)
@@ -278,7 +284,8 @@ func TestSummary(t *testing.T) {
 	}
 	k := keys(f)
 	for _, want := range []string{"click r.claude.0 (closed true)", "Return r.claude.0", "Escape none (closed true)", "Down Down Return r.claude.1 (closed true)",
-		"Up from Open dashboard chose r.codex.1, Return r.codex.1", "Return in the active helper's menu: sent=r.claude.0 closed=true (switch taken true)"} {
+		"Up from Open dashboard chose r.codex.1, Return r.codex.1", "Return in the active helper's menu: sent=r.claude.0 closed=true (switch taken true)",
+		"VoiceOver press twice on 5-hour r.claude.0 (closed true), on the closed menu's none (its view there true; AXError 0,-25205 then -25205)"} {
 		if !strings.Contains(k, want) {
 			t.Fatalf("%q lacks %q", k, want)
 		}

@@ -231,7 +231,12 @@ upstream file only calls them:
   remembers the last highlighted item and, when the menu closes with no
   action taken and the closing event is that key (key-down or key-up),
   performs the remembered item's action if it is an enabled view item.
-  Escape and every other way of closing do nothing. An Objective-C exception while a
+  Escape and every other way of closing do nothing. A view's action (a
+  click, Return, a VoiceOver press) is taken only while the menu is open
+  and once per open: a second one in the same open (a key repeat, Return
+  and a press together) and a press on a view of a closed menu (the
+  accessibility tree keeps a closed menu) send nothing, and such a press
+  answers that it did nothing. An Objective-C exception while a
   view is measured or drawn is caught in the C functions the Go side
   calls (it never unwinds through Go) and reported to the viewer's
   `ViewFailed` once the call into Go has returned. Only documented AppKit

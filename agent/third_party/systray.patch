@@ -1,7 +1,7 @@
 diff -aruN a/PATCHED.md b/PATCHED.md
 --- a/PATCHED.md
 +++ b/PATCHED.md
-@@ -0,0 +1,259 @@
+@@ -0,0 +1,264 @@
 +# fyne.io/systray, patched copy
 +
 +This folder is a copy of [fyne.io/systray](https://github.com/fyne-io/systray)
@@ -235,7 +235,12 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 +  remembers the last highlighted item and, when the menu closes with no
 +  action taken and the closing event is that key (key-down or key-up),
 +  performs the remembered item's action if it is an enabled view item.
-+  Escape and every other way of closing do nothing. An Objective-C exception while a
++  Escape and every other way of closing do nothing. A view's action (a
++  click, Return, a VoiceOver press) is taken only while the menu is open
++  and once per open: a second one in the same open (a key repeat, Return
++  and a press together) and a press on a view of a closed menu (the
++  accessibility tree keeps a closed menu) send nothing, and such a press
++  answers that it did nothing. An Objective-C exception while a
 +  view is measured or drawn is caught in the C functions the Go side
 +  calls (it never unwinds through Go) and reported to the viewer's
 +  `ViewFailed` once the call into Go has returned. Only documented AppKit
@@ -1131,7 +1136,7 @@ diff -aruN a/panelview_darwin.go b/panelview_darwin.go
 diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 --- a/panelview_darwin.m
 +++ b/panelview_darwin.m
-@@ -0,0 +1,520 @@
+@@ -0,0 +1,531 @@
 +//go:build !ios
 +
 +// Not upstream code: this file was added to the copy of fyne.io/systray
@@ -1396,11 +1401,22 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +  aiu_report();
 +}
 +
-+// the item's action, as menuHandler: sends it: the menu closes first
-+- (void)aiuChoose:(NSMenuItem *)mi {
++// The item's action, as menuHandler: sends it: the menu closes first. It
++// acts only while the menu is open, and once per open, whichever way it
++// came (a click, Return, a VoiceOver press): a key repeat queued before the
++// menu closed, or Return and a VoiceOver press together, must not send two;
++// and the accessibility tree keeps a closed menu (measured on CI, stage 3),
++// so a press on one of its rows must not act with no menu shown. Both
++// flags are read before cancelTracking, which may run menuDidClose: (and
++// reset them) before it returns. YES: the action was sent.
++- (BOOL)aiuChoose:(NSMenuItem *)mi {
++  if (!aiuMenuOpen || aiuActed) {
++    return NO;
++  }
 +  aiuActed = YES;
 +  [[mi menu] cancelTracking];
 +  systray_menu_item_selected(self.itemId);
++  return YES;
 +}
 +
 +// a click on an enabled item (a row) is its action; a header ignores it
@@ -1457,14 +1473,14 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +  return mi != nil && mi.isEnabled;
 +}
 +
-+// VoiceOver's press on an enabled item (a row) is its action, as a click.
++// VoiceOver's press on an enabled item (a row) is its action, as a click
++// (none on a closed menu's row: aiuChoose:).
 +- (BOOL)accessibilityPerformPress {
 +  NSMenuItem *mi = [self enclosingMenuItem];
 +  if (mi == nil || !mi.isEnabled) {
 +    return NO;
 +  }
-+  [self aiuChoose:mi];
-+  return YES;
++  return [self aiuChoose:mi];
 +}
 +
 +@end

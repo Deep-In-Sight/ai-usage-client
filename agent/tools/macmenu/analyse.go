@@ -6,9 +6,10 @@
 // view items (plan Task 9): their sizes and width, their VoiceOver labels
 // and titles, the bars in the capture, a click on a row, Return on a
 // highlighted row (reached with Down, Down twice, Up from one of the
-// menu's own items, the pointer), Space, Escape, a second view sent to the
+// menu's own items, the pointer), Space, Escape, a VoiceOver press on a row
+// of the open menu and of the closed one, a second view sent to the
 // running helper, and Return in the menu of a helper made the active app.
-// Each click or key must send exactly one click (or none). It prints one
+// Each click, key or press must send exactly one click (or none). It prints one
 // JSON object (the measured facts and the problems found); it gives up
 // after its deadline and then prints what it had and the step it was at.
 // This file is the part that is plain Go: what is expected and how it is
@@ -113,6 +114,17 @@ type Facts struct {
 	SpaceViewClosed   bool   `json:"space_view_closed"`
 	Escape            string `json:"escape"`
 	EscapeClosed      bool   `json:"escape_closed"`
+	// VoiceOver's press (AXPress on the view) on 5-hour in the open menu,
+	// twice back to back: what it sent (one action per open: exactly one
+	// click, review N4) and whether the menu closed; then on the same view
+	// once the menu had closed (the tree keeps a closed menu): what it sent
+	// (nothing) and whether the view was still there (its label read);
+	// the presses' AXErrors (0 success)
+	AXOpen        string `json:"ax_open"`
+	AXOpenClosed  bool   `json:"ax_open_closed"`
+	AXClosed      string `json:"ax_closed"`
+	AXClosedThere bool   `json:"ax_closed_there"`
+	AXErrors      string `json:"ax_errors,omitempty"`
 	// the menu opened again after the running helper got another view
 	// (States, then Combined again: review B3-I4)
 	Reopens []Reopen `json:"reopens,omitempty"`
@@ -392,6 +404,16 @@ func judge(f Facts, want []Expected) []string {
 	}
 	if !f.EscapeClosed {
 		p = append(p, "the menu stayed open after Escape")
+	}
+	// one action per open, and none from a closed menu (review N4)
+	if f.AXOpen != "r.claude.0" {
+		p = append(p, fmt.Sprintf("two VoiceOver presses on 5-hour in the open menu sent %q, want r.claude.0 once", f.AXOpen))
+	}
+	if !f.AXOpenClosed {
+		p = append(p, "the menu stayed open after a VoiceOver press on 5-hour")
+	}
+	if f.AXClosed != "" {
+		p = append(p, fmt.Sprintf("a VoiceOver press on 5-hour of the closed menu sent %q, want nothing", f.AXClosed))
 	}
 	p = append(p, judgeReopens(f.Reopens)...)
 	return p
@@ -697,10 +719,12 @@ func summary(f Facts, agent bool) string {
 func keys(f Facts) string {
 	return fmt.Sprintf("header click %s (stayed open %v); click %s (closed %v); Down chose %s, Return %s (closed %v); "+
 		"Down Down Return %s (closed %v); Up from Open dashboard chose %s, Return %s (closed %v); pointer on Weekly, Return %s (closed %v); "+
-		"Space on Open dashboard %s (closed %v), on 5-hour %s (closed %v); Escape %s (closed %v); Return in the active helper's menu: %s (switch taken %v)",
+		"Space on Open dashboard %s (closed %v), on 5-hour %s (closed %v); Escape %s (closed %v); "+
+		"VoiceOver press twice on 5-hour %s (closed %v), on the closed menu's %s (its view there %v; AXError %s); Return in the active helper's menu: %s (switch taken %v)",
 		orNone(f.HeaderClick), f.HeaderStayed, orNone(f.Click), f.ClickClosed, orNone(f.DownSelected), orNone(f.Return), f.ReturnClosed,
 		orNone(f.Down2), f.Down2Closed, orNone(f.UpSelected), orNone(f.Up), f.UpClosed, orNone(f.Pointer), f.PointerClosed,
-		orNone(f.SpaceNative), f.SpaceNativeClosed, orNone(f.SpaceView), f.SpaceViewClosed, orNone(f.Escape), f.EscapeClosed, orNone(f.Active), f.ActiveSwitch)
+		orNone(f.SpaceNative), f.SpaceNativeClosed, orNone(f.SpaceView), f.SpaceViewClosed, orNone(f.Escape), f.EscapeClosed,
+		orNone(f.AXOpen), f.AXOpenClosed, orNone(f.AXClosed), f.AXClosedThere, orNone(f.AXErrors), orNone(f.Active), f.ActiveSwitch)
 }
 
 // Shape is a highlight inside its item, in points: its insets from the
