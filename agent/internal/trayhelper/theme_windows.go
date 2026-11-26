@@ -8,8 +8,9 @@ import (
 
 // appsUseLightTheme is the user's app mode (HKCU\Software\Microsoft\
 // Windows\CurrentVersion\Themes\Personalize, AppsUseLightTheme: 0 dark, 1
-// light), the documented personalisation value; an error when it is not
-// there (light, then).
+// light). It is a widely used registry value, not a documented contract:
+// it is only read, and an error when it is not there or cannot be read
+// keeps the panel light (themeFor).
 func appsUseLightTheme() (uint32, error) {
 	k, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`, registry.QUERY_VALUE)
 	if err != nil {

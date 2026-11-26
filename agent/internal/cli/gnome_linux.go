@@ -58,9 +58,12 @@ func shellBus(ctx context.Context, getenv func(string) string) (*dbus.Conn, erro
 // extension's folder was not there before and was written, and that the
 // shell loads extensions from users' folders (UserExtensionsEnabled true:
 // review A-M4), so install says the panel comes after the next login.
-// Anything else (no bus: SSH, "su -", before the first GNOME login;
-// another desktop; a failure) writes nothing and says nothing: the bridge
-// writes it at the next GNOME login (design 6.4). With user extensions
+// Anything else (no bus: the environment names a graphical session but
+// gives no session bus that answers in time; another desktop; a failure)
+// writes nothing and says nothing: the bridge writes it when a supported
+// shell answers it, in this session or at the next GNOME login (design
+// 6.4). An install over SSH or from "su -" never gets here: with no
+// graphical session it is a headless install (install.go). With user extensions
 // switched off the folder is written all the same (it is ready if they
 // are switched on), without the promise.
 func installPanelExtension(env Env) (first bool) {
