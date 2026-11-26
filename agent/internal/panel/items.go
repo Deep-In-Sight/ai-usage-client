@@ -1,6 +1,10 @@
 package panel
 
-import "github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
+import (
+	"strings"
+
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
+)
 
 // Item is what a helper draws for one menu item of the panel: a section's
 // header (with its problem line, drawn under it) or one of its rows.
@@ -48,6 +52,34 @@ func Items(p trayproto.Panel) map[string]Item {
 			}
 			out[r.ID] = Item{Kind: kind, Provider: s.Provider, Label: r.Label, PercentText: r.PercentText,
 				Detail: r.Detail, Level: r.Level, Percent: r.Percent, Stale: s.Stale}
+		}
+	}
+	return out
+}
+
+// AccessibleText is what a screen reader says for a drawn item (macOS
+// gives it to VoiceOver as the item's label): its texts in reading order,
+// a comma between them; a header's problem line after its time.
+func AccessibleText(it Item) string {
+	var parts []string
+	switch it.Kind {
+	case "header":
+		parts = []string{it.Name, it.Account, it.Updated, it.Problem}
+	case "row":
+		parts = []string{it.Label, it.PercentText, it.Detail}
+	case "more":
+		parts = []string{it.Label}
+	default:
+		parts = []string{it.Text}
+	}
+	return strings.Join(slicesNonEmpty(parts), ", ")
+}
+
+func slicesNonEmpty(in []string) []string {
+	out := in[:0:0]
+	for _, s := range in {
+		if s != "" {
+			out = append(out, s)
 		}
 	}
 	return out

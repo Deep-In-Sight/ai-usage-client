@@ -452,8 +452,9 @@ func (h *helper) build(shape []string, byID map[string]trayproto.Item, drawing b
 // joins a menu built without a section; CI tray.menu_reset), and when a
 // provider appears or goes.
 //
-// A ui that draws (Windows) gets the usage panel when the view carries
-// one (design 6.2): every visible item is drawn from drawnItems, a
+// A ui that draws (Windows, macOS) gets the usage panel when the view
+// carries one (design 6.2, 6.3): the visible items are drawn from
+// drawnItems (on macOS not the actions, which stay the menu's own), a
 // section's problem line under its header (its own item hidden), the
 // server line with the panel's text. Otherwise the menu is today's text
 // menu exactly.
@@ -465,7 +466,7 @@ func (h *helper) apply(v trayproto.Msg) {
 	}
 	var drawn map[string]panel.Item
 	if v.Panel != nil && h.d.ui.Draws() {
-		drawn = drawnItems(*v.Panel, byID)
+		drawn = drawnItems(*v.Panel, byID, h.d.ui.DrawsActions())
 		if s, ok := byID["server"]; ok {
 			s.Text = v.Panel.Server
 			byID["server"] = s

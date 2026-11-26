@@ -478,7 +478,7 @@ func panelPicture(t *testing.T, in tray.MenuInputs, th menuTheme, light panel.Pa
 	for _, it := range v.Items {
 		byID[it.ID] = it
 	}
-	drawn := drawnItems(*v.Panel, byID)
+	drawn := drawnItems(*v.Panel, byID, true)
 	shape := sectionsShown(v.Items)
 	d := newTestDrawer(fixed(th, light))
 	type entry struct {

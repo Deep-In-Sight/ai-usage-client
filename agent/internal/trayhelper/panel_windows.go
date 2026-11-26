@@ -103,6 +103,9 @@ func (d *winDrawer) palette() panel.Palette {
 	return d.theme.palette(d.light)
 }
 
+// DrawsActions is true: every item of the menu is drawn (stage 0).
+func (d *winDrawer) DrawsActions() bool { return true }
+
 // Failed reports whether a panic stopped the drawing (the helper then
 // builds the text menu).
 func (d *winDrawer) Failed() bool {

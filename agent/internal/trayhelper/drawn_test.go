@@ -104,6 +104,62 @@ func TestPanelItemsAreDrawnOnWindowsAndMac(t *testing.T) {
 	}
 }
 
+// Plan Task 9 (design 6.3, review A-I2): on a ui that draws but keeps the
+// text items its own (macOS), the headers, rows and the lines that cannot
+// be clicked (the server line, the sign-in prompt) are drawn; newversion
+// and the actions stay the menu's own items with their titles, check mark
+// and enabled state; the problem line goes under its header (F8).
+func TestMacDrawsThePanelAndKeepsTheActions(t *testing.T) {
+	v := fixtureView(panelfixture.States())
+	want := panel.Items(*v.Panel)
+	r := drawnRun(t, true, "darwin")
+	r.ui.nativeActions.Store(true)
+	r.send(v)
+	eq(t, r.next().Type, trayproto.TypeReady)
+	layout, items, _, _, _, _ := r.ui.snapshot()
+	eq(t, strings.Join(layout, " "), "newversion h.claude r.claude.0 r.claude.1 r.claude.2 r.claude.3 r.claude.4 p.claude = "+
+		"h.codex r.codex.0 r.codex.1 r.codex.2 r.codex.3 r.codex.4 p.codex = server dashboard refresh autostart remove quit")
+	for _, id := range []string{"h.claude", "r.claude.0", "r.claude.1", "r.claude.2", "h.codex", "r.codex.0", "r.codex.1"} {
+		if items[id].drawn == nil || !items[id].visible {
+			t.Fatalf("%s: drawn %v visible %v", id, items[id].drawn, items[id].visible)
+		}
+		eq(t, *items[id].drawn, want[id])
+	}
+	eq(t, *items["server"].drawn, panel.Item{Kind: "info", Text: v.Panel.Server, Dim: true})
+	eq(t, items["p.codex"].visible, false)
+	eq(t, items["h.codex"].drawn.Problem, text.CodexExpired)
+	for _, id := range []string{"newversion", "dashboard", "refresh", "autostart", "remove", "quit"} {
+		if items[id].drawnSets != 0 {
+			t.Fatalf("%s is drawn: the actions stay the menu's own", id)
+		}
+	}
+	eq(t, items["refresh"].title, "Refresh now")
+	eq(t, items["refresh"].enabled, true)
+	eq(t, items["autostart"].checked, true)
+	eq(t, items["quit"].visible, true)
+
+	// signed out: the prompt is drawn, wrapped like the server line
+	out := panelfixture.States()
+	out.Snap.Providers = map[provider.ID]status.ProviderStatus{provider.Claude: {State: "not_signed_in"}, provider.Codex: {State: "not_signed_in"}}
+	r = drawnRun(t, true, "darwin")
+	r.ui.nativeActions.Store(true)
+	r.send(fixtureView(out))
+	eq(t, r.next().Type, trayproto.TypeReady)
+	layout, items, _, _, _, _ = r.ui.snapshot()
+	prompt := 0
+	for _, id := range layout {
+		if strings.HasPrefix(id, "p.") && items[id].visible {
+			if items[id].drawn == nil || items[id].drawn.Kind != "info" {
+				t.Fatalf("%s: the sign-in prompt is not drawn: %+v", id, items[id].drawn)
+			}
+			prompt++
+		}
+	}
+	if prompt == 0 {
+		t.Fatalf("no sign-in prompt in %v", layout)
+	}
+}
+
 // A view without Codex rebuilds the drawn menu; one with fewer Claude
 // rows hides the row that went; a changed row is drawn anew, an unchanged
 // one is not set again.

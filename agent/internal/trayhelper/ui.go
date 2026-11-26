@@ -15,9 +15,13 @@ type ui interface {
 	// menu whose items it draws).
 	AddSeparator(drawn bool)
 	// Draws reports whether this ui draws the usage panel's items itself
-	// (Windows; macOS once its views come, plan Task 9). Otherwise the
+	// (Windows; macOS with its menu item views, plan Task 9). Otherwise the
 	// menu is text items (pre-flight F8: asked, not decided by the OS).
 	Draws() bool
+	// DrawsActions reports whether a ui that draws also draws the text
+	// items (newversion, the actions): Windows does (stage 0: every
+	// item); macOS keeps them the menu's own.
+	DrawsActions() bool
 	// Reset removes every item (their Clicked channels close).
 	Reset()
 	SetIcon(img []byte)
@@ -56,4 +60,6 @@ type itemDrawer interface {
 	// Failed reports that the drawing stopped for good (a panic): the
 	// ui does not draw from then on.
 	Failed() bool
+	// DrawsActions: it draws the text items too (Windows).
+	DrawsActions() bool
 }

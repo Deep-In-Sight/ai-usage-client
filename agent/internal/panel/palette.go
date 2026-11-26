@@ -9,9 +9,21 @@ import (
 // background, its text, and the highlight of the item under the pointer
 // with that item's text. The dim text, the problem line's and the
 // separator's colours follow from them.
+//
+// A background that is fully transparent is the menu's own, which the
+// panel does not know (macOS: the menu's material shows through the
+// items, design 6.3): nothing fills an item then, a faded colour is the
+// colour at that opacity and Dark alone says which problem colour reads.
+// Dimmed, when set, is the menu's own dim text colour (macOS'
+// secondaryLabelColor) instead of the text mixed toward the background.
+// HighlightInset and HighlightRadius (pixels at 96 DPI, scaled with the
+// metrics; 0: the whole item, Windows) draw the highlight as a rounded
+// fill inset from the item's sides, as macOS highlights its menu items.
 type Palette struct {
 	Dark                                       bool
 	Background, Text, Highlight, HighlightText color.NRGBA
+	Dimmed                                     color.NRGBA
+	HighlightInset, HighlightRadius            int
 }
 
 var (
@@ -36,7 +48,7 @@ const SeparatorMix = 0.8
 // as the GNOME panel does, so that a high-contrast black menu (the light
 // set in the system's colours) gets the amber.
 func (p Palette) Problem() color.NRGBA {
-	if p.Dark || luminance(p.Background) < 0.5 {
+	if p.Dark || (p.Background.A != 0 && luminance(p.Background) < 0.5) {
 		return ProblemOnDark
 	}
 	return ProblemOnLight
@@ -58,8 +70,14 @@ func luminance(c color.NRGBA) float64 {
 // Separator is the colour of the line between the groups.
 func (p Palette) Separator() color.NRGBA { return mix(p.Text, p.Background, SeparatorMix) }
 
-// Fade is c drawn at opacity over background (a stale group, design 5.3).
+// Fade is c drawn at opacity over background (a stale group, design 5.3);
+// over the menu's own background (a transparent one, macOS) it is c at
+// that opacity.
 func Fade(c, background color.NRGBA, opacity float64) color.NRGBA {
+	if background.A == 0 {
+		c.A = uint8(math.Floor(float64(c.A)*opacity + 0.5))
+		return c
+	}
 	return mix(c, background, 1-opacity)
 }
 

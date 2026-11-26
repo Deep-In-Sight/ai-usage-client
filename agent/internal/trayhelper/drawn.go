@@ -9,12 +9,14 @@ import (
 )
 
 // drawnItems is what each visible item of a view's menu draws as when the
-// ui draws the usage panel (design 5.1, 6.2; stage 0: every item is drawn
-// on Windows): the panel's headers and rows (panel.Items), the server line
-// with the panel's text, the sign-in prompt, newversion and the actions
-// as text items. A section's problem line is not among them: its header
-// draws it.
-func drawnItems(p trayproto.Panel, byID map[string]trayproto.Item) map[string]panel.Item {
+// ui draws the usage panel (design 5.1, 6.2, 6.3): the panel's headers and
+// rows (panel.Items), the server line with the panel's text and the
+// sign-in prompt (lines that cannot be clicked: they wrap at the panel's
+// width, review A-I2), and with actions (Windows, stage 0: every item is
+// drawn) newversion and the actions as text items; without (macOS) those
+// stay the menu's own items. A section's problem line is not among them:
+// its header draws it.
+func drawnItems(p trayproto.Panel, byID map[string]trayproto.Item, actions bool) map[string]panel.Item {
 	out := panel.Items(p)
 	for _, id := range trayproto.ItemIDs {
 		it, ok := byID[id]
@@ -26,7 +28,7 @@ func drawnItems(p trayproto.Panel, byID map[string]trayproto.Item) map[string]pa
 			out[id] = panel.Item{Kind: "info", Text: p.Server, Dim: true}
 		case kind == "p": // the sign-in prompt (no section is drawn)
 			out[id] = panel.Item{Kind: "info", Text: it.Text}
-		default: // newversion and the actions (and anything the panel lacks)
+		case actions: // newversion and the actions (and anything the panel lacks)
 			out[id] = panel.Item{Kind: "action", Text: it.Text, Enabled: it.Enabled, Checkbox: it.Checkbox, Checked: it.Checked}
 		}
 	}

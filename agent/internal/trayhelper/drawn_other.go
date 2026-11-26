@@ -1,6 +1,7 @@
-//go:build !windows
+//go:build !windows && !(darwin && cgo)
 
 package trayhelper
 
-// newItemDrawer: only Windows draws the panel's items itself (so far).
+// newItemDrawer: only Windows and macOS (with cgo: its tray) draw the
+// panel's items themselves.
 func newItemDrawer() itemDrawer { return nil }

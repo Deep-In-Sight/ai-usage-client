@@ -28,6 +28,7 @@ func newUI(o Options) ui {
 func (systrayUI) Run(onReady, onExit func()) { systray.Run(onReady, onExit) }
 func (systrayUI) Quit()                      { systray.Quit() }
 func (u systrayUI) Draws() bool              { return u.drawer != nil && !u.drawer.Failed() }
+func (u systrayUI) DrawsActions() bool       { return u.drawer != nil && u.drawer.DrawsActions() }
 func (systrayUI) SetNextToIcon(s string)     { setNextToIcon(s) }
 func (systrayUI) SetTooltip(s string)        { systray.SetTooltip(s) }
 func (systrayUI) Lost() <-chan struct{}      { return sessionLost() }
@@ -81,13 +82,15 @@ type systrayItem struct {
 }
 
 // SetDrawn: the drawer gets the item's data first, then the menu item
-// becomes owner-drawn (or a text item again).
+// becomes owner-drawn (Windows) or gets its view (macOS), or a text item
+// again; each library call does nothing on the other OS.
 func (i systrayItem) SetDrawn(it *panel.Item) {
 	if i.drawer == nil {
 		return
 	}
 	i.drawer.Set(i.m.ID(), it)
 	i.m.SetOwnerDrawn(it != nil)
+	i.m.SetPanelView(it != nil)
 }
 
 func (i systrayItem) SetTitle(s string) { i.m.SetTitle(s) }

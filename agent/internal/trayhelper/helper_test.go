@@ -46,6 +46,9 @@ type fakeUI struct {
 	shown    atomic.Bool
 	size     atomic.Int32
 	draws    atomic.Bool // the ui draws the panel's items itself (Windows)
+	// nativeActions: a ui that draws keeps the text items its own
+	// (macOS)
+	nativeActions atomic.Bool
 }
 
 type fakeItem struct {
@@ -113,7 +116,8 @@ func (u *fakeUI) AddSeparator(drawn bool) {
 	}
 	u.layout = append(u.layout, "-")
 }
-func (u *fakeUI) Draws() bool { return u.draws.Load() }
+func (u *fakeUI) Draws() bool        { return u.draws.Load() }
+func (u *fakeUI) DrawsActions() bool { return !u.nativeActions.Load() }
 func (u *fakeUI) Reset() {
 	u.mu.Lock()
 	defer u.mu.Unlock()

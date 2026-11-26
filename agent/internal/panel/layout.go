@@ -28,7 +28,7 @@ const (
 type OpKind uint8
 
 const (
-	Fill   OpKind = iota // a rectangle in Colour
+	Fill   OpKind = iota // a rectangle in Colour, its corners rounded by Radius
 	Text                 // Text in Colour and Font, in one line, vertically centred in its box
 	Pixels               // a premultiplied BGRA picture, blended at Opacity
 )
@@ -47,6 +47,7 @@ type Op struct {
 	Ellipsis   bool   // a text too long for its box ends in "…"
 	Pixels     []byte // W×H, as BarPixels gives them
 	Opacity    uint8  // Pixels: 255, a stale group's 153
+	Radius     int    // Fill: the corners' radius (0: square)
 }
 
 // StaleAlpha is StaleOpacity as a picture's constant alpha (0.6 × 255,
@@ -134,8 +135,11 @@ func Layout(it Item, m Metrics, tm Measurer, w, h int, pal Palette, selected boo
 		bg, text = pal.Highlight, pal.HighlightText
 	}
 	dim := Dim(text, bg)
-	if highlighted {
+	switch {
+	case highlighted:
 		dim = text
+	case pal.Dimmed.A != 0:
+		dim = pal.Dimmed
 	}
 	opacity := uint8(255)
 	if it.Stale {
@@ -143,6 +147,11 @@ func Layout(it Item, m Metrics, tm Measurer, w, h int, pal Palette, selected boo
 		opacity = StaleAlpha
 	}
 	ops := []Op{{Kind: Fill, W: w, H: h, Colour: bg}}
+	if highlighted && pal.HighlightInset > 0 {
+		in := m.px(pal.HighlightInset)
+		ops = []Op{{Kind: Fill, W: w, H: h, Colour: pal.Background},
+			{Kind: Fill, X: in, W: max(w-2*in, 0), H: h, Colour: bg, Radius: m.px(pal.HighlightRadius)}}
+	}
 	put := func(o Op) {
 		// nothing leaves the item, whatever the texts and the font
 		o.X, o.Y = min(max(o.X, 0), w), min(max(o.Y, 0), h)
