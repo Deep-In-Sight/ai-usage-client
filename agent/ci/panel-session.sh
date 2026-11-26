@@ -823,10 +823,15 @@ up=${BUS_UP:-$(now)}
 # comes when the bus has been up 35 s and the bridge has said it
 said() { awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\] no usage panel on this desktop.*\(no shell\)' | head -n 1 | cut -c12-; }
 has_said() { [ -n "$(said)" ]; }
-wait_for 70 has_said
-# the bridge that said it: the same one must serve the shell (it waits on
-# in its process, review A-M1), and it says it waits for the shell
+# the bridge on this bus, taken as soon as it owns its name (before it
+# says "no shell"): the same process must serve the shell (it waits on in
+# its process, review A-M1), and it says it waits for the shell. Taken
+# after that line, a bridge that ended and was started again at once would
+# be the one seen (CI run 45742623920)
+on_bus() { [ -n "$(bridge_pids "$bus" | head -n 1)" ]; }
+wait_ms 40 on_bus
 bpid=$(bridge_pids "$bus" | head -n 1)
+wait_for 70 has_said
 rest=$(python3 -c "import sys,time; print(max(0.0, 35 - (time.time() - float(sys.argv[1]))))" "$up")
 sleep "$rest"
 before=$(said)
