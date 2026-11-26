@@ -30,6 +30,14 @@ why() {
   elif grep -q '^panic:' "$2" 2>/dev/null; then grep -m1 -A3 '^panic:' "$2" | tr '\n' ' '
   else tail -c 300 "$2" 2>/dev/null; fi
 }
+# detail RC JSON ERR: what a failed macmenu run printed (rc, its problems,
+# why), one space between the parts that are there
+detail() {
+  local p w
+  p=$(jlist "$2" problems)
+  w=$(why "$1" "$3")
+  echo "rc=$1${p:+ $p}${w:+ $w}"
+}
 # jlist FILE KEY: the list KEY of the JSON object in FILE as text, "; "
 # between its items (not escaped as JSON: review B3-m17)
 jlist() {
@@ -158,7 +166,7 @@ mm="$CI_BIN/macmenu"
 tmo 300 "$mm" drive -deadline 270s -exe "$exe" -png "$out/panel-menu-mac.png" > "$out/macmenu-drive.json" 2> "$out/macmenu-drive.err"
 rc=$?
 if [ $rc -eq 0 ]; then pass panel.mac_menu "views sized and labelled, bars drawn, a second view shown, clicks and keys as a person would, each sending one click"
-else fail_long panel.mac_menu "rc=$rc $(jlist "$out/macmenu-drive.json" problems) $(why $rc "$out/macmenu-drive.err")"; fi
+else fail_long panel.mac_menu "$(detail $rc "$out/macmenu-drive.json" "$out/macmenu-drive.err")"; fi
 info_long panel.mac_menu.measured "$(jget "$out/macmenu-drive.json" summary)"
 info_long panel.mac_menu.keys "$(jget "$out/macmenu-drive.json" keys)"
 act=$(jget "$out/macmenu-drive.json" active_return)
@@ -169,7 +177,7 @@ hp=$(pgrep -f "^$exe tray-helper" | head -n 1)
 tmo 90 "$mm" inspect -deadline 60s -pid "${hp:-0}" -png "$out/panel-menu-agent.png" > "$out/macmenu-agent.json" 2> "$out/macmenu-agent.err"
 rc=$?
 if [ $rc -eq 0 ]; then pass panel.mac_agent_menu "helper $hp: headers and rows are views as wide as the menu"
-else fail_long panel.mac_agent_menu "rc=$rc helper=$hp $(jlist "$out/macmenu-agent.json" problems) $(why $rc "$out/macmenu-agent.err")"; fi
+else fail_long panel.mac_agent_menu "helper=$hp $(detail $rc "$out/macmenu-agent.json" "$out/macmenu-agent.err")"; fi
 info_long panel.mac_agent_menu.measured "$(jget "$out/macmenu-agent.json" summary)"
 
 # tray.two_helpers: the CI build's test switch shows a second helper; the
