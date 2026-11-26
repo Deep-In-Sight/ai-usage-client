@@ -422,9 +422,9 @@ func report(f Facts, agent bool) {
 	os.Exit(0)
 }
 
-// progress is the step being taken and a copy of the facts as they were
-// when it began (trace keeps it), for the deadline's report; and the
-// helpers started, which the deadline stops.
+// progress is the last step done and a copy of the facts as they were
+// then (trace keeps it), for the deadline's report; and the helpers
+// started, which the deadline stops.
 var progress struct {
 	sync.Mutex
 	step    string
@@ -433,14 +433,14 @@ var progress struct {
 }
 
 // giveUpAfter: once d has passed, the facts measured until the last step
-// began are printed with a problem naming that step, the helpers started
+// done are printed with a problem naming that step, the helpers started
 // are killed, and the program ends (review B3-I1: a hang is a failure that
 // says where, not a job that runs to its time-out).
 func giveUpAfter(d time.Duration, agent bool) {
 	time.AfterFunc(d, func() {
 		progress.Lock()
 		f := progress.facts
-		f.TimedOut = fmt.Sprintf("timed out after %s at the step %q (the facts are those from before it)", d, orNone(progress.step))
+		f.TimedOut = fmt.Sprintf("timed out after %s, in the step after %q (the facts are those up to that one)", d, orNone(progress.step))
 		for _, c := range progress.helpers {
 			if c.Process != nil {
 				_ = c.Process.Kill()

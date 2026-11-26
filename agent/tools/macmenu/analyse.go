@@ -122,7 +122,7 @@ type Facts struct {
 	// took the switch
 	Active       string `json:"active_return"`
 	ActiveSwitch bool   `json:"active_switch"`
-	// the deadline passed: at which step (the facts are those from before it)
+	// the deadline passed: after which step (the facts are those up to it)
 	TimedOut string   `json:"timed_out,omitempty"`
 	Errors   []string `json:"errors,omitempty"`
 	Problems []string `json:"problems"`

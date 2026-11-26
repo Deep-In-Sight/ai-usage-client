@@ -181,9 +181,11 @@ func TestDrawnItemsFollowTheView(t *testing.T) {
 	noCodex := panelfixture.Combined()
 	delete(noCodex.Snap.Providers, provider.Codex)
 	r.send(fixtureView(noCodex))
+	// built and set: quit, the last item, is shown once every item before
+	// it has its data (a check right after the build raced the setting)
 	waitFor(t, "the rebuild", func() bool {
-		layout, _, _, _, _, resets := r.ui.snapshot()
-		return resets == 1 && !strings.Contains(strings.Join(layout, " "), "h.codex") && layout[len(layout)-1] == "quit"
+		layout, items, _, _, _, resets := r.ui.snapshot()
+		return resets == 1 && !strings.Contains(strings.Join(layout, " "), "h.codex") && layout[len(layout)-1] == "quit" && items["quit"].visible
 	})
 	layout, items, _, _, _, _ := r.ui.snapshot()
 	eq(t, strings.Join(layout, " "), "newversion h.claude r.claude.0 r.claude.1 r.claude.2 r.claude.3 r.claude.4 p.claude = "+
