@@ -28,6 +28,7 @@ out=dist/ai-usage-macos-universal
 lipo -create -output "$out" "$slices/arm64" "$slices/x86_64"
 archs=$(lipo -archs "$out")
 [ "$archs" = "x86_64 arm64" ] || { echo "universal file has: $archs" >&2; exit 1; }
+tools/check-macos-symbols.sh "$out"
 v=$("./$out" version)
 printf '%s\n' "$v" | grep -Eqx "ai-usage $(printf '%s' "$ver" | sed 's/\./\\./g') darwin/(arm64|amd64) tray" ||
   { echo "version says: $v" >&2; exit 1; }

@@ -316,6 +316,7 @@ import "C"
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -324,14 +325,17 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray/panelfixture"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
 )
@@ -340,10 +344,16 @@ const (
 	evMouseDown = 1 // kCGEventLeftMouseDown
 	evMouseUp   = 2
 	evMouseMove = 5
-	keyDown     = 125 // the arrow
+	keyDown     = 125 // the arrows
+	keyUp       = 126
 	keyReturn   = 36
 	keyEscape   = 53
+	keySpace    = 49
 )
+
+// testActiveMenu is the CI build's test switch that makes a tray helper
+// the active app before its menu shows (internal/cli testSwitches).
+const testActiveMenu = "AI_USAGE_TEST_ACTIVE_MENU"
 
 func main() {
 	if !allowed(os.Getenv) {
@@ -351,7 +361,7 @@ func main() {
 		os.Exit(2)
 	}
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: macmenu drive -exe AI-USAGE -png FILE | inspect -pid PID -png FILE")
+		fmt.Fprintln(os.Stderr, "usage: macmenu drive -exe AI-USAGE -png FILE [-deadline D] | inspect -pid PID -png FILE [-deadline D]")
 		os.Exit(2)
 	}
 	var f Facts
@@ -362,15 +372,19 @@ func main() {
 		fs := flag.NewFlagSet("drive", flag.ExitOnError)
 		exe := fs.String("exe", "", "the ai-usage executable")
 		pic := fs.String("png", "", "the open menu's capture")
+		d := fs.Duration("deadline", 240*time.Second, "give up after this, printing what was measured")
 		_ = fs.Parse(os.Args[2:])
+		giveUpAfter(*d, false)
 		f, err = drive(*exe, *pic)
 	case "inspect":
 		fs := flag.NewFlagSet("inspect", flag.ExitOnError)
 		pid := fs.Int("pid", 0, "a tray helper of the running agent")
 		pic := fs.String("png", "", "the open menu's capture")
+		d := fs.Duration("deadline", 60*time.Second, "give up after this, printing what was measured")
 		_ = fs.Parse(os.Args[2:])
-		f, err = inspect(*pid, *pic)
 		agent = true
+		giveUpAfter(*d, true)
+		f, err = inspect(*pid, *pic)
 	default:
 		fmt.Fprintf(os.Stderr, "macmenu: unknown command %q\n", os.Args[1])
 		os.Exit(2)
@@ -378,10 +392,20 @@ func main() {
 	if err != nil {
 		f.Errors = append(f.Errors, err.Error())
 	}
+	progress.Lock() // the deadline's report and this one never both print
+	report(f, agent)
+}
+
+// report prints the facts with what is wrong (one JSON object) and ends
+// the program: 1 when something is.
+func report(f Facts, agent bool) {
 	if agent {
 		f.Problems = judgeAgent(f)
 	} else {
 		f.Problems = judge(f, expected(panelfixture.Combined()))
+	}
+	if f.TimedOut != "" { // first: the rest follows from it
+		f.Problems = append([]string{f.TimedOut}, f.Problems...)
 	}
 	if f.Problems == nil {
 		f.Problems = []string{}
@@ -389,11 +413,54 @@ func main() {
 	b, _ := json.Marshal(struct {
 		Facts
 		Summary string `json:"summary"`
-	}{f, summary(f, agent)})
+		Keys    string `json:"keys,omitempty"`
+	}{f, summary(f, agent), map[bool]string{false: keys(f)}[agent]})
 	fmt.Println(string(b))
 	if len(f.Problems) > 0 {
 		os.Exit(1)
 	}
+	os.Exit(0)
+}
+
+// progress is the step being taken and a copy of the facts as they were
+// when it began (trace keeps it), for the deadline's report; and the
+// helpers started, which the deadline stops.
+var progress struct {
+	sync.Mutex
+	step    string
+	facts   Facts
+	helpers []*exec.Cmd
+}
+
+// giveUpAfter: once d has passed, the facts measured until the last step
+// began are printed with a problem naming that step, the helpers started
+// are killed, and the program ends (review B3-I1: a hang is a failure that
+// says where, not a job that runs to its time-out).
+func giveUpAfter(d time.Duration, agent bool) {
+	time.AfterFunc(d, func() {
+		progress.Lock()
+		f := progress.facts
+		f.TimedOut = fmt.Sprintf("timed out after %s at the step %q (the facts are those from before it)", d, orNone(progress.step))
+		for _, c := range progress.helpers {
+			if c.Process != nil {
+				_ = c.Process.Kill()
+			}
+		}
+		report(f, agent)
+	})
+}
+
+// note keeps a copy of f for the deadline's report.
+func note(f *Facts, step string) {
+	progress.Lock()
+	defer progress.Unlock()
+	c := *f
+	c.Items = append([]Item(nil), f.Items...)
+	c.Trace = append([]string(nil), f.Trace...)
+	c.Errors = append([]string(nil), f.Errors...)
+	c.Reopens = append([]Reopen(nil), f.Reopens...)
+	c.Bars = maps.Clone(f.Bars)
+	progress.step, progress.facts = step, c
 }
 
 // helperProc is a tray helper of the ai-usage executable that macmenu
@@ -401,7 +468,9 @@ func main() {
 type helperProc struct {
 	pid  int
 	msgs chan trayproto.Msg
+	send func(trayproto.Msg) error
 	stop func()
+	log  string // its standard error
 }
 
 // startHelper starts exe's tray helper (its stderr to logPath, env added
@@ -430,7 +499,11 @@ func startHelper(exe, logPath string, env ...string) (*helperProc, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	h := &helperProc{pid: cmd.Process.Pid, msgs: make(chan trayproto.Msg, 64)}
+	progress.Lock()
+	progress.helpers = append(progress.helpers, cmd)
+	progress.Unlock()
+	h := &helperProc{pid: cmd.Process.Pid, msgs: make(chan trayproto.Msg, 64), log: logPath}
+	h.send = func(m trayproto.Msg) error { return trayproto.Encode(stdin, m) }
 	h.stop = func() {
 		_ = trayproto.Encode(stdin, trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeQuit})
 		_ = stdin.Close()
@@ -481,7 +554,12 @@ func drive(exe, pic string) (f Facts, err error) {
 		return f, err
 	}
 	f.Helper = h.pid
-	defer h.stop()
+	stopped := false
+	defer func() {
+		if !stopped {
+			h.stop()
+		}
+	}()
 	msgs := h.msgs
 	permissions(&f)
 	time.Sleep(1500 * time.Millisecond)
@@ -505,7 +583,7 @@ func drive(exe, pic string) (f Facts, err error) {
 	if hdr, ok := byID(f.Items, "h.claude"); ok {
 		drain(msgs)
 		click(hdr.Rect.X+hdr.Rect.W/2, hdr.Rect.Y+hdr.Rect.H/2)
-		f.HeaderClick = clickFrom(msgs, 1500*time.Millisecond)
+		f.HeaderClick = clicks(msgs, 1500*time.Millisecond)
 		f.HeaderStayed = isOpen(&f, pid)
 		trace(&f, "header-click")
 		if !f.HeaderStayed && !openMenu(&f, pid, "reopen") {
@@ -515,7 +593,8 @@ func drive(exe, pic string) (f Facts, err error) {
 
 	// the menu's own highlight, for the view's to be compared with: the
 	// pointer over Open dashboard
-	if dash, ok := byID(f.Items, "dashboard"); ok && f.Capture != "" {
+	dash, hasDash := byID(f.Items, "dashboard")
+	if hasDash && f.Capture != "" {
 		move(dash.Rect.X+dash.Rect.W/2, dash.Rect.Y+dash.Rect.H/2)
 		time.Sleep(700 * time.Millisecond)
 		g := Facts{Menu: f.Menu}
@@ -531,13 +610,14 @@ func drive(exe, pic string) (f Facts, err error) {
 
 	// a click on Claude's 5-hour
 	row, ok := byID(f.Items, "r.claude.0")
-	if !ok {
+	weekly, ok2 := byID(f.Items, "r.claude.1")
+	if !ok || !ok2 || !hasDash {
 		closeMenu(&f, pid)
-		return f, errors.New("no 5-hour row to click")
+		return f, errors.New("no 5-hour or Weekly row or Open dashboard to click")
 	}
 	drain(msgs)
 	click(row.Rect.X+row.Rect.W/2, row.Rect.Y+row.Rect.H/2)
-	f.Click = clickFrom(msgs, 3*time.Second)
+	f.Click = clicks(msgs, 3*time.Second)
 	f.ClickClosed = closed(&f, pid, 3*time.Second)
 	trace(&f, "click")
 	if !f.ClickClosed {
@@ -545,24 +625,16 @@ func drive(exe, pic string) (f Facts, err error) {
 	}
 
 	// Down, then Return: the first row is highlighted and chosen
-	time.Sleep(800 * time.Millisecond)
-	drain(msgs)
-	if !openMenu(&f, pid, "keys") {
+	if !again(&f, pid, msgs, "keys") {
 		return f, errors.New("the menu did not open again for the keys")
 	}
 	press(keyDown, 60*time.Millisecond)
 	time.Sleep(600 * time.Millisecond)
 	after := Facts{WinSeen: f.WinSeen}
 	readMenu(&after, pid)
+	f.Errors = append(f.Errors, after.Errors...)
 	match(after.Items, want)
-	for _, it := range after.Items {
-		if it.Selected {
-			f.DownSelected = it.ID
-			if f.DownSelected == "" {
-				f.DownSelected = "(" + it.Title + ")"
-			}
-		}
-	}
+	f.DownSelected = selected(after.Items)
 	if img, err := capture(&after, base+"-down.png"); err == nil {
 		hdr, ok1 := byID(after.Items, "h.claude")
 		hl, ok2 := byID(after.Items, "r.claude.0")
@@ -581,63 +653,200 @@ func drive(exe, pic string) (f Facts, err error) {
 	} else {
 		f.Errors = append(f.Errors, err.Error())
 	}
-	press(keyReturn, 300*time.Millisecond)
-	f.Return = clickFrom(msgs, 3*time.Second)
-	f.ReturnClosed = closed(&f, pid, 2*time.Second)
-	trace(&f, "return")
-	if !f.ReturnClosed {
-		closeMenu(&f, pid)
+	f.Return, f.ReturnClosed = choose(&f, pid, msgs, keyReturn, "return")
+
+	// Return on the second row (Down twice), on the row Up reaches from
+	// Open dashboard, on the row under the pointer (review A3-I1)
+	if !again(&f, pid, msgs, "down2") {
+		return f, errors.New("the menu did not open again for Down, Down")
 	}
+	press(keyDown, 60*time.Millisecond)
+	time.Sleep(400 * time.Millisecond)
+	press(keyDown, 60*time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
+	f.Down2, f.Down2Closed = choose(&f, pid, msgs, keyReturn, "down2-return")
+
+	if !again(&f, pid, msgs, "up") {
+		return f, errors.New("the menu did not open again for Up")
+	}
+	move(dash.Rect.X+dash.Rect.W/2, dash.Rect.Y+dash.Rect.H/2)
+	time.Sleep(700 * time.Millisecond)
+	press(keyUp, 60*time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
+	f.UpSelected = selectedNow(&f, pid, want)
+	f.Up, f.UpClosed = choose(&f, pid, msgs, keyReturn, "up-return")
+
+	if !again(&f, pid, msgs, "pointer") {
+		return f, errors.New("the menu did not open again for the pointer")
+	}
+	move(weekly.Rect.X+weekly.Rect.W/2, weekly.Rect.Y+weekly.Rect.H/2)
+	time.Sleep(700 * time.Millisecond)
+	f.Pointer, f.PointerClosed = choose(&f, pid, msgs, keyReturn, "pointer-return")
 
 	// Down, then Escape: nothing is chosen
-	time.Sleep(800 * time.Millisecond)
-	drain(msgs)
-	if !openMenu(&f, pid, "escape") {
+	if !again(&f, pid, msgs, "escape") {
 		return f, errors.New("the menu did not open again for Escape")
 	}
 	press(keyDown, 60*time.Millisecond)
 	time.Sleep(500 * time.Millisecond)
 	press(keyEscape, 60*time.Millisecond)
-	f.Escape = clickFrom(msgs, 2*time.Second)
+	f.Escape = clicks(msgs, 2*time.Second)
 	f.EscapeClosed = closed(&f, pid, 2*time.Second)
 	trace(&f, "escape")
 	if !f.EscapeClosed {
 		closeMenu(&f, pid)
 	}
 
-	// Down, then Return in the menu of an app that is active (the menu
-	// closes on Return without the item's action there, stage 0: the
-	// delegate's fall-back)
-	f.Active = activeReturn(&f, h, want)
+	// Space on Open dashboard (the menu's own item, under the pointer) and
+	// on 5-hour chosen with Down (review A3-M4)
+	if !again(&f, pid, msgs, "space-native") {
+		return f, errors.New("the menu did not open again for Space")
+	}
+	move(dash.Rect.X+dash.Rect.W/2, dash.Rect.Y+dash.Rect.H/2)
+	time.Sleep(700 * time.Millisecond)
+	f.SpaceNative, f.SpaceNativeClosed = choose(&f, pid, msgs, keySpace, "space-native")
+	if !again(&f, pid, msgs, "space-view") {
+		return f, errors.New("the menu did not open again for Space")
+	}
+	press(keyDown, 60*time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
+	f.SpaceView, f.SpaceViewClosed = choose(&f, pid, msgs, keySpace, "space-view")
+
+	// the running helper gets the States view, then the Combined one
+	// again: the menu opened after each shows it (review B3-I4)
+	for _, fx := range []string{"states", "combined"} {
+		in := panelfixture.Combined()
+		if fx == "states" {
+			in = panelfixture.States()
+		}
+		f.Reopens = append(f.Reopens, reopen(&f, h, in, fx, base))
+	}
+
+	// Return in the menu of a helper made the active app (stage 0's case
+	// for the delegate's fall-back: review B3-I2)
+	h.stop()
+	stopped = true
+	f.Active, f.ActiveSwitch = activeReturn(&f, exe, base)
 	return f, nil
 }
 
-// activeReturn makes the helper the active app (through the
-// accessibility interface), opens its menu, chooses the first row with
-// Down and Return, and says what came: "sent=ID closed=BOOL", or "not
-// active" when the helper could not be made the active app.
-func activeReturn(f *Facts, h *helperProc, want []Expected) string {
+// again waits a moment after the last step, forgets what the helper sent
+// meanwhile and opens the menu again.
+func again(f *Facts, pid int, msgs <-chan trayproto.Msg, step string) bool {
 	time.Sleep(800 * time.Millisecond)
+	drain(msgs)
+	return openMenu(f, pid, step)
+}
+
+// choose presses key and says what the helper sent for it (every click:
+// exactly one is right) and whether the menu closed; an open menu is
+// closed with Escape.
+func choose(f *Facts, pid int, msgs <-chan trayproto.Msg, key int, step string) (string, bool) {
+	press(key, 300*time.Millisecond)
+	got := clicks(msgs, 3*time.Second)
+	cl := closed(f, pid, 2*time.Second)
+	trace(f, step)
+	if !cl {
+		closeMenu(f, pid)
+	}
+	return got, cl
+}
+
+// selected is the id (or the title) of the item the menu has selected.
+func selected(items []Item) string {
+	for _, it := range items {
+		if it.Selected {
+			if it.ID != "" {
+				return it.ID
+			}
+			return "(" + it.Title + ")"
+		}
+	}
+	return ""
+}
+
+// selectedNow reads the open menu and says which item it has selected.
+func selectedNow(f *Facts, pid int, want []Expected) string {
+	g := Facts{WinSeen: f.WinSeen}
+	readMenu(&g, pid)
+	f.Errors = append(f.Errors, g.Errors...)
+	match(g.Items, want)
+	return selected(g.Items)
+}
+
+// reopen gives the running helper the view of in, opens its menu, reads
+// and captures it (the States view: its problem line and faded bar) and
+// closes it.
+func reopen(f *Facts, h *helperProc, in tray.MenuInputs, fixture, base string) Reopen {
+	r := Reopen{Fixture: fixture}
+	if err := h.send(viewOf(in)); err != nil {
+		r.Errors = append(r.Errors, "the helper's input: "+err.Error())
+		return r
+	}
+	time.Sleep(1500 * time.Millisecond)
 	drain(h.msgs)
+	if !openMenu(f, h.pid, "reopen-"+fixture) {
+		return r
+	}
+	r.Opened = true
+	g := Facts{WinSeen: f.WinSeen}
+	readMenu(&g, h.pid)
+	r.Errors = append(r.Errors, g.Errors...)
+	r.Menu, r.Items = g.Menu, g.Items
+	match(r.Items, expected(in))
+	if fixture == "states" {
+		if img, err := capture(&g, base+"-states.png"); err != nil {
+			r.Errors = append(r.Errors, err.Error())
+		} else {
+			r.Scale = g.Scale
+			analyseStates(&r, img)
+		}
+	}
+	press(keyEscape, 60*time.Millisecond)
+	if !closed(f, h.pid, 2*time.Second) {
+		closeMenu(f, h.pid)
+	}
+	trace(f, "reopen-"+fixture+"-closed")
+	return r
+}
+
+// activeReturn starts a second helper with the CI build's test switch
+// that makes it the active app before its menu shows, opens its menu
+// once (it becomes active) and again, chooses the first row with Down and
+// Return, and says what came: "sent=IDS closed=BOOL", or "not active …"
+// when it did not become the active app; and whether the helper said it
+// took the switch.
+func activeReturn(f *Facts, exe, base string) (string, bool) {
+	h, err := startHelper(exe, base+"-active-helper.log", testActiveMenu+"=1")
+	if err != nil {
+		f.Errors = append(f.Errors, "the second helper: "+err.Error())
+		return "", false
+	}
+	defer h.stop()
+	time.Sleep(1500 * time.Millisecond)
+	took := false
+	if b, err := os.ReadFile(h.log); err == nil {
+		took = strings.Contains(string(b), "CI build: test switch "+testActiveMenu+" on")
+	}
 	C.mm_frontmost(C.int(h.pid), 1)
-	time.Sleep(500 * time.Millisecond)
-	if !openMenu(f, h.pid, "active") {
-		return "the menu did not open"
+	if !openMenu(f, h.pid, "active-first") {
+		return "the menu did not open", took
+	}
+	time.Sleep(700 * time.Millisecond)
+	press(keyEscape, 60*time.Millisecond)
+	closed(f, h.pid, 2*time.Second)
+	C.mm_frontmost(C.int(h.pid), 1) // an accessory app by now: it may be made active
+	if !again(f, h.pid, h.msgs, "active") {
+		return "the menu did not open again", took
 	}
 	front := C.mm_frontmost(C.int(h.pid), 0) != 0
 	press(keyDown, 60*time.Millisecond)
 	time.Sleep(500 * time.Millisecond)
-	press(keyReturn, 300*time.Millisecond)
-	got := clickFrom(h.msgs, 3*time.Second)
-	cl := closed(f, h.pid, 2*time.Second)
-	trace(f, "active-return")
-	if !cl {
-		closeMenu(f, h.pid)
-	}
+	got, cl := choose(f, h.pid, h.msgs, keyReturn, "active-return")
 	if !front {
-		return fmt.Sprintf("not active (sent=%s closed=%v)", orNone(got), cl)
+		return fmt.Sprintf("not active (sent=%s closed=%v)", orNone(got), cl), took
 	}
-	return fmt.Sprintf("sent=%s closed=%v", orNone(got), cl)
+	return fmt.Sprintf("sent=%s closed=%v", orNone(got), cl), took
 }
 
 // inspect opens the menu of a running helper of the agent, reads and
@@ -698,21 +907,26 @@ func drain(msgs <-chan trayproto.Msg) {
 	}
 }
 
-// clickFrom is the id of the first click the helper sends within d ("":
-// none).
-func clickFrom(msgs <-chan trayproto.Msg, d time.Duration) string {
+// clicks are the ids of the clicks the helper sends, comma separated ("":
+// none): the first within d, then every one in the second after it (one
+// click or key must send exactly one: review B3-I3).
+func clicks(msgs <-chan trayproto.Msg, d time.Duration) string {
+	var got []string
 	end := time.After(d)
 	for {
 		select {
 		case m, ok := <-msgs:
 			if !ok {
-				return ""
+				return strings.Join(got, ",")
 			}
 			if m.Type == trayproto.TypeClick {
-				return m.ID
+				if len(got) == 0 {
+					end = time.After(time.Second)
+				}
+				got = append(got, m.ID)
 			}
 		case <-end:
-			return ""
+			return strings.Join(got, ",")
 		}
 	}
 }
@@ -781,9 +995,11 @@ func b2i(b bool) int {
 }
 
 // trace notes a step with the time (the helper's diagnostics use the same
-// clock) and the last state seen.
+// clock) and the last state seen, and keeps the facts so far for the
+// deadline's report.
 func trace(f *Facts, step string) {
 	f.Trace = append(f.Trace, fmt.Sprintf("%s@%.2f %s", step, float64(C.mm_uptime()), f.last))
+	note(f, step)
 }
 
 // openMenu clicks the status item (then, if no menu came, presses it
@@ -889,7 +1105,12 @@ func capture(f *Facts, path string) (image.Image, error) {
 		return nil, errors.New("no frame of the open menu to capture")
 	}
 	rect := fmt.Sprintf("%d,%d,%d,%d", int(math.Floor(f.Menu.X)), int(math.Floor(f.Menu.Y)), int(math.Ceil(f.Menu.W)), int(math.Ceil(f.Menu.H)))
-	if out, err := exec.Command("screencapture", "-x", "-R", rect, path).CombinedOutput(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "screencapture", "-x", "-R", rect, path).CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			return nil, errors.New("screencapture: timed out after 15s")
+		}
 		return nil, fmt.Errorf("screencapture: %v %s", err, strings.TrimSpace(string(out)))
 	}
 	r, err := os.Open(path)

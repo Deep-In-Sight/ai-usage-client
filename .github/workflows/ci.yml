@@ -397,10 +397,18 @@ jobs:
           name: release-files
           path: dist
       - name: fake server and the menu tool
+        # tools/check-macos-symbols.sh (run on the release file by
+        # tools/build-macos.sh) must refuse macmenu, which uses the calls
+        # that need a right a person grants: the check bites.
         working-directory: agent
         run: |
           go build -o "$RUNNER_TEMP/bin/fakeserver" ./tools/fakeserver
           go build -o "$RUNNER_TEMP/bin/macmenu" ./tools/macmenu
+          if out=$(tools/check-macos-symbols.sh "$RUNNER_TEMP/bin/macmenu" 2>&1); then
+            echo "::error title=symbols.self_check::tools/check-macos-symbols.sh passed macmenu: $out"
+            exit 1
+          fi
+          echo "::notice title=symbols.self_check::${out//'%'/'%25'}"
       - name: checks
         env:
           CI_DIST: ${{ github.workspace }}/dist

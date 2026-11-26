@@ -13,7 +13,32 @@ label=io.github.deep-in-sight.ai-usage
 plist="$HOME/Library/LaunchAgents/$label.plist"
 data="$HOME/Library/Application Support/AIUsage"
 exe="$data/ai-usage"
-tmo() { perl -e 'alarm shift; exec @ARGV' "$@"; } # no timeout(1) on macOS
+# tmo SECONDS COMMAND...: COMMAND, killed after SECONDS (exit 124), as
+# timeout(1), which macOS lacks. The command runs in a child that is
+# killed: an alarm before exec would only reach a Go program, which
+# ignores SIGALRM (review B3-I1).
+tmo() {
+  perl -e '$t = shift; $p = fork; defined $p or exit 125; if ($p == 0) { exec @ARGV; exit 127 }
+    $SIG{ALRM} = sub { kill "KILL", $p; waitpid($p, 0); exit 124 }; alarm $t; waitpid($p, 0);
+    exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "$@"
+}
+# why RC FILE: what a failed macmenu run says beyond its problems: that
+# tmo killed it, or the start of a crash (its panic line), else the last
+# of its standard error
+why() {
+  if [ "$1" -eq 124 ]; then echo "timed out (killed by tmo)"
+  elif grep -q '^panic:' "$2" 2>/dev/null; then grep -m1 -A3 '^panic:' "$2" | tr '\n' ' '
+  else tail -c 300 "$2" 2>/dev/null; fi
+}
+# jlist FILE KEY: the list KEY of the JSON object in FILE as text, "; "
+# between its items (not escaped as JSON: review B3-m17)
+jlist() {
+  python3 -c 'import json, sys
+try:
+    sys.stdout.buffer.write("; ".join(map(str, json.load(open(sys.argv[1]))[sys.argv[2]])).encode())
+except Exception:
+    pass' "$@"
+}
 oneliner() { tmo 180 sh -c "curl -fsSL $BASE/files/install-ci.sh | sh"; }
 agent_count() { pgrep -f "^$exe run" | wc -l | tr -d ' '; }
 # the tray helpers (design 6.4) and those whose parent is a pid
@@ -111,30 +136,40 @@ if [ "$hcmd" = "$exe tray-helper" ]; then pass tray.helper_cmdline "[$hcmd]"; el
 # menu's own highlight, to compare the views' with), clicks Claude's
 # 5-hour row (the helper must send that click and the menu close), chooses
 # the row with Down and Return (it must be highlighted like the menu's own
-# items and sent), closes the menu with Down and Escape (nothing sent),
-# and once more chooses the row with Down and Return with the helper made
-# the active app (the delegate's fall-back; an info line when the runner
-# cannot make it active). The menu's open or closed state is read from its
-# window at the pop-up menu level (the accessibility tree keeps a closed
-# menu). panel.mac_agent_menu: the menu of the agent's own helper (the
-# real view from the fake server) has its headers and rows as views as
-# wide as the menu. The numbers are one notice each; the captures are in
-# the artifact.
+# items and sent), chooses Weekly with Down twice, the row Up reaches from Open dashboard
+# and Weekly under the pointer with Return, presses Space on Open
+# dashboard and on 5-hour (a view row does with Space what the menu's own
+# items do), closes the menu with Down and Escape (nothing sent), gives
+# the running helper the States view (the menu then shows Codex's header
+# taller by its problem line in its colour, Claude's bar faded) and the
+# Combined one again (32 pt again), and chooses the row with Down and
+# Return in the menu of a second helper that the CI build's test switch
+# makes the active app (stage 0's case for the delegate's fall-back; on
+# macOS 26 the view takes Return there too; an info line only when it did
+# not become active). Every click and key must send exactly one
+# click or none. The menu's open or closed state is read from its window
+# at the pop-up menu level (the accessibility tree keeps a closed menu).
+# panel.mac_agent_menu: the menu of the agent's own helper (the real view
+# from the fake server) has its headers and rows as views as wide as the
+# menu. macmenu stops itself at its deadline (it then names the step it
+# was at); tmo kills it a little later. The numbers are one notice each;
+# the captures are in the artifact.
 mm="$CI_BIN/macmenu"
-tmo 150 "$mm" drive -exe "$exe" -png "$out/panel-menu-mac.png" > "$out/macmenu-drive.json" 2> "$out/macmenu-drive.err"
+tmo 300 "$mm" drive -deadline 270s -exe "$exe" -png "$out/panel-menu-mac.png" > "$out/macmenu-drive.json" 2> "$out/macmenu-drive.err"
 rc=$?
-if [ $rc -eq 0 ]; then pass panel.mac_menu "views sized and labelled, bars drawn, click, Return and Escape as a person would"
-else fail_long panel.mac_menu "rc=$rc $(jget "$out/macmenu-drive.json" problems) $(tail -c 300 "$out/macmenu-drive.err")"; fi
+if [ $rc -eq 0 ]; then pass panel.mac_menu "views sized and labelled, bars drawn, a second view shown, clicks and keys as a person would, each sending one click"
+else fail_long panel.mac_menu "rc=$rc $(jlist "$out/macmenu-drive.json" problems) $(why $rc "$out/macmenu-drive.err")"; fi
 info_long panel.mac_menu.measured "$(jget "$out/macmenu-drive.json" summary)"
+info_long panel.mac_menu.keys "$(jget "$out/macmenu-drive.json" keys)"
 act=$(jget "$out/macmenu-drive.json" active_return)
 case "$act" in
-"not active"* | "") info panel.mac_menu.active_return "not measurable on this runner: the helper could not be made the active app [$act]; Return in an active app's menu (the delegate's fall-back) is for the real Mac" ;;
+"not active"*) info panel.mac_menu.active_return "the second helper did not become the active app [$act]: Return in an active app's menu is not judged on this runner" ;;
 esac
 hp=$(pgrep -f "^$exe tray-helper" | head -n 1)
-tmo 60 "$mm" inspect -pid "${hp:-0}" -png "$out/panel-menu-agent.png" > "$out/macmenu-agent.json" 2> "$out/macmenu-agent.err"
+tmo 90 "$mm" inspect -deadline 60s -pid "${hp:-0}" -png "$out/panel-menu-agent.png" > "$out/macmenu-agent.json" 2> "$out/macmenu-agent.err"
 rc=$?
 if [ $rc -eq 0 ]; then pass panel.mac_agent_menu "helper $hp: headers and rows are views as wide as the menu"
-else fail_long panel.mac_agent_menu "rc=$rc helper=$hp $(jget "$out/macmenu-agent.json" problems) $(tail -c 300 "$out/macmenu-agent.err")"; fi
+else fail_long panel.mac_agent_menu "rc=$rc helper=$hp $(jlist "$out/macmenu-agent.json" problems) $(why $rc "$out/macmenu-agent.err")"; fi
 info_long panel.mac_agent_menu.measured "$(jget "$out/macmenu-agent.json" summary)"
 
 # tray.two_helpers: the CI build's test switch shows a second helper; the

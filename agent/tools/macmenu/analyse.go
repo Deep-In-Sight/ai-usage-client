@@ -3,11 +3,16 @@
 // would (a click on the status item, then the pointer and the keys, all
 // posted as events), reads the open menu through the accessibility
 // interface, captures it with screencapture, and judges the usage panel's
-// view items (plan Task 9): their sizes and width, their VoiceOver labels,
-// the bars in the capture, a click on a row, Return on a highlighted row
-// and Escape. It prints one JSON object (the measured facts and the
-// problems found). This file is the part that is plain Go: what is
-// expected and how it is judged, tested on every OS.
+// view items (plan Task 9): their sizes and width, their VoiceOver labels
+// and titles, the bars in the capture, a click on a row, Return on a
+// highlighted row (reached with Down, Down twice, Up from one of the
+// menu's own items, the pointer), Space, Escape, a second view sent to the
+// running helper, and Return in the menu of a helper made the active app.
+// Each click or key must send exactly one click (or none). It prints one
+// JSON object (the measured facts and the problems found); it gives up
+// after its deadline and then prints what it had and the step it was at.
+// This file is the part that is plain Go: what is expected and how it is
+// judged, tested on every OS.
 package main
 
 import (
@@ -19,6 +24,7 @@ import (
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/panel"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray"
+	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/tray/panelfixture"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/trayproto"
 )
 
@@ -74,7 +80,8 @@ type Facts struct {
 	// and what it should be
 	Bars    map[string][2]int `json:"bars,omitempty"`
 	Picture int               `json:"picture"` // pixels of the Claude header picture's colour
-	// what the helper sent (its click messages) after each step; "" none
+	// what the helper sent (its click messages, comma separated: each
+	// step must send exactly one or none) after each step; "" none
 	HeaderClick  string `json:"header_click"`  // what a click on Claude's header sent
 	HeaderStayed bool   `json:"header_stayed"` // the menu stayed open after it
 	Click        string `json:"click"`
@@ -88,13 +95,53 @@ type Facts struct {
 	ViewHL       *Shape `json:"view_highlight,omitempty"`
 	Return       string `json:"return"`
 	ReturnClosed bool   `json:"return_closed"`
-	Escape       string `json:"escape"`
-	EscapeClosed bool   `json:"escape_closed"`
-	// Return in the menu of the active helper: "sent=ID closed=BOOL", or
-	// "not active …" when it could not be made the active app
-	Active   string   `json:"active_return"`
+	// Return on the row reached with Down twice (Weekly), with Up from
+	// Open dashboard (under the pointer) and on the row under the pointer
+	// (Weekly) (review A3-I1); what Up highlighted
+	Down2         string `json:"down2_return"`
+	Down2Closed   bool   `json:"down2_closed"`
+	UpSelected    string `json:"up_selected"`
+	Up            string `json:"up_return"`
+	UpClosed      bool   `json:"up_closed"`
+	Pointer       string `json:"pointer_return"`
+	PointerClosed bool   `json:"pointer_closed"`
+	// Space on Open dashboard under the pointer (the menu's own item) and
+	// on 5-hour chosen with Down (review A3-M4)
+	SpaceNative       string `json:"space_native"`
+	SpaceNativeClosed bool   `json:"space_native_closed"`
+	SpaceView         string `json:"space_view"`
+	SpaceViewClosed   bool   `json:"space_view_closed"`
+	Escape            string `json:"escape"`
+	EscapeClosed      bool   `json:"escape_closed"`
+	// the menu opened again after the running helper got another view
+	// (States, then Combined again: review B3-I4)
+	Reopens []Reopen `json:"reopens,omitempty"`
+	// Return in the menu of a helper that was made the active app (a CI
+	// build's test switch): "sent=IDS closed=BOOL", or "not active …" when
+	// it did not become the active app; ActiveSwitch: that helper said it
+	// took the switch
+	Active       string `json:"active_return"`
+	ActiveSwitch bool   `json:"active_switch"`
+	// the deadline passed: at which step (the facts are those from before it)
+	TimedOut string   `json:"timed_out,omitempty"`
 	Errors   []string `json:"errors,omitempty"`
 	Problems []string `json:"problems"`
+}
+
+// Reopen is the menu read (and captured) again after the running helper
+// got the view of another fixture.
+type Reopen struct {
+	Fixture string  `json:"fixture"` // "states" or "combined"
+	Opened  bool    `json:"opened"`
+	Menu    Rect    `json:"menu"`
+	Items   []Item  `json:"items"`
+	Scale   float64 `json:"scale"`
+	// States: pixels of the problem colour under Codex's header line, and
+	// Claude's 5-hour bar in its faded (not current) colour: its longest
+	// run and what it should be
+	Problem int      `json:"problem_px"`
+	Stale   [2]int   `json:"stale_bar"`
+	Errors  []string `json:"errors,omitempty"`
 }
 
 // Expected is one item the helper shows, from the fixture: a view item
@@ -136,30 +183,21 @@ func expected(in tray.MenuInputs) []Expected {
 	return out
 }
 
-// viewLabel is what VoiceOver gets for a view item: its view's label (or
-// the item's own description, should the menu item stand for its view).
-func viewLabel(it Item) string {
-	if it.ChildLabel != "" {
-		return it.ChildLabel
-	}
-	return it.Label
-}
+// viewLabel is what VoiceOver gets for a view item: its view's own label
+// ("" when it cannot be read: never the menu item's, review B3-I5).
+func viewLabel(it Item) string { return it.ChildLabel }
 
-// viewSize is a view item's size: its view's own, else the menu item's.
-func viewSize(it Item) (w, h float64) {
-	if it.ChildW > 0 && it.ChildH > 0 {
-		return it.ChildW, it.ChildH
-	}
-	return it.Rect.W, it.Rect.H
-}
+// viewSize is a view item's size: its view's own (0 when it cannot be
+// read: never the menu item's, which the accessibility interface gives
+// the menu's width whatever the view's, review B3-I5).
+func viewSize(it Item) (w, h float64) { return it.ChildW, it.ChildH }
 
-// viewRole is the role of what says that label.
-func viewRole(it Item) string {
-	if it.ChildLabel != "" {
-		return it.ChildRole
-	}
-	return it.Role
-}
+// viewRole is the role of the view that says that label.
+func viewRole(it Item) string { return it.ChildRole }
+
+// bars are the text menu's bar characters, which a view item's own title
+// must not carry (review A3-M2, B3-m15).
+const bars = "█░"
 
 // match names each menu item by the expected item it shows: a view item
 // by its view's label, the others by their title.
@@ -183,26 +221,24 @@ func byID(items []Item, id string) (Item, bool) {
 	return Item{}, false
 }
 
-// judge lists what is wrong with a run of the fixture's menu.
-func judge(f Facts, want []Expected) []string {
+// judgeItems lists what is wrong with the items of an open menu showing
+// want: each expected item there (a view item found by its view's label,
+// the others by their title), a view item's view in the menu item role,
+// as wide as the menu (its widest item) and at least the panel's width,
+// as high as its kind is (a header with a problem line taller by at least
+// that line; the server line, which wraps to two lines in the fixture, at
+// least a line more than a text item), its own title free of the text
+// menu's bar characters, a header not clickable; the menu's own items
+// without a view.
+func judgeItems(items []Item, want []Expected) []string {
 	var p []string
-	if !f.AXTrusted {
-		p = append(p, "not trusted for accessibility on this runner")
-	}
-	if !f.PostEvents {
-		p = append(p, "may not post events on this runner")
-	}
-	p = append(p, f.Errors...)
-	if f.Opened == "" {
-		return append(p, "the menu did not open")
-	}
 	m := panel.MetricsAt(96)
 	widest := 0.0
-	for _, it := range f.Items {
+	for _, it := range items {
 		widest = math.Max(widest, it.Rect.W)
 	}
 	for _, w := range want {
-		it, ok := byID(f.Items, w.ID)
+		it, ok := byID(items, w.ID)
 		if !ok {
 			if w.View {
 				p = append(p, fmt.Sprintf("%s: no menu item whose view says %q", w.ID, w.Label))
@@ -220,27 +256,65 @@ func judge(f Facts, want []Expected) []string {
 		if viewRole(it) != "AXMenuItem" {
 			p = append(p, fmt.Sprintf("%s: its view's role is %q, want AXMenuItem", w.ID, viewRole(it)))
 		}
+		if strings.ContainsAny(it.Title, bars) {
+			p = append(p, fmt.Sprintf("%s: its menu item's title %q has the text menu's bar", w.ID, it.Title))
+		}
 		vw, vh := viewSize(it)
+		if vw <= 0 || vh <= 0 {
+			p = append(p, fmt.Sprintf("%s: its view's own size could not be read (%.0fx%.0f)", w.ID, vw, vh))
+			continue
+		}
 		if vw < float64(m.Width) || math.Abs(vw-widest) > 0.5 {
 			p = append(p, fmt.Sprintf("%s: %.0f pt wide, want the menu's %.0f (at least %d)", w.ID, vw, widest, m.Width))
 		}
-		var h float64
-		switch w.Kind {
-		case "header":
-			h = float64(m.Header)
-		case "row":
-			h = float64(m.Row)
-		}
-		if h > 0 && math.Abs(vh-h) > 0.5 {
-			p = append(p, fmt.Sprintf("%s: %.0f pt high, want %.0f", w.ID, vh, h))
-		}
-		if h == 0 && vh < float64(m.Item)-0.5 {
-			p = append(p, fmt.Sprintf("%s: %.0f pt high, want at least %d", w.ID, vh, m.Item))
+		switch {
+		case w.Kind == "header" && w.Item.Problem != "":
+			if vh < float64(m.Header+m.Problem)-0.5 {
+				p = append(p, fmt.Sprintf("%s: %.0f pt high, want at least %d (the header and its problem line)", w.ID, vh, m.Header+m.Problem))
+			}
+		case w.Kind == "header":
+			if math.Abs(vh-float64(m.Header)) > 0.5 {
+				p = append(p, fmt.Sprintf("%s: %.0f pt high, want %d", w.ID, vh, m.Header))
+			}
+		case w.Kind == "row":
+			if math.Abs(vh-float64(m.Row)) > 0.5 {
+				p = append(p, fmt.Sprintf("%s: %.0f pt high, want %d", w.ID, vh, m.Row))
+			}
+		case w.ID == "server":
+			if vh < float64(m.Item+serverLine)-0.5 {
+				p = append(p, fmt.Sprintf("%s: %.0f pt high, want at least %d (two lines)", w.ID, vh, m.Item+serverLine))
+			}
+		default:
+			if vh < float64(m.Item)-0.5 {
+				p = append(p, fmt.Sprintf("%s: %.0f pt high, want at least %d", w.ID, vh, m.Item))
+			}
 		}
 		if w.Kind == "header" && it.ChildEnabled {
 			p = append(p, fmt.Sprintf("%s: a header can be clicked", w.ID))
 		}
 	}
+	return p
+}
+
+// serverLine is the least a second line adds to the server line: a line of
+// the menu font (16 pt on macOS 26, measured) and its gap, rounded down
+// (review B3-m14: a view cut to one line is 30 pt).
+const serverLine = 12
+
+// judge lists what is wrong with a run of the fixture's menu.
+func judge(f Facts, want []Expected) []string {
+	var p []string
+	if !f.AXTrusted {
+		p = append(p, "not trusted for accessibility on this runner")
+	}
+	if !f.PostEvents {
+		p = append(p, "may not post events on this runner")
+	}
+	p = append(p, f.Errors...)
+	if f.Opened == "" {
+		return append(p, "the menu did not open")
+	}
+	p = append(p, judgeItems(f.Items, want)...)
 	if f.ScreenCapture || f.Capture != "" {
 		for id, b := range f.Bars {
 			if tol := int(math.Ceil(3 * f.Scale)); b[0] < b[1]-tol || b[0] > b[1]+tol {
@@ -267,7 +341,7 @@ func judge(f Facts, want []Expected) []string {
 	if !f.ClickClosed {
 		p = append(p, "the menu stayed open after the click")
 	}
-	if f.DownSelected != "" && f.DownSelected != "r.claude.0" {
+	if f.DownSelected != "r.claude.0" {
 		p = append(p, fmt.Sprintf("Down chose %q, want r.claude.0", f.DownSelected))
 	}
 	if f.Return != "r.claude.0" {
@@ -276,17 +350,106 @@ func judge(f Facts, want []Expected) []string {
 	if !f.ReturnClosed {
 		p = append(p, "the menu stayed open after Return")
 	}
+	up := rowAbove(want, "dashboard")
+	for _, c := range []struct {
+		what, got, want string
+		closed          bool
+	}{{"Down, Down, Return", f.Down2, "r.claude.1", f.Down2Closed}, {"Up from Open dashboard, Return", f.Up, up, f.UpClosed},
+		{"Return on Weekly under the pointer", f.Pointer, "r.claude.1", f.PointerClosed}} {
+		if c.got != c.want {
+			p = append(p, fmt.Sprintf("%s sent %q, want %s", c.what, c.got, c.want))
+		}
+		if !c.closed {
+			p = append(p, fmt.Sprintf("the menu stayed open after %s", c.what))
+		}
+	}
+	// Space does on a view row what it does on the menu's own items
+	switch f.SpaceNative {
+	case "dashboard":
+		if f.SpaceView != "r.claude.0" || !f.SpaceViewClosed {
+			p = append(p, fmt.Sprintf("Space chooses the menu's own items, but on the highlighted 5-hour it sent %q (closed %v)", f.SpaceView, f.SpaceViewClosed))
+		}
+	case "":
+		if f.SpaceView != "" {
+			p = append(p, fmt.Sprintf("Space does nothing on the menu's own items, but on the highlighted 5-hour it sent %q", f.SpaceView))
+		}
+	default:
+		p = append(p, fmt.Sprintf("Space on Open dashboard sent %q", f.SpaceNative))
+	}
 	switch {
-	case f.Active == "" || strings.HasPrefix(f.Active, "not active"):
-		// not judged: the CI step says so (not measurable on the runner)
+	case f.Active == "":
+		p = append(p, "Return in the active helper's menu was not measured")
+	case strings.HasPrefix(f.Active, "not active"):
+		// activation tried and failed: the CI step says so
 	case f.Active != "sent=r.claude.0 closed=true":
 		p = append(p, fmt.Sprintf("Return on the highlighted 5-hour in the active helper's menu: %s, want sent=r.claude.0 closed=true", f.Active))
+	}
+	if f.Active != "" && !f.ActiveSwitch {
+		p = append(p, "the helper made active did not say it took the test switch")
 	}
 	if f.Escape != "" {
 		p = append(p, fmt.Sprintf("Escape sent %q, want nothing", f.Escape))
 	}
 	if !f.EscapeClosed {
 		p = append(p, "the menu stayed open after Escape")
+	}
+	p = append(p, judgeReopens(f.Reopens)...)
+	return p
+}
+
+// rowAbove is the last row before id in want (what Up from id reaches:
+// the server line between them cannot be chosen).
+func rowAbove(want []Expected, id string) string {
+	last := ""
+	for _, w := range want {
+		if w.ID == id {
+			return last
+		}
+		if w.Kind == "row" {
+			last = w.ID
+		}
+	}
+	return ""
+}
+
+// judgeReopens: the menu opened again after the States view shows it
+// (sized again: Codex's header taller by its problem line, which is drawn
+// in its colour; Claude's numbers not current: its bar faded), and again
+// after the Combined view (Codex's header 32 pt again).
+func judgeReopens(rs []Reopen) []string {
+	var p []string
+	seen := map[string]bool{}
+	for _, r := range rs {
+		seen[r.Fixture] = true
+		where := "after the " + r.Fixture + " view: "
+		for _, e := range r.Errors {
+			p = append(p, where+e)
+		}
+		if !r.Opened {
+			p = append(p, where+"the menu did not open")
+			continue
+		}
+		in := panelfixture.Combined()
+		if r.Fixture == "states" {
+			in = panelfixture.States()
+		}
+		for _, q := range judgeItems(r.Items, expected(in)) {
+			p = append(p, where+q)
+		}
+		if r.Fixture != "states" {
+			continue
+		}
+		if r.Problem < 8 {
+			p = append(p, fmt.Sprintf("%s%d pixels of the problem colour under Codex's header line", where, r.Problem))
+		}
+		if tol := int(math.Ceil(3 * math.Max(r.Scale, 1))); r.Stale[1] <= 0 || r.Stale[0] < r.Stale[1]-tol || r.Stale[0] > r.Stale[1]+tol {
+			p = append(p, fmt.Sprintf("%sClaude's 5-hour bar runs %d px in its faded colour, want %d", where, r.Stale[0], r.Stale[1]))
+		}
+	}
+	for _, fx := range []string{"states", "combined"} {
+		if !seen[fx] {
+			p = append(p, "the menu was not opened again after the "+fx+" view")
+		}
 	}
 	return p
 }
@@ -311,6 +474,13 @@ func judgeAgent(f Facts) []string {
 			continue
 		}
 		vw, vh := viewSize(it)
+		if vw <= 0 || vh <= 0 {
+			p = append(p, fmt.Sprintf("%q: its view's own size could not be read", viewLabel(it)))
+			continue
+		}
+		if strings.ContainsAny(it.Title, bars) {
+			p = append(p, fmt.Sprintf("%q: its menu item's title has the text menu's bar", viewLabel(it)))
+		}
 		switch {
 		case math.Abs(vh-float64(m.Header)) <= 0.5:
 			headers++
@@ -430,16 +600,48 @@ func analyse(f *Facts, img image.Image, want []Expected) {
 	}
 }
 
+// analyseStates reads the capture of the menu showing the States view:
+// the pixels of the problem colour (light menu) under Codex's header line,
+// and the longest run of Claude's 5-hour bar in its faded colour (the
+// menu's own background, a pixel of Quit, under it at the stale opacity).
+func analyseStates(r *Reopen, img image.Image) {
+	m := panel.MetricsAt(96)
+	if it, ok := byID(r.Items, "h.codex"); ok {
+		rc := inPicture(it.Rect, r.Menu, r.Scale)
+		rc.Min.Y += int(math.Round(float64(m.Header) * r.Scale))
+		r.Problem = count(img, rc, panel.ProblemOnLight, 40)
+	}
+	it, ok := byID(r.Items, "r.claude.0")
+	bg := bgOf(img, r.Items, "quit", r.Menu, r.Scale)
+	if !ok || bg == nil {
+		return
+	}
+	var w Expected
+	for _, e := range expected(panelfixture.States()) {
+		if e.ID == "r.claude.0" {
+			w = e
+		}
+	}
+	cr, cg, cb, _ := bg.RGBA()
+	faded := panel.Fade(panel.Normal, color.NRGBA{uint8(cr >> 8), uint8(cg >> 8), uint8(cb >> 8), 0xff}, panel.StaleOpacity)
+	track := int(math.Round((it.Rect.W - float64(2*m.Pad)) * r.Scale))
+	bar := int(math.Round(float64(m.Bar) * r.Scale))
+	r.Stale = [2]int{longestRun(img, inPicture(it.Rect, r.Menu, r.Scale), faded, 24), panel.FillWidth(w.Item.Percent, track, bar)}
+}
+
 // helloAndView are the lines a helper of the fixture gets: its hello and
 // the fixture's view (the menu, the panel, the icon and its title).
 func helloAndView(token string, in tray.MenuInputs) []trayproto.Msg {
+	return []trayproto.Msg{{V: trayproto.Version, Type: trayproto.TypeHello, Token: token, Provider: "claude"}, viewOf(in)}
+}
+
+// viewOf is the fixture's view (the menu, the panel, the icon and its
+// title).
+func viewOf(in tray.MenuInputs) trayproto.Msg {
 	p := tray.BuildPanel(in)
 	pct := 42.0
-	return []trayproto.Msg{
-		{V: trayproto.Version, Type: trayproto.TypeHello, Token: token, Provider: "claude"},
-		{V: trayproto.Version, Type: trayproto.TypeView, Items: tray.BuildMenu(in), Panel: &p,
-			Icon: &trayproto.Icon{Provider: "claude", Percent: &pct, Level: "normal"}, Title: "42%", Tooltip: "AI Usage"},
-	}
+	return trayproto.Msg{V: trayproto.Version, Type: trayproto.TypeView, Items: tray.BuildMenu(in), Panel: &p,
+		Icon: &trayproto.Icon{Provider: "claude", Percent: &pct, Level: "normal"}, Title: "42%", Tooltip: "AI Usage"}
 }
 
 // summary is the run's numbers in one line (a CI notice); for the agent's
@@ -472,16 +674,33 @@ func summary(f Facts, agent bool) string {
 		fmt.Fprintf(&b, "; Escape closed the menu %v; windows %s", f.EscapeClosed, orNone(f.Windows))
 		return b.String()
 	}
-	fmt.Fprintf(&b, "; picture %d px; header click %s (stayed open %v); click %s (closed %v); Down chose %s, highlight %s on %s; Return %s (closed %v); Escape %s (closed %v)",
-		f.Picture, orNone(f.HeaderClick), f.HeaderStayed, orNone(f.Click), f.ClickClosed, orNone(f.DownSelected), orNone(f.Highlight), orNone(f.HeaderBg),
-		orNone(f.Return), f.ReturnClosed, orNone(f.Escape), f.EscapeClosed)
-	fmt.Fprintf(&b, "; Return in the active helper's menu: %s", orNone(f.Active))
-	fmt.Fprintf(&b, "; highlight native %s, view %s", f.NativeHL, f.ViewHL)
+	fmt.Fprintf(&b, "; picture %d px; highlight %s on %s; highlight native %s, view %s", f.Picture, orNone(f.Highlight), orNone(f.HeaderBg), f.NativeHL, f.ViewHL)
 	fmt.Fprintf(&b, "; windows %s (menu window seen %v)", orNone(f.Windows), f.WinSeen)
 	if it, ok := byID(f.Items, "r.claude.0"); ok {
-		fmt.Fprintf(&b, "; VoiceOver 5-hour: %s %q", viewRole(it), viewLabel(it))
+		fmt.Fprintf(&b, "; VoiceOver 5-hour: %s %q, its menu item's title %q", viewRole(it), viewLabel(it), it.Title)
+	}
+	for _, r := range f.Reopens {
+		hc := "none"
+		if it, ok := byID(r.Items, "h.codex"); ok {
+			hc = fmt.Sprintf("%.0fx%.0f", it.ChildW, it.ChildH)
+		}
+		fmt.Fprintf(&b, "; after the %s view: menu %.0fx%.0f, h.codex %s", r.Fixture, r.Menu.W, r.Menu.H, hc)
+		if r.Fixture == "states" {
+			fmt.Fprintf(&b, ", problem colour %d px, Claude's faded bar %d/%d px", r.Problem, r.Stale[0], r.Stale[1])
+		}
 	}
 	return b.String()
+}
+
+// keys is what the clicks and keys sent, in one line (a CI notice of its
+// own: the summary is long).
+func keys(f Facts) string {
+	return fmt.Sprintf("header click %s (stayed open %v); click %s (closed %v); Down chose %s, Return %s (closed %v); "+
+		"Down Down Return %s (closed %v); Up from Open dashboard chose %s, Return %s (closed %v); pointer on Weekly, Return %s (closed %v); "+
+		"Space on Open dashboard %s (closed %v), on 5-hour %s (closed %v); Escape %s (closed %v); Return in the active helper's menu: %s (switch taken %v)",
+		orNone(f.HeaderClick), f.HeaderStayed, orNone(f.Click), f.ClickClosed, orNone(f.DownSelected), orNone(f.Return), f.ReturnClosed,
+		orNone(f.Down2), f.Down2Closed, orNone(f.UpSelected), orNone(f.Up), f.UpClosed, orNone(f.Pointer), f.PointerClosed,
+		orNone(f.SpaceNative), f.SpaceNativeClosed, orNone(f.SpaceView), f.SpaceViewClosed, orNone(f.Escape), f.EscapeClosed, orNone(f.Active), f.ActiveSwitch)
 }
 
 // Shape is a highlight inside its item, in points: its insets from the
@@ -565,9 +784,10 @@ func highlightShape(img image.Image, r image.Rectangle, bg color.Color, scale fl
 		Corner: math.Round(corner/scale*2) / 2, Colour: hexColour(img.At(left+int(math.Round(2*scale)), mid))}, true
 }
 
-// compareHighlights: the view's highlight sits where the menu's own does
-// and has its corners (within a point each) — or says that it could not
-// be measured.
+// compareHighlights: the view's highlight sits where the menu's own does,
+// has its corners (within half a point each: the corner estimate is
+// rounded to that, review B3-m2) and its colour (within 24 over the three
+// channels, B3-m3) — or says that it could not be measured.
 func compareHighlights(native, view *Shape) []string {
 	if native == nil || view == nil {
 		return []string{fmt.Sprintf("the highlights could not both be measured: native %s, view %s", native, view)}
@@ -577,11 +797,14 @@ func compareHighlights(native, view *Shape) []string {
 		what   string
 		n, v   float64
 		within float64
-	}{{"left inset", native.Left, view.Left, 1}, {"right inset", native.Right, view.Right, 1}, {"top inset", native.Top, view.Top, 1},
-		{"bottom inset", native.Bottom, view.Bottom, 1}, {"corner", native.Corner, view.Corner, 1}} {
+	}{{"left inset", native.Left, view.Left, 0.5}, {"right inset", native.Right, view.Right, 0.5}, {"top inset", native.Top, view.Top, 0.5},
+		{"bottom inset", native.Bottom, view.Bottom, 0.5}, {"corner", native.Corner, view.Corner, 0.5}} {
 		if math.Abs(d.n-d.v) > d.within {
-			p = append(p, fmt.Sprintf("the view's highlight %s is %.0f pt, the menu's own %.0f", d.what, d.v, d.n))
+			p = append(p, fmt.Sprintf("the view's highlight %s is %.1f pt, the menu's own %.1f", d.what, d.v, d.n))
 		}
+	}
+	if d := colourDist(native.Colour, view.Colour); d > 24 || native.Colour == "" || view.Colour == "" {
+		p = append(p, fmt.Sprintf("the view's highlight is %s, the menu's own %s", view.Colour, native.Colour))
 	}
 	return p
 }
