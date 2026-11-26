@@ -27,6 +27,10 @@ type drawnBar struct {
 	w, h   int
 	track  color.NRGBA
 	square bool
+	// fillH: the fill lower than the track, centred on it (0: as high);
+	// nicked: square ends with only each corner pixel cut (barely round)
+	fillH  int
+	nicked bool
 }
 
 const trackW, barH = 300, panel.BarHeight
@@ -51,6 +55,9 @@ func menu(bg color.NRGBA, bars []drawnBar) *image.NRGBA {
 		if b.square {
 			pixels = squareBar
 		}
+		if b.nicked {
+			pixels = nickedBar
+		}
 		// GNOME draws the track and the fill on it each at the group's
 		// opacity (a stale group): the track over the background, then the
 		// fill over that
@@ -65,6 +72,11 @@ func menu(bg color.NRGBA, bars []drawnBar) *image.NRGBA {
 		}
 		track := pixels(w, h, 0, b.bar, trackC)
 		fill := pixels(w, h, b.fill, b.bar, color.NRGBA{})
+		if b.fillH > 0 { // a fill lower than its track, centred on it
+			low := pixels(w, b.fillH, b.fill, b.bar, color.NRGBA{})
+			fill = make([]byte, w*h*4)
+			copy(fill[(h-b.fillH)/2*w*4:], low)
+		}
 		for y := range h {
 			for x := range w {
 				img.SetNRGBA(b.x+x, b.y+y, under(fill, x, y, under(track, x, y, bg)))
@@ -97,6 +109,19 @@ func squareBar(w, h, fill int, bar, track color.NRGBA) []byte {
 			a := float64(c.A) / 255
 			i := (y*w + x) * 4
 			out[i], out[i+1], out[i+2], out[i+3] = uint8(float64(c.B)*a+0.5), uint8(float64(c.G)*a+0.5), uint8(float64(c.R)*a+0.5), c.A
+		}
+	}
+	return out
+}
+
+// nickedBar is squareBar with only its four corner pixels left out: ends
+// that are barely round (a corner radius of one pixel, not the capsule's).
+func nickedBar(w, h, fill int, bar, track color.NRGBA) []byte {
+	out := squareBar(w, h, fill, bar, track)
+	for _, x := range []int{0, w - 1} {
+		for _, y := range []int{0, h - 1} {
+			i := (y*w + x) * 4
+			out[i], out[i+1], out[i+2], out[i+3] = 0, 0, 0, 0
 		}
 	}
 	return out
@@ -273,6 +298,11 @@ func TestJudgeFindsWhatIsWrong(t *testing.T) {
 		{"10 px high", wantCombined, "bar2:height=10", func(b []drawnBar) []drawnBar { b[2].h = 10; return b }},
 		{"6 px high", wantCombined, "bar0:height=6", func(b []drawnBar) []drawnBar { b[0].h = 6; return b }},
 		{"square ends", wantCombined, "bar4:square_ends", func(b []drawnBar) []drawnBar { b[4].square = true; return b }},
+		// review of fix round 3: the fill's own height (measured in its
+		// column, not the track's), and ends rounder than a nicked corner
+		{"fill 6 px high", wantCombined, "bar0:height=6", func(b []drawnBar) []drawnBar { b[0].fillH = 6; return b }},
+		{"full bar 6 px high", wantCombined, "bar3:height=6", func(b []drawnBar) []drawnBar { b[3].fillH = 6; return b }},
+		{"corners nicked", wantCombined, "bar1:square_ends", func(b []drawnBar) []drawnBar { b[1].nicked = true; return b }},
 		{"short full bar", wantCombined, "bar3:length=250", func(b []drawnBar) []drawnBar {
 			b[3].w, b[3].fill = 250, 250
 			return b

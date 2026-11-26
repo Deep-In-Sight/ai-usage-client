@@ -12,8 +12,9 @@
 //	    then the background, at least 100 px in all and in at least four
 //	    rows one under the other (a bar is 8 px high; text and icons are
 //	    not). y and the lengths are those of its middle row; height is
-//	    counted down the bar's middle column, ends are round when the four
-//	    corner pixels show the background more than the bar.
+//	    the fill's rows down the fill's middle column, ends are round when
+//	    the top and bottom pixels of the two outermost columns at each end
+//	    show the background more than the bar.
 //	pixcheck judge -want P:LEVEL[:ALPHA],... FILE
 //	    the bars, then "problems: none" or "problems: …": the bars are not
 //	    as wanted, top to bottom (design 5.2, plan constraint 7): their
@@ -243,8 +244,8 @@ type Bar struct {
 	Alpha             float64
 	Base              color.NRGBA // the panel's bar colour Colour is (at Alpha over what is under it)
 	TrackColour       color.NRGBA // the track's colour (when Track > 0)
-	Height            int         // rows of the bar down its middle column
-	Round             bool        // its four corner pixels show the background more than the bar
+	Height            int         // rows of the fill's colour down the fill's middle column
+	Round             bool        // the corner pixels of its two outermost columns at each end show the background more than the bar
 }
 
 func (b Bar) String() string {
@@ -429,23 +430,33 @@ func Bars(img *image.NRGBA) []Bar {
 	return bars
 }
 
-// shape measures b's height down its middle column (the rows that are not
-// the background) and whether its ends are round: each corner pixel of
-// that box is nearer the background than the pixel of b's middle row in
-// its column (a square end's corner is the bar's own colour).
+// shape measures b's height down the middle column of its fill (the rows
+// of the fill's colour: a fill lower than its track shows) and whether its
+// ends are round: in the bar's box (the rows that are not the background
+// down its middle column), the top and bottom pixels of the two outermost
+// columns at each end are nearer the background than the pixel of b's
+// middle row in that column. A square end's corner is the bar's own
+// colour; so is the second column's of an end barely rounded (a corner
+// radius of a pixel), while the panel's capsule (radius 4 of 8 px) leaves
+// it about a fifth covered.
 func shape(img *image.NRGBA, b Bar) Bar {
 	r := img.Bounds()
-	mx := b.X + (b.Fill+b.Track)/2
-	top, bottom := b.Y, b.Y
-	for top-1 >= r.Min.Y && !near(at(img, mx, top-1), b.Bg, 8) {
-		top--
+	extent := func(x int, in func(color.NRGBA) bool) (top, bottom int) {
+		top, bottom = b.Y, b.Y
+		for top-1 >= r.Min.Y && in(at(img, x, top-1)) {
+			top--
+		}
+		for bottom+1 < r.Max.Y && in(at(img, x, bottom+1)) {
+			bottom++
+		}
+		return top, bottom
 	}
-	for bottom+1 < r.Max.Y && !near(at(img, mx, bottom+1), b.Bg, 8) {
-		bottom++
-	}
-	b.Height = bottom - top + 1
-	b.Round = b.Height > 2
-	for _, x := range []int{b.X, b.X + b.Fill + b.Track - 1} {
+	top, bottom := extent(b.X+(b.Fill+b.Track)/2, func(c color.NRGBA) bool { return !near(c, b.Bg, 8) })
+	ft, fb := extent(b.X+b.Fill/2, func(c color.NRGBA) bool { return near(c, b.Colour, runTol) })
+	b.Height = fb - ft + 1
+	end := b.X + b.Fill + b.Track
+	b.Round = bottom-top+1 > 2 && b.Fill+b.Track >= 4
+	for _, x := range []int{b.X, b.X + 1, end - 2, end - 1} {
 		inside := at(img, x, b.Y)
 		for _, y := range []int{top, bottom} {
 			if c := at(img, x, y); dist(c, b.Bg) >= dist(c, inside) {

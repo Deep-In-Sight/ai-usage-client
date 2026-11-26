@@ -96,6 +96,79 @@ func TestMissingFindsCutText(t *testing.T) {
 	}
 }
 
+// Review N6: the check also fails for texts drawn over each other or over
+// the bar, and for a row without its bar, a header without its picture, a
+// checked action without its check mark.
+func TestMissingFindsOverlapsAndDroppedPictures(t *testing.T) {
+	m, tm := panel.MetricsAt(96), measurer{96}
+	items := wholeItems()
+	layout := func(it panel.Item) ([]panel.Op, int, int) {
+		w, h := panel.Size(it, m, tm)
+		return panel.Layout(it, m, tm, w, h, panel.LightPalette, false), w, h
+	}
+	without := func(ops []panel.Op, drop func(panel.Op) bool) []panel.Op {
+		var out []panel.Op
+		for _, o := range ops {
+			if !drop(o) {
+				out = append(out, o)
+			}
+		}
+		return out
+	}
+	moved := func(ops []panel.Op, text string, y func(panel.Op) int) []panel.Op {
+		out := append([]panel.Op(nil), ops...)
+		for i := range out {
+			if out[i].Kind == panel.Text && out[i].Text == text {
+				out[i].Y = y(out[i])
+			}
+		}
+		return out
+	}
+	row := items["combined r.claude.0"]
+	ops, w, h := layout(row)
+	if miss := panelcheck.Missing(row, ops, m, tm, w, h); len(miss) > 0 {
+		t.Fatalf("the row as drawn: %v", miss)
+	}
+	var label, bar panel.Op
+	for _, o := range ops {
+		switch {
+		case o.Kind == panel.Text && o.Text == row.Label:
+			label = o
+		case o.Kind == panel.Pixels:
+			bar = o
+		}
+	}
+	for name, c := range map[string]struct {
+		it   panel.Item
+		ops  []panel.Op
+		want string
+	}{
+		"detail on the label's line": {row, moved(ops, row.Detail, func(panel.Op) int { return label.Y }), "overlap"},
+		"detail over the bar":        {row, moved(ops, row.Detail, func(panel.Op) int { return bar.Y - 2 }), "overlap"},
+		"no bar":                     {row, without(ops, func(o panel.Op) bool { return o.Kind == panel.Pixels }), "bar not drawn"},
+	} {
+		if miss := panelcheck.Missing(c.it, c.ops, m, tm, w, h); !strings.Contains(strings.Join(miss, "; "), c.want) {
+			t.Errorf("%s: %v, want %q", name, miss, c.want)
+		}
+	}
+	hd := items["combined h.claude"]
+	hops, hw, hh := layout(hd)
+	if miss := panelcheck.Missing(hd, hops, m, tm, hw, hh); len(miss) > 0 {
+		t.Fatalf("the header as drawn: %v", miss)
+	}
+	if miss := panelcheck.Missing(hd, without(hops, func(o panel.Op) bool { return o.Kind == panel.Pixels }), m, tm, hw, hh); !strings.Contains(strings.Join(miss, "; "), "picture not drawn") {
+		t.Errorf("header without its picture: %v", miss)
+	}
+	ck := items["checked"]
+	cops, cw, ch := layout(ck)
+	if miss := panelcheck.Missing(ck, cops, m, tm, cw, ch); len(miss) > 0 {
+		t.Fatalf("the checked action as drawn: %v", miss)
+	}
+	if miss := panelcheck.Missing(ck, without(cops, func(o panel.Op) bool { return o.Kind == panel.Pixels }), m, tm, cw, ch); !strings.Contains(strings.Join(miss, "; "), "check mark not drawn") {
+		t.Errorf("checked action without its mark: %v", miss)
+	}
+}
+
 // Review A-I2: in the usual team case (the server line names the PCs that
 // fetch) and with every fixture, every item but the headers measures the
 // panel's width at every DPI: the panel keeps 320 px at 96 DPI. (The

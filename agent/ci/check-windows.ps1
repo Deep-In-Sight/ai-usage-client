@@ -298,6 +298,7 @@ if ($Desktop) {
     $scaleState = Join-Path $env:RUNNER_TEMP 'panel-scale-state.json'
     $script:panelPid = $null
     $script:panelDpi = 96
+    $script:panelScreen = $null
     $script:panelAddition = $null
     $script:panelFacts = @()
     function WinMenu([string]$Arguments) {
@@ -374,7 +375,7 @@ if ($Desktop) {
             SetApps 1
             $j = PanelMenu 'panel-menu-light.png'
             $script:panelFacts += MenuFacts 'light' $j
-            if (-not $j.error -and $j.dpi) { $script:panelDpi = $j.dpi; $script:panelAddition = $j.addition }
+            if (-not $j.error -and $j.dpi) { $script:panelDpi = $j.dpi; $script:panelAddition = $j.addition; $script:panelScreen = $j.screen }
             $p = @(MenuProblems $j $false)
             if ($p.Count -eq 0) { Pass 'panel.menu_light' "every item drawn, $($j.header_bg) throughout, highlight $($j.hover_row), $($j.items[0].Right - $j.items[0].Left) px (Windows adds $($j.addition))" } else { Fail 'panel.menu_light' ($p -join '; ') 1500 }
         }
@@ -412,6 +413,10 @@ if ($Desktop) {
         $r = WinMenu "scale -to restore -state `"$scaleState`""
         if ($r.error) { $rp += "scale: $($r.error)" }
         elseif ($r.dpi -ne $script:panelDpi) { $rp += "scale: $($r.dpi) DPI, was $($script:panelDpi)" }
+        # review N4: the screen mode too (the 150 % step may change it), as
+        # the light menu at 100 % saw it before any scale step
+        # (unknown only when the light menu failed, which fails already)
+        if ($script:panelScreen -and "$($r.screen)" -ne "$($script:panelScreen)") { $rp += "screen $($r.screen), was $($script:panelScreen)" }
         try {
             if (-not $themeKeyExisted) { if (Test-Path $themeKey) { Remove-Item -Path $themeKey -Recurse -Force -ErrorAction Stop } }
             elseif ($null -eq $oldApps) { Remove-ItemProperty -Path $themeKey -Name AppsUseLightTheme -ErrorAction Stop }
@@ -423,7 +428,7 @@ if ($Desktop) {
         $null = WinMenu 'broadcast'
         $script:panelFacts += "restored: $($r.dpi) DPI, screen $($r.screen), AppsUseLightTheme [$now]"
         Info 'panel.menu_scale.measured' ($script:panelFacts -join ' | ') 2000
-        if ($rp.Count -eq 0) { Pass 'panel.restore' "$($r.dpi) DPI, screen $($r.screen), AppsUseLightTheme [$now]" } else { Fail 'panel.restore' ($rp -join '; ') }
+        if ($rp.Count -eq 0) { Pass 'panel.restore' "$($r.dpi) DPI, screen $($r.screen) (was $($script:panelScreen)), AppsUseLightTheme [$now]" } else { Fail 'panel.restore' ($rp -join '; ') }
     }
 }
 

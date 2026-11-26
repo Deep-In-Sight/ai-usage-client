@@ -123,7 +123,10 @@ func TestPanelSessionRunsOnlyInItsSession(t *testing.T) {
 // Review B-M7: winmenu (CI only: it changes the display scale and the
 // screen mode) refuses to run outside GitHub Actions, before it does
 // anything: without both GITHUB_ACTIONS=true and RUNNER_TEMP it exits 2
-// and says why.
+// and says why. Each command is probed (review N5), scale too, but in a
+// form that changes nothing should the guard ever be missing: scale
+// without -state stops at its first statement, open asks for process 0
+// (no tray window), broadcast only sends a settings change.
 func TestWinmenuRefusesOutsideARunner(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("winmenu does its work on Windows only")
@@ -139,7 +142,7 @@ func TestWinmenuRefusesOutsideARunner(t *testing.T) {
 				env = append(env, k+"="+v)
 			}
 		}
-		for _, args := range [][]string{{"scale", "-to", "150", "-state", filepath.Join(t.TempDir(), "s.json")}, {"open", "-pid", "1"}, {"broadcast"}} {
+		for _, args := range [][]string{{"scale", "-to", "150"}, {"scale", "-to", "restore"}, {"open", "-pid", "0"}, {"broadcast"}} {
 			cmd := exec.Command(exe, args...)
 			cmd.Env = append(env, partial...)
 			out, err := cmd.CombinedOutput()

@@ -161,6 +161,7 @@ type openResult struct {
 	HoverQuit string   `json:"hover_quit"`
 	HoverDiff int      `json:"hover_diff"`
 	Picture   string   `json:"picture"`
+	Screen    string   `json:"screen"` // the screen mode now, WxH (review N4: the restore is compared with it)
 	// RefWidth is the width Windows gives the items of a menu of this
 	// tool's own whose owner-drawn items measure exactly the panel's
 	// width at this DPI: the header's width equals it when the widest of
@@ -202,7 +203,8 @@ func open(pid uint32, pngPath string) (*openResult, error) {
 	// the menu opens up from the pointer: put it where nothing is under it
 	pSetCursorPos.Call(sw/2, sh-2)
 	time.Sleep(300 * time.Millisecond)
-	res := &openResult{}
+	sx, sy := screenMode()
+	res := &openResult{Screen: fmt.Sprintf("%dx%d", sx, sy)}
 	dpi := primaryDPI()
 	m := panel.MetricsAt(int(dpi))
 	ref, err := refMenuWidth(int32(m.Width), int32(m.Item))
@@ -658,7 +660,8 @@ func scale(to, statePath string) (*scaleResult, error) {
 	if to == "restore" {
 		b, err := os.ReadFile(statePath)
 		if err != nil {
-			return &scaleResult{Restore: true, DPI: primaryDPI()}, nil // nothing was changed
+			w, h := screenMode()
+			return &scaleResult{Restore: true, DPI: primaryDPI(), Screen: fmt.Sprintf("%dx%d", w, h)}, nil // nothing was changed
 		}
 		var st dispState
 		if err := json.Unmarshal(b, &st); err != nil {

@@ -11,8 +11,9 @@
 #                          five bars 42/13/7/100/8 % (pixcheck judge: ±2 px
 #                          of one common length, the colours #d97757 ×4 and
 #                          #f66151, the track rgba(128,128,128,0.32) over
-#                          the background, 8 px high, round ends), the
-#                          critical row's percent text in #f66151
+#                          the background, the fill 8 px high, round ends),
+#                          the critical row's percent text in #f66151; the
+#                          server line wraps at the bars' width, nothing cut
 #   panel.header_colour    a header's name in a row label's colour (review I1)
 #   panel.open_redraw      a view with the same items and another percent
 #                          while the menu is open: GetView again, the same
@@ -57,14 +58,16 @@
 # PHASE 2 (the next session, same folders, after its bus was away 35 s or
 # more: an agent stopped by repeated failures in that time would show):
 #   panel.relogin_same_agent the agent of the last session: its bridge
-#                          finds the new bus and the panel attaches within
-#                          15 s of the shell answering (lost-bus ruling, 4b
+#                          finds the new bus and answers the extension's
+#                          Attach within 8 s of org.gnome.Shell getting its
+#                          owner, both seen on the bus (lost-bus ruling, 4b
 #                          fix round 2; review B-I3); then the session ends
 # PHASE 3 (the session after that: its bus is up without a shell for 35 s
 # first, as when a user manager outlived the logout):
 #   panel.relogin_shell_late the same agent's bridge said "no shell" and
-#                          waited on: the panel attaches within 15 s of the
-#                          shell answering, the icons go (review A-M1, B-I3)
+#                          that it waits for GNOME Shell, and the same
+#                          bridge process attaches within 15 s of the shell
+#                          answering, the icons go (review A-M1, B-I3)
 #   panel.relogin          a new agent logs in again (autostart): no icon
 #                          helper before the panel attaches; the new agent
 #                          is the one left (review B-M2)
@@ -72,8 +75,8 @@
 #                          agent's files, the fake server's requests or this
 #                          job's output (as check-linux.sh; review B-M10)
 #   panel.remove           uninstall: the shell turns it off and out of its
-#                          enabled list, the folder goes, nothing of the
-#                          agent is left
+#                          enabled list (which must be read), the folder
+#                          goes, nothing of the agent is left
 # Each verdict is a line of out/panel-results.txt (the workflow's
 # notices); failures are also errors at once (lib.sh).
 set -u
@@ -238,6 +241,22 @@ sample_children() {
     sleep 1
   done
   echo "$max"
+}
+# enabled_list_has GVARIANT UUID: yes or no when GVARIANT (gsettings' value
+# of a list of strings) parses and has UUID or not, else unreadable
+enabled_list_has() {
+  python3 - "$1" "$2" <<'PY'
+import ast, sys
+v = sys.argv[1].strip()
+if v.startswith("@as "):
+    v = v[4:]
+try:
+    l = ast.literal_eval(v)
+    ok = isinstance(l, list) and all(isinstance(x, str) for x in l)
+except Exception:
+    ok = False
+print(("yes" if sys.argv[2] in l else "no") if ok else "unreadable")
+PY
 }
 # monitor FILE MATCH...: dbus-monitor in the background (sets mon_pid)
 mon_pid=""
@@ -445,7 +464,22 @@ cpx=$("$CI_BIN/pixcheck" colour -tol 8 -rect "$crect" "$out/panel-combined-$LABE
 npx=$("$CI_BIN/pixcheck" colour -tol 8 -rect "$nrect" "$out/panel-combined-$LABEL.png" '#f66151' 2>&1)
 case "$cpx" in ''|*[!0-9]*) p="$p critical_text=[$pt $cpx]" ;; *) [ "$cpx" -ge 10 ] || p="$p critical_text_pixels=$cpx" ;; esac
 case "$npx" in ''|*[!0-9]*) p="$p normal_text=[$npx]" ;; *) [ "$npx" -eq 0 ] || p="$p normal_text_red=$npx" ;; esac
-verdict panel.picture_combined "${p:+ $p}" "bars ${jb#*|}; critical percent [$ctext] $cpx px of #f66151, a normal percent $npx; menu $mr; the extension's dark flag: $dark; picture panel-combined-$LABEL.png"
+# the server line (found by the fixture's text) wraps at the bars' width
+# and loses nothing (ruling A-I2): given twice its text, it stays at most
+# 300 px wide, takes two lines or more and is not cut short
+srv=$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['server']))" "$GITHUB_WORKSPACE/agent/internal/tray/testdata/panel-combined.json")
+sl=$(ev "(() => { const want = $srv; const out = []; const walk = x => { if (x.clutter_text && x.text === want) out.push(x); for (const c of x.get_children()) walk(c); }; walk($B.menu.box); const l = out[0]; if (!l) return 'none'; const t = l.clutter_text; const one = l.get_preferred_height(-1)[1]; l.text = want + ' ' + want; const w = l.get_preferred_width(-1)[1]; const h = l.get_preferred_height(w)[1]; let cut = 'n/a'; try { cut = String(t.get_layout().is_ellipsized()); } catch (e) { } l.text = want; return [Math.round(w), Math.round(h), Math.round(one), String(t.line_wrap), cut, Math.round(l.width)].join(' '); })()")
+read -r sw sh s1 swrap scut snow <<< "$sl"
+case "$sw$sh$s1" in
+  ''|*[!0-9]*) p="$p server_line=[$sl]" ;;
+  *)
+    [ "$swrap" = true ] || p="$p server_line_does_not_wrap"
+    [ "$sw" -le 301 ] || p="$p server_line_${sw}px_wide"
+    [ "$sh" -ge $((s1 * 18 / 10)) ] || p="$p server_line_one_line=${sh}/${s1}"
+    [ "$scut" != true ] || p="$p server_line_cut"
+    ;;
+esac
+verdict panel.picture_combined "${p:+ $p}" "bars ${jb#*|}; critical percent [$ctext] $cpx px of #f66151, a normal percent $npx; server line twice as long: ${sw:-?}x${sh:-?} px (a line ${s1:-?}, wraps ${swrap:-?}, cut ${scut:-?}, shown ${snow:-?} px wide); menu $mr; the extension's dark flag: $dark; picture panel-combined-$LABEL.png"
 
 # review I1: the header's name has a row label's colour (no :insensitive)
 hc=$(ev "(() => { $JS const b = $B; const n = find(b.menu.box, 'ai-usage-name')[0]; const l = find(b.menu.box, 'ai-usage-label')[0]; const fg = a => { const c = a.get_theme_node().get_foreground_color(); return [c.red, c.green, c.blue, c.alpha].join('/'); }; let it = n; while (it && !(it.has_style_class_name && it.has_style_class_name('popup-menu-item'))) it = it.get_parent(); return [rect(n), rect(l), fg(n), fg(l), n.opacity, l.opacity, it ? (it.get_style_pseudo_class() || '-') : 'none'].join(' '); })()")
@@ -748,6 +782,10 @@ if [ "$phase" = 2 ]; then
 end=$(cat "$out/end-$LABEL-1.t0" 2>/dev/null)
 res "panel.session_end fact ($LABEL): the bridge in agent.log since: $(awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\]|usage panel' | head -n 8 | cut -c12- | tr '\n' ';' | cut -c1-700)"
 a0=$(attaches)
+# the attach moment is the bus's: the bridge's answer to Attach, against
+# the moment org.gnome.Shell got its owner, both as dbus-monitor saw them
+# (review of fix round 3: the polling below is slower than the attach)
+monitor "$out/monitor-relogin-$LABEL.txt" "type='method_call',interface='local.AIUsage.Panel1',member='Attach'" "type='method_return'" "type='signal',sender='org.freedesktop.DBus',member='NameOwnerChanged',arg0='org.gnome.Shell'"
 start_shell || { verdict panel.relogin_same_agent " shell_did_not_start" ""; finish; exit 1; }
 # this session's bus is at the runtime folder's address, where the bridge
 # looks; the clock starts when the shell answers (review B-I3)
@@ -755,12 +793,22 @@ same=$(pgrep -f "^$exe run" | tr '\n' ' ')
 again() { [ "$(attaches)" -gt "$a0" ] && [ "$(state)" = "1|" ] && is_visible; }
 wait_ms 30 again
 ts=$(since "$shell_t")
+unmonitor
+# seconds from the shell's owner to the first answer to an Attach after it
+ta=$(monparse "$out/monitor-relogin-$LABEL.txt" 0 | awk '
+  $4 == "NameOwnerChanged" && $6 == "org.gnome.Shell" && $NF ~ /^:/ && own == "" { own = $1 + 0 }
+  $2 == "return-of-Attach" && own != "" && att == "" { att = $1 + 0 }
+  END { if (own != "" && att != "") printf "%.1f", att - own }')
 p=""
 [ -n "$same" ] || p=" no_agent_of_the_last_session"
 again || p="$p not_attached"
-python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) <= 15 else 1)" "$ts" || p="$p after_${ts}s"
+if [ -z "$ta" ]; then
+  p="$p no_attach_seen_on_the_bus"
+else
+  python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) <= 8 else 1)" "$ta" || p="$p attach_${ta}s_after_the_shell"
+fi
 python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) >= 35 else 1)" "${BUS_AWAY:-0}" || p="$p bus_away_only_${BUS_AWAY:-?}s"
-verdict panel.relogin_same_agent "$p" "the bus away ${BUS_AWAY:-?}s; the agent of the last session (pid $(echo $same)) attached ${ts}s after the shell answered; its bridge: $(awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\] (.*waiting for the session bus|the session bus is there|GNOME Shell [0-9]|the panel extension attached)' | head -n 4 | cut -c12- | tr '\n' ';' | cut -c1-500)"
+verdict panel.relogin_same_agent "$p" "the bus away ${BUS_AWAY:-?}s; the agent of the last session (pid $(echo $same)) attached ${ta:-?}s after org.gnome.Shell got its owner (on the bus; polled: ${ts}s after the shell answered); its bridge: $(awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\] (.*waiting for the session bus|the session bus is there|GNOME Shell [0-9]|the panel extension attached)' | head -n 4 | cut -c12- | tr '\n' ';' | cut -c1-500)"
 end_session
 fi
 
@@ -776,6 +824,9 @@ up=${BUS_UP:-$(now)}
 said() { awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\] no usage panel on this desktop.*\(no shell\)' | head -n 1 | cut -c12-; }
 has_said() { [ -n "$(said)" ]; }
 wait_for 70 has_said
+# the bridge that said it: the same one must serve the shell (it waits on
+# in its process, review A-M1), and it says it waits for the shell
+bpid=$(bridge_pids "$bus" | head -n 1)
 rest=$(python3 -c "import sys,time; print(max(0.0, 35 - (time.time() - float(sys.argv[1]))))" "$up")
 sleep "$rest"
 before=$(said)
@@ -785,13 +836,16 @@ again() { [ "$(attaches)" -gt "$a0" ] && [ "$(state)" = "1|" ] && is_visible; }
 wait_ms 30 again
 ts=$(since "$shell_t")
 wait_ms 15 no_icons
+apid=$(bridge_pids "$bus" | head -n 1)
 p=""
 [ -n "$before" ] || p=" no_shell_not_seen_by_the_bridge"
+case "$before" in *"waiting for GNOME Shell"*) ;; *) [ -z "$before" ] || p="$p not_waiting_for_the_shell" ;; esac
+[ -n "$bpid" ] && [ "$apid" = "$bpid" ] || p="$p bridge_pid=${bpid:-none}_then_${apid:-none}"
 python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) >= 35 else 1)" "$noshell" || p="$p no_shell_only_${noshell}s"
 again || p="$p not_attached"
 python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) <= 15 else 1)" "$ts" || p="$p after_${ts}s"
 no_icons || p="$p icon_helpers=$(icons)"
-verdict panel.relogin_shell_late "$p" "${noshell}s on the bus without a shell: the bridge said [$before]; attached ${ts}s after the shell answered, icon helpers $(icons); its bridge: $(awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\] (the session bus is there|no usage panel|GNOME Shell [0-9]|the panel extension attached)' | head -n 5 | cut -c12- | tr '\n' ';' | cut -c1-500)"
+verdict panel.relogin_shell_late "$p" "${noshell}s on the bus without a shell: the bridge (pid ${bpid:-none}) said [$before]; attached ${ts}s after the shell answered, the bridge then pid ${apid:-none}, icon helpers $(icons); its bridge: $(awk -v t="$end" '$0 >= t' "$alog" | grep -E '\[tray shell\] (the session bus is there|no usage panel|GNOME Shell [0-9]|the panel extension attached)' | head -n 5 | cut -c12- | tr '\n' ';' | cut -c1-500)"
 
 : > "$out/relogin-icons-$LABEL.txt"
 old=" $(pgrep -f "^$exe run" | tr '\n' ' ') "
@@ -825,13 +879,20 @@ verdict panel.privacy "$p" "agent.log: $(grep -m1 -o 'CI build: no request to An
 rc=$?
 sleep 3
 st=$(state); b=$(ev "String(!!$B)")
-en=$(gsettings get org.gnome.shell enabled-extensions)
+en=$(gsettings get org.gnome.shell enabled-extensions 2>&1)
 p=""
 [ "$rc" -eq 0 ] || p="$p rc=$rc"
 [ ! -e "$exts/$uuid" ] || p="$p folder_left"
 [ "$st" != "1|" ] || p="$p still_on"
 [ "$b" = false ] || p="$p button_left"
-case "$en" in *"$uuid"*) p="$p still_in_enabled_extensions" ;; esac
+# the enabled list must be read (a list of strings, "@as []" when empty),
+# not an error that happens not to name the uuid (review of fix round 3)
+pl=$(enabled_list_has "$en" "$uuid")
+case "$pl" in
+  no) ;;
+  yes) p="$p still_in_enabled_extensions" ;;
+  *) p="$p enabled_list_unreadable=[$(printf '%s' "$en" | tr '\n' ' ' | cut -c1-120)]" ;;
+esac
 [ "$(agent_count)" -eq 0 ] && [ "$(pgrep -f "^$exe tray-helper" | wc -l)" -eq 0 ] || p="$p processes_left"
 [ ! -e "$data" ] || p="$p data_left"
 alive || p="$p shell_dead"
