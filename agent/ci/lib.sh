@@ -32,6 +32,10 @@ oneline() { printf '%s' "$*" | tr '\r\n' '  ' | sed 's/%/%25/g' | cut -c1-300; }
 pass() { required=$((required + 1)); passed=$((passed + 1)); echo "pass $1: $(oneline "${2:-}")"; }
 fail() { required=$((required + 1)); failed_ids="$failed_ids $1"; echo "::error title=$1::$(oneline "${2:-}")"; }
 info() { echo "::notice title=$1::$(oneline "${2:-}")"; }
+# the same for a long text (measured numbers, a list of problems)
+onelong() { printf '%s' "$*" | tr '\r\n' '  ' | sed 's/%/%25/g' | cut -c1-1500; }
+fail_long() { required=$((required + 1)); failed_ids="$failed_ids $1"; echo "::error title=$1::$(onelong "${2:-}")"; }
+info_long() { echo "::notice title=$1::$(onelong "${2:-}")"; }
 finish() {
   echo "::notice title=summary::$passed/$required${failed_ids:+ failed:$failed_ids}"
   [ "$passed" -eq "$required" ]

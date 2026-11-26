@@ -329,3 +329,38 @@ func TestReleaseCheckRunsInOrdinaryCI(t *testing.T) {
 		}
 	}
 }
+
+// The CI test steps name every failing test in one annotation (a step
+// keeps only ten, and the first failure lines can all be one package's):
+// ci/failing-tests.sh reads a go test log, plain or -v.
+func TestFailingTestsListsEveryPackage(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash")
+	}
+	log := filepath.Join(t.TempDir(), "test.log")
+	if err := os.WriteFile(log, []byte(`=== RUN   TestA
+--- FAIL: TestA (0.00s)
+    a_test.go:10: bad
+    --- FAIL: TestA/sub (0.00s)
+--- FAIL: TestB (0.01s)
+FAIL
+FAIL	example.com/x/pkga	0.123s
+ok  	example.com/x/pkgb	0.1s
+# example.com/x/pkgc
+pkgc/c.go:3:1: syntax error
+FAIL	example.com/x/pkgc [build failed]
+--- FAIL: TestC (0.00s)
+panic: boom
+FAIL	example.com/x/pkgd	0.2s
+FAIL
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("bash", "../ci/failing-tests.sh", log).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != "example.com/x/pkga: TestA TestB; example.com/x/pkgc [build failed]: (no test named); example.com/x/pkgd: TestC" {
+		t.Fatal(got)
+	}
+}

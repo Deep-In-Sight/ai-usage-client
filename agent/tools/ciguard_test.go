@@ -153,3 +153,37 @@ func TestWinmenuRefusesOutsideARunner(t *testing.T) {
 		}
 	}
 }
+
+// macmenu (CI only: it posts mouse and key events to the session and
+// starts a tray helper) refuses to run outside GitHub Actions, before it
+// does anything: without both GITHUB_ACTIONS=true and RUNNER_TEMP it exits
+// 2 and says why (on every OS: elsewhere than macOS it does nothing more).
+func TestMacmenuRefusesOutsideARunner(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "macmenu")
+	if runtime.GOOS == "windows" {
+		exe += ".exe"
+	}
+	if out, err := exec.Command("go", "build", "-o", exe, "./macmenu").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	for _, partial := range [][]string{nil, {"GITHUB_ACTIONS=true"}, {"RUNNER_TEMP=" + t.TempDir()}, {"GITHUB_ACTIONS=1", "RUNNER_TEMP=" + t.TempDir()}} {
+		env := []string{"PATH=" + os.Getenv("PATH")}
+		for _, k := range []string{"SystemRoot", "windir", "TEMP", "TMP", "HOME"} {
+			if v, ok := os.LookupEnv(k); ok {
+				env = append(env, k+"="+v)
+			}
+		}
+		for _, args := range [][]string{{"drive", "-exe", "/nonexistent/ai-usage", "-png", filepath.Join(t.TempDir(), "m.png")}, {"inspect", "-pid", "1", "-png", filepath.Join(t.TempDir(), "m.png")}} {
+			cmd := exec.Command(exe, args...)
+			cmd.Env = append(env, partial...)
+			out, err := cmd.CombinedOutput()
+			code := -1
+			if ee, ok := err.(*exec.ExitError); ok {
+				code = ee.ExitCode()
+			}
+			if code != 2 || !strings.Contains(string(out), "refusing to run") {
+				t.Fatalf("%v %v: exit %d (%v)\n%s", partial, args, code, err, out)
+			}
+		}
+	}
+}

@@ -29,7 +29,16 @@ jobs:
           go-version-file: agent/go.mod
           cache-dependency-path: agent/go.sum
       - name: vet
-        run: go vet ./...
+        # Errors become annotations too (a compiler's message about C or
+        # Objective-C in the macOS tray is not one by itself).
+        shell: bash
+        run: |
+          set -o pipefail
+          go vet ./... 2>&1 | tee "$RUNNER_TEMP/vet.log" || {
+            grep -E -i -- 'error|warning: |^vet: |\.go:[0-9]+:' "$RUNNER_TEMP/vet.log" | head -10 |
+              sed -e 's/%/%25/g' -e 's/^/::error title=go vet::/'
+            exit 1
+          }
       - name: gofmt
         # Every Go file under agent/ is as gofmt writes it, except the
         # systray copy, which stays byte for byte upstream plus its patch
@@ -84,25 +93,31 @@ jobs:
           }
       - name: test
         # Linux runs the whole module under the race detector instead (the
-        # next step). Windows draws the usage panel's pictures into
-        # PANEL_PICTURE_DIR (trayhelper TestPanelPictureWindows).
+        # next step). Windows and macOS draw the usage panel's pictures into
+        # PANEL_PICTURE_DIR (trayhelper TestPanelPictureWindows,
+        # TestPanelViewPictureMac).
         if: runner.os != 'Linux'
         shell: bash
         env:
           PANEL_PICTURE_DIR: ${{ runner.temp }}/panel
         run: |
-          # Failures also become annotations, which can be read without a token.
+          # Failures also become annotations, which can be read without a
+          # token: first one that names every failing test by package (a
+          # step keeps only ten), then the first failure lines.
           set -o pipefail
           go test -count=1 ./... 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+            failing=$(bash ci/failing-tests.sh "$RUNNER_TEMP/test.log")
+            echo "::error title=failing tests::${failing//'%'/'%25'}"
             grep -E -- '^[[:space:]]*(--- FAIL|panic:)|_test\.go:[0-9]+:' "$RUNNER_TEMP/test.log" |
-              head -10 | sed -E 's/^[[:space:]]*/::error title=go test::/'
+              head -9 | sed -E 's/^[[:space:]]*/::error title=go test::/'
             exit 1
           }
       - name: panel pictures
         # panel.picture: the fixtures Combined and States, light and dark,
-        # as the Windows helper draws them (plan Task 8): four pictures,
-        # kept in the artefact panel-pictures-<os> for the owner.
-        if: runner.os == 'Windows'
+        # as the Windows helper draws them (plan Task 8) and as the macOS
+        # menu's views draw them (plan Task 9): four pictures, kept in the
+        # artefact panel-pictures-<os> for the owner.
+        if: runner.os != 'Linux'
         shell: bash
         run: |
           d="$RUNNER_TEMP/panel"
@@ -113,7 +128,7 @@ jobs:
           fi
           echo "::notice title=panel.picture::$(cd "$d" && for f in panel-*.png; do printf '%s %s bytes; ' "$f" "$(wc -c < "$f")"; done)"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always() && runner.os == 'Windows'
+        if: always() && runner.os != 'Linux'
         with:
           name: panel-pictures-${{ matrix.os }}
           path: ${{ runner.temp }}/panel/
@@ -140,8 +155,10 @@ jobs:
           echo "::notice title=test (-race)::$((pass + fail)) run, $pass passed, $fail failed, $skip skipped, $races data races"
           grep -B1 -E -- '^--- SKIP' "$RUNNER_TEMP/race.log" | grep -E '_test\.go:[0-9]+:' | head -8 | sed -E 's/^[[:space:]]*/::notice title=skipped::/' || true
           if [ "$rc" -ne 0 ]; then
+            failing=$(bash ci/failing-tests.sh "$RUNNER_TEMP/race.log")
+            echo "::error title=failing tests::${failing//'%'/'%25'}"
             grep -E -- '^[[:space:]]*(--- FAIL|panic:)|_test\.go:[0-9]+:|WARNING: DATA RACE|^FAIL' "$RUNNER_TEMP/race.log" |
-              head -10 | sed -E 's/^[[:space:]]*/::error title=go test -race::/'
+              head -9 | sed -E 's/^[[:space:]]*/::error title=go test -race::/'
             tail -30 "$RUNNER_TEMP/race.log"
             exit 1
           fi
@@ -379,9 +396,11 @@ jobs:
         with:
           name: release-files
           path: dist
-      - name: fake server
+      - name: fake server and the menu tool
         working-directory: agent
-        run: go build -o "$RUNNER_TEMP/bin/fakeserver" ./tools/fakeserver
+        run: |
+          go build -o "$RUNNER_TEMP/bin/fakeserver" ./tools/fakeserver
+          go build -o "$RUNNER_TEMP/bin/macmenu" ./tools/macmenu
       - name: checks
         env:
           CI_DIST: ${{ github.workspace }}/dist

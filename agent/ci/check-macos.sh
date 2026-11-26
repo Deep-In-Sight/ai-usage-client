@@ -2,8 +2,9 @@
 # macOS runner checks: the Claude sign-in only in the login keychain and a
 # fake Codex sign-in in ~/.codex, one-line install, LaunchAgent, tray mode
 # sync of both providers, one helper per provider, status, no listening
-# port, no token leak, in-place upgrade and uninstall (the server told). Results as annotations; exit 1 if a
-# required check failed.
+# port, no token leak, the usage panel in the menu-bar menu (views, click,
+# keys), in-place upgrade and uninstall (the server told). Results as
+# annotations; exit 1 if a required check failed.
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$here/lib.sh"
@@ -99,6 +100,42 @@ else fail tray.provider_helpers "helpers=$(helper_count) children_of_$pid=$(chil
 # subcommand (its provider and icon folder come over its standard input)
 hcmd=$(ps -ww -o command= -p "$(pgrep -f "^$exe tray-helper" | head -n 1)" 2>/dev/null)
 if [ "$hcmd" = "$exe tray-helper" ]; then pass tray.helper_cmdline "[$hcmd]"; else fail tray.helper_cmdline "[$hcmd]"; fi
+
+# panel.mac_menu: the usage panel in a real menu-bar menu (plan Task 9). A
+# tray helper of this build gets the panel fixture's view from
+# tools/macmenu, which opens its menu with a click on its status item,
+# reads it through the accessibility interface (each view item's size, its
+# width against the menu's and its VoiceOver label and role), captures it
+# (the bars' fill, the header picture), clicks Claude's header (nothing
+# sent, the menu stays open), puts the pointer on Open dashboard (the
+# menu's own highlight, to compare the views' with), clicks Claude's
+# 5-hour row (the helper must send that click and the menu close), chooses
+# the row with Down and Return (it must be highlighted like the menu's own
+# items and sent), closes the menu with Down and Escape (nothing sent),
+# and once more chooses the row with Down and Return with the helper made
+# the active app (the delegate's fall-back; an info line when the runner
+# cannot make it active). The menu's open or closed state is read from its
+# window at the pop-up menu level (the accessibility tree keeps a closed
+# menu). panel.mac_agent_menu: the menu of the agent's own helper (the
+# real view from the fake server) has its headers and rows as views as
+# wide as the menu. The numbers are one notice each; the captures are in
+# the artifact.
+mm="$CI_BIN/macmenu"
+tmo 150 "$mm" drive -exe "$exe" -png "$out/panel-menu-mac.png" > "$out/macmenu-drive.json" 2> "$out/macmenu-drive.err"
+rc=$?
+if [ $rc -eq 0 ]; then pass panel.mac_menu "views sized and labelled, bars drawn, click, Return and Escape as a person would"
+else fail_long panel.mac_menu "rc=$rc $(jget "$out/macmenu-drive.json" problems) $(tail -c 300 "$out/macmenu-drive.err")"; fi
+info_long panel.mac_menu.measured "$(jget "$out/macmenu-drive.json" summary)"
+act=$(jget "$out/macmenu-drive.json" active_return)
+case "$act" in
+"not active"* | "") info panel.mac_menu.active_return "not measurable on this runner: the helper could not be made the active app [$act]; Return in an active app's menu (the delegate's fall-back) is for the real Mac" ;;
+esac
+hp=$(pgrep -f "^$exe tray-helper" | head -n 1)
+tmo 60 "$mm" inspect -pid "${hp:-0}" -png "$out/panel-menu-agent.png" > "$out/macmenu-agent.json" 2> "$out/macmenu-agent.err"
+rc=$?
+if [ $rc -eq 0 ]; then pass panel.mac_agent_menu "helper $hp: headers and rows are views as wide as the menu"
+else fail_long panel.mac_agent_menu "rc=$rc helper=$hp $(jget "$out/macmenu-agent.json" problems) $(tail -c 300 "$out/macmenu-agent.err")"; fi
+info_long panel.mac_agent_menu.measured "$(jget "$out/macmenu-agent.json" summary)"
 
 # tray.two_helpers: the CI build's test switch shows a second helper; the
 # agent is started by hand for this (the LaunchAgent is stopped
