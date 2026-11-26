@@ -23,5 +23,8 @@ func RenderPanelViewPNG(uint32, int, bool, int) ([]byte, error) {
 // RaiseInNextPanelViewText does nothing here (a test hook of macOS').
 func RaiseInNextPanelViewText() {}
 
+// CancelPanelMenu does nothing here: menu items with a view are macOS'.
+func CancelPanelMenu() {}
+
 // ActivateOnMenuOpen does nothing here (a CI test switch of macOS').
 func ActivateOnMenuOpen(bool) {}

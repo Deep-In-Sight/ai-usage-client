@@ -195,6 +195,9 @@ upstream file only calls them:
   `(*MenuItem).SetPanelView(on)` (the item gets a view, sized again and
   redrawn, unless the menu is open: an open menu keeps what it opened
   with; off: a text item again, at the menu's close if it is open),
+  `CancelPanelMenu()` (the open menu's tracking is cancelled, on the main
+  queue after the current call; the program calls it when its viewer
+  stopped drawing, so that the open menu's views do not stay blank),
   `ActivateOnMenuOpen(on)` (for a CI build's test switch only: before the
   menu shows, the app makes itself an accessory app and the active app,
   `setActivationPolicy:`, `activateIgnoringOtherApps:` and, from macOS

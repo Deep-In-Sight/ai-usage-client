@@ -47,6 +47,40 @@ func hiddenUnderHeader(id string, drawn map[string]panel.Item) bool {
 	return ok
 }
 
+// stopSignal is closed once, when a drawer stops drawing for good: the
+// helper's loop then builds the text menu at once instead of at its next
+// tick (review A-m1). Asked for after that, it is closed already.
+type stopSignal struct {
+	mu   sync.Mutex
+	ch   chan struct{}
+	done bool
+}
+
+// C is the channel, closed once stop was called.
+func (s *stopSignal) C() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ch == nil {
+		s.ch = make(chan struct{})
+		if s.done {
+			close(s.ch)
+		}
+	}
+	return s.ch
+}
+
+func (s *stopSignal) stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.done {
+		return
+	}
+	s.done = true
+	if s.ch != nil {
+		close(s.ch)
+	}
+}
+
 // drawStore is what each drawn item draws, by its menu id. The helper sets
 // an item's data whole while the tray's thread may be drawing it (the menu
 // can be open across a new view, RF4): a draw reads one version or the

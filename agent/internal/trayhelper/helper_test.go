@@ -49,6 +49,8 @@ type fakeUI struct {
 	// nativeActions: a ui that draws keeps the text items its own
 	// (macOS)
 	nativeActions atomic.Bool
+	// drawFailed is closed when the drawing stopped (nil: never)
+	drawFailed chan struct{}
 	// store is what each drawn item draws, as the real ui's drawer keeps
 	// it (by a number per item; the macOS drawer, whose store is the
 	// Windows drawer's); probes are what an open of the menu would take
@@ -185,9 +187,10 @@ func (u *fakeUI) SetTooltip(s string) {
 	defer u.mu.Unlock()
 	u.tooltips = append(u.tooltips, s)
 }
-func (u *fakeUI) Lost() <-chan struct{} { return u.lost }
-func (u *fakeUI) Shown() bool           { return u.shown.Load() }
-func (u *fakeUI) IconSize() int         { return int(u.size.Load()) }
+func (u *fakeUI) Lost() <-chan struct{}       { return u.lost }
+func (u *fakeUI) DrawFailed() <-chan struct{} { return u.drawFailed }
+func (u *fakeUI) Shown() bool                 { return u.shown.Load() }
+func (u *fakeUI) IconSize() int               { return int(u.size.Load()) }
 
 func (u *fakeUI) snapshot() (layout []string, items map[string]fakeItem, icons, titles, tooltips int, resets int) {
 	u.mu.Lock()
@@ -267,6 +270,7 @@ type runOpts struct {
 	removeStale func([]trayproto.StaleIcon)
 	window      func() uint64
 	bridge      func(ctx context.Context, in *bufio.Reader, out io.Writer, enableOnce bool) int
+	tick        time.Duration // 0: 20 ms
 }
 
 func startRun(t *testing.T, ro runOpts) *run {
@@ -283,6 +287,9 @@ func startRun(t *testing.T, ro runOpts) *run {
 	if ro.waitHost == nil {
 		ro.waitHost = func(ctx context.Context) bool { <-ctx.Done(); return false }
 	}
+	if ro.tick == 0 {
+		ro.tick = 20 * time.Millisecond
+	}
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	r := &run{t: t, ui: ro.ui, iconDir: t.TempDir(), opts: make(chan Options, 1), inW: inW, out: bufio.NewReader(outR), code: make(chan int, 1), notices: make(chan string, 4)}
@@ -292,7 +299,7 @@ func startRun(t *testing.T, ro runOpts) *run {
 		notify:       func(title, text string) error { r.notices <- title + ": " + text; return nil },
 		removeStale:  ro.removeStale,
 		window:       ro.window,
-		tick:         20 * time.Millisecond,
+		tick:         ro.tick,
 		readyTimeout: 2 * time.Second,
 		giveUp:       func() { r.gaveUp.Store(true); ro.ui.Quit() },
 		bridge:       ro.bridge,

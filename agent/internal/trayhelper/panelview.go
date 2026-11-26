@@ -76,6 +76,10 @@ type viewDrawer struct {
 	mu     sync.Mutex
 	open   map[uint32]panel.Item
 	failed bool
+	// cancelMenu cancels the open menu (the tray library's; nil: none);
+	// stopped is closed at the first failure, after it
+	cancelMenu func()
+	stopped    stopSignal
 	// trace, when set (tests only), gets each DrawView's steps and the
 	// measurer they were laid out with
 	trace func(id uint32, ops []panel.Op, m panel.Metrics, tm panel.Measurer, w, h int)
@@ -93,6 +97,9 @@ func (d *viewDrawer) Failed() bool {
 	return d.failed
 }
 
+// FailedSignal is closed at the first failure.
+func (d *viewDrawer) FailedSignal() <-chan struct{} { return d.stopped.C() }
+
 // recovered ends a panic of what (deferred in each method the tray
 // library calls): logged once, and nothing is drawn from then on.
 func (d *viewDrawer) recovered(what string) {
@@ -101,7 +108,10 @@ func (d *viewDrawer) recovered(what string) {
 	}
 }
 
-// fail stops the drawing for good, logged once.
+// fail stops the drawing for good, logged once. The first failure also
+// cancels the open menu, whose views would stay blank until it closes (as
+// Windows ends its menu), and then tells the helper (FailedSignal), which
+// builds the text menu at once (review A-m1).
 func (d *viewDrawer) fail(what string, why any) {
 	d.mu.Lock()
 	first := !d.failed
@@ -109,6 +119,10 @@ func (d *viewDrawer) fail(what string, why any) {
 	d.mu.Unlock()
 	if first {
 		log.Printf("panel: %s failed (%v); the tray menu is text from now on", what, why)
+		if d.cancelMenu != nil {
+			d.cancelMenu()
+		}
+		d.stopped.stop()
 	}
 }
 

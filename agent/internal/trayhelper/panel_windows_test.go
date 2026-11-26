@@ -408,6 +408,12 @@ func TestDrawerPanicStopsTheDrawing(t *testing.T) {
 	}
 	eq(t, d.Failed(), true)
 	eq(t, d.ended(), 1)
+	// the helper is told at once (review A-m1): it builds the text menu
+	select {
+	case <-(systrayUI{drawer: d}).DrawFailed():
+	default:
+		t.Fatal("the failure was not signalled")
+	}
 	if ops := d.drawn(1); ops != nil {
 		t.Fatalf("drawn after the panic: %+v", ops)
 	}

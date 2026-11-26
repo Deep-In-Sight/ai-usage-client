@@ -8,6 +8,7 @@ import "fyne.io/systray"
 // (systray.SetPanelView) ask it what to draw (panelview.go).
 func newItemDrawer() itemDrawer {
 	d := newViewDrawer()
+	d.cancelMenu = systray.CancelPanelMenu
 	systray.SetPanelViewer(viewerGlue{d})
 	return d
 }

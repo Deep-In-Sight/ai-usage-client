@@ -43,3 +43,6 @@ void aiu_test_raise_once(void);
 // CI builds' test switch: the app makes itself active before its menu
 // shows.
 void aiu_set_activate(bool on);
+// Cancels the open menu's tracking, on the main thread after the current
+// call (nothing when no menu is open).
+void aiu_cancel_open_menu(void);

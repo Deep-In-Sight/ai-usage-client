@@ -345,6 +345,7 @@ func (h *helper) loop(ctx context.Context, built chan<- struct{}) {
 	h.check()
 	tick := time.NewTicker(h.d.tick)
 	defer tick.Stop()
+	failed := h.d.ui.DrawFailed()
 	for {
 		select {
 		case <-ctx.Done():
@@ -373,17 +374,28 @@ func (h *helper) loop(ctx context.Context, built chan<- struct{}) {
 			log.Print("the session is ending")
 			h.d.ui.Quit()
 			return
+		case <-failed:
+			// the drawer failed: the text menu now, not at the next tick
+			// (a menu opened meanwhile would be items nobody draws:
+			// review A-m1)
+			failed = nil
+			h.textMenuIfStopped()
 		case <-tick.C:
 			h.check()
 			if h.view != nil {
 				h.setIcon(*h.view)
-				if h.drawing && !h.d.ui.Draws() {
-					// the ui stopped drawing (Windows: its drawer failed):
-					// today's text menu, at once rather than at the next view
-					h.apply(*h.view)
-				}
+				h.textMenuIfStopped()
 			}
 		}
+	}
+}
+
+// textMenuIfStopped: the ui stopped drawing (its drawer failed) while the
+// menu is the drawn panel: today's text menu, at once rather than at the
+// next view.
+func (h *helper) textMenuIfStopped() {
+	if h.view != nil && h.drawing && !h.d.ui.Draws() {
+		h.apply(*h.view)
 	}
 }
 

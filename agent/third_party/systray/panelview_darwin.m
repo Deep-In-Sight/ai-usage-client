@@ -20,8 +20,9 @@
 // menu closes. An
 // Objective-C exception while measuring or drawing is caught where Go
 // called in (it must not unwind through Go's frames) and reported to the
-// Go side once the call has returned; the Go side then stops drawing and
-// the program shows its text menu.
+// Go side once the call has returned; the Go side then stops drawing,
+// cancels the open menu (aiu_cancel_open_menu) and the program shows its
+// text menu.
 
 #import <Cocoa/Cocoa.h>
 #include "systray.h"
@@ -29,6 +30,7 @@
 
 // the root menu's state while it is open (main thread only)
 static BOOL aiuMenuOpen = NO;
+static NSMenu *aiuOpenMenu = nil;          // the menu that is open
 static BOOL aiuActed = NO;                 // an item's action came while it was open
 static NSMenuItem *aiuLastHighlighted = nil; // the last item highlighted (nil ones are skipped)
 static NSMutableArray<NSMenuItem *> *aiuDetach = nil; // view items that become text items at the close
@@ -61,6 +63,18 @@ void aiu_test_raise_once(void) {
 
 void aiu_set_activate(bool on) {
   aiuActivate = on;
+}
+
+// The Go side stopped drawing (its viewer failed): the open menu, whose
+// views would stay blank until it closes, is cancelled, as Windows ends
+// its menu. Later on the main queue: a failure is reported from inside a
+// view's drawing or sizing.
+void aiu_cancel_open_menu(void) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (aiuMenuOpen && aiuOpenMenu != nil) {
+      [aiuOpenMenu cancelTracking];
+    }
+  });
 }
 
 // Return and keypad Enter choose the menu's highlighted item. Space does
@@ -389,6 +403,7 @@ void aiu_panel_attach(NSMenuItem *mi, int menuId, bool on) {
 // The menu delegate's calls (systray_darwin.m).
 void aiu_panel_menu_will_open(NSMenu *menu) {
   aiuMenuOpen = YES;
+  aiuOpenMenu = menu;
   aiuActed = NO;
   aiuLastHighlighted = nil;
   systray_panel_menu_opening();
@@ -446,6 +461,7 @@ void aiu_panel_menu_did_close(NSMenu *menu) {
   NSMenuItem *last = aiuLastHighlighted;
   BOOL acted = aiuActed;
   aiuMenuOpen = NO;
+  aiuOpenMenu = nil;
   aiuActed = NO;
   aiuLastHighlighted = nil;
   NSEvent *e = [NSApp currentEvent];

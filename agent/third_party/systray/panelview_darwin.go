@@ -70,6 +70,12 @@ func RenderPanelViewPNG(itemID uint32, width int, dark bool, scale int) ([]byte,
 // PanelViewer's ViewFailed as one in the drawing would be. For tests.
 func RaiseInNextPanelViewText() { C.aiu_test_raise_once() }
 
+// CancelPanelMenu cancels the open menu's tracking, on the main thread
+// after the current call (nothing when no menu is open): the program calls
+// it when its viewer stopped drawing, so that the open menu's views do not
+// stay blank until it closes; the next open shows the program's new menu.
+func CancelPanelMenu() { C.aiu_cancel_open_menu() }
+
 // ActivateOnMenuOpen: before its menu shows, the program makes itself an
 // accessory app and the active app (macOS gives an active app's menu the
 // keys differently). Only for a CI build's test switch: a released

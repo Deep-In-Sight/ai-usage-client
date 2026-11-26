@@ -35,6 +35,14 @@ func (systrayUI) Lost() <-chan struct{}      { return sessionLost() }
 func (systrayUI) Shown() bool                { return iconShown() }
 func (systrayUI) IconSize() int              { return trayIconSize() }
 
+// DrawFailed is closed at the drawer's first failure (nil: no drawer).
+func (u systrayUI) DrawFailed() <-chan struct{} {
+	if u.drawer == nil {
+		return nil
+	}
+	return u.drawer.FailedSignal()
+}
+
 // Reset removes every item; the drawer forgets what they drew.
 func (u systrayUI) Reset() {
 	systray.ResetMenu()

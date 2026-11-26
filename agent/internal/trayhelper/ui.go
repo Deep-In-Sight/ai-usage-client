@@ -37,6 +37,9 @@ type ui interface {
 	Shown() bool
 	// IconSize is the notification area's icon size (Windows; 0 elsewhere).
 	IconSize() int
+	// DrawFailed is closed when the ui stopped drawing (its drawer
+	// failed); nil on a ui that does not draw.
+	DrawFailed() <-chan struct{}
 	// SetDrawnData gives the drawer the data of all these items at once
 	// (one lock: an open of the menu takes all of them or none, review
 	// N1); each item's SetDrawn then switches it. Nothing on a ui that
@@ -73,6 +76,8 @@ type itemDrawer interface {
 	// Failed reports that the drawing stopped for good (a panic): the
 	// ui does not draw from then on.
 	Failed() bool
+	// FailedSignal is closed when it does (at the first failure).
+	FailedSignal() <-chan struct{}
 	// DrawsActions: it draws the text items too (Windows).
 	DrawsActions() bool
 }

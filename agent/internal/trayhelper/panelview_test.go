@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"image/color"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -281,6 +282,44 @@ func TestMacDrawerStopsOnAnObjectiveCException(t *testing.T) {
 	log.SetOutput(os.Stderr)
 	eq(t, strings.Count(logged.String(), "the tray menu is text from now on"), 1)
 	eq(t, strings.Contains(logged.String(), "NSInternalInconsistencyException: a test"), true)
+}
+
+// Review A-m1: the first failure (a panic or an Objective-C exception)
+// cancels the open menu, as Windows ends its menu, and tells the helper at
+// once (FailedSignal), which then builds the text menu.
+func TestMacDrawerFailureClosesTheOpenMenu(t *testing.T) {
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	for name, fail := range map[string]func(d *viewDrawer){
+		"panic":     func(d *viewDrawer) { d.ViewSize(1, &fakeCanvas{scale: 1, panic: true}) },
+		"exception": func(d *viewDrawer) { d.ViewFailed("NSInternalInconsistencyException: a test") },
+	} {
+		d := newViewDrawer()
+		cancels := 0
+		d.cancelMenu = func() { cancels++ }
+		it := panel.Item{Kind: "row", Label: "5-hour", PercentText: "42%", Level: "normal"}
+		d.Set(1, &it)
+		sig := d.FailedSignal()
+		select {
+		case <-sig:
+			t.Fatalf("%s: signalled before a failure", name)
+		default:
+		}
+		fail(d)
+		fail(d)
+		d.ViewFailed("again")
+		eq(t, cancels, 1)
+		select {
+		case <-sig:
+		default:
+			t.Fatalf("%s: no signal after the failure", name)
+		}
+		select {
+		case <-d.FailedSignal(): // asked after the failure: closed too
+		default:
+			t.Fatalf("%s: a signal asked for later is open", name)
+		}
+	}
 }
 
 // RF4 on macOS: the helper's goroutine sets the items while the main

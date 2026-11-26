@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/panel"
 	"github.com/Deep-In-Sight/ai-usage-client/agent/internal/provider"
@@ -315,6 +316,29 @@ func TestTextMenuWhenTheUIStopsDrawing(t *testing.T) {
 	}
 	eq(t, items["p.codex"].visible, true)
 	eq(t, items["p.codex"].title, text.CodexExpired)
+}
+
+// Review A-m1: a drawing failure shows the text menu at once, not at the
+// helper's next tick (a menu opened meanwhile would be items that nobody
+// draws).
+func TestTextMenuAtOnceWhenTheDrawingFails(t *testing.T) {
+	ui := newFakeUI()
+	ui.draws.Store(true)
+	ui.drawFailed = make(chan struct{})
+	r := startRun(t, runOpts{goos: "windows", ui: ui, tick: time.Hour})
+	r.hello()
+	r.send(fixtureView(panelfixture.States()))
+	eq(t, r.next().Type, trayproto.TypeReady)
+	layout, _, _, _, _, _ := r.ui.snapshot()
+	if !strings.Contains(strings.Join(layout, " "), "=") {
+		t.Fatalf("not drawn first: %v", layout)
+	}
+	ui.draws.Store(false)
+	close(ui.drawFailed)
+	waitFor(t, "the text menu", func() bool {
+		layout, items, _, _, _, resets := r.ui.snapshot()
+		return resets == 1 && !strings.Contains(strings.Join(layout, " "), "=") && layout[len(layout)-1] == "quit" && items["quit"].visible
+	})
 }
 
 // Review B3-m13, A3-M2: the same on macOS, whose actions stay the menu's

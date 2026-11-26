@@ -1,7 +1,7 @@
 diff -aruN a/PATCHED.md b/PATCHED.md
 --- a/PATCHED.md
 +++ b/PATCHED.md
-@@ -0,0 +1,264 @@
+@@ -0,0 +1,267 @@
 +# fyne.io/systray, patched copy
 +
 +This folder is a copy of [fyne.io/systray](https://github.com/fyne-io/systray)
@@ -199,6 +199,9 @@ diff -aruN a/PATCHED.md b/PATCHED.md
 +  `(*MenuItem).SetPanelView(on)` (the item gets a view, sized again and
 +  redrawn, unless the menu is open: an open menu keeps what it opened
 +  with; off: a text item again, at the menu's close if it is open),
++  `CancelPanelMenu()` (the open menu's tracking is cancelled, on the main
++  queue after the current call; the program calls it when its viewer
++  stopped drawing, so that the open menu's views do not stay blank),
 +  `ActivateOnMenuOpen(on)` (for a CI build's test switch only: before the
 +  menu shows, the app makes itself an accessory app and the active app,
 +  `setActivationPolicy:`, `activateIgnoringOtherApps:` and, from macOS
@@ -905,7 +908,7 @@ diff -aruN a/panelview.go b/panelview.go
 diff -aruN a/panelview.h b/panelview.h
 --- a/panelview.h
 +++ b/panelview.h
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,48 @@
 +// Not upstream code: this file was added to the copy of fyne.io/systray
 +// v1.12.2 in agent/third_party/systray of the AI Usage client (see
 +// PATCHED.md). It is under the AI Usage client's MIT licence (LICENSE at
@@ -951,10 +954,13 @@ diff -aruN a/panelview.h b/panelview.h
 +// CI builds' test switch: the app makes itself active before its menu
 +// shows.
 +void aiu_set_activate(bool on);
++// Cancels the open menu's tracking, on the main thread after the current
++// call (nothing when no menu is open).
++void aiu_cancel_open_menu(void);
 diff -aruN a/panelview_darwin.go b/panelview_darwin.go
 --- a/panelview_darwin.go
 +++ b/panelview_darwin.go
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,184 @@
 +//go:build !ios
 +
 +// Not upstream code: this file was added to the copy of fyne.io/systray
@@ -1026,6 +1032,12 @@ diff -aruN a/panelview_darwin.go b/panelview_darwin.go
 +// Objective-C exception, which is caught and reported to the
 +// PanelViewer's ViewFailed as one in the drawing would be. For tests.
 +func RaiseInNextPanelViewText() { C.aiu_test_raise_once() }
++
++// CancelPanelMenu cancels the open menu's tracking, on the main thread
++// after the current call (nothing when no menu is open): the program calls
++// it when its viewer stopped drawing, so that the open menu's views do not
++// stay blank until it closes; the next open shows the program's new menu.
++func CancelPanelMenu() { C.aiu_cancel_open_menu() }
 +
 +// ActivateOnMenuOpen: before its menu shows, the program makes itself an
 +// accessory app and the active app (macOS gives an active app's menu the
@@ -1136,7 +1148,7 @@ diff -aruN a/panelview_darwin.go b/panelview_darwin.go
 diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 --- a/panelview_darwin.m
 +++ b/panelview_darwin.m
-@@ -0,0 +1,531 @@
+@@ -0,0 +1,547 @@
 +//go:build !ios
 +
 +// Not upstream code: this file was added to the copy of fyne.io/systray
@@ -1159,8 +1171,9 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +// menu closes. An
 +// Objective-C exception while measuring or drawing is caught where Go
 +// called in (it must not unwind through Go's frames) and reported to the
-+// Go side once the call has returned; the Go side then stops drawing and
-+// the program shows its text menu.
++// Go side once the call has returned; the Go side then stops drawing,
++// cancels the open menu (aiu_cancel_open_menu) and the program shows its
++// text menu.
 +
 +#import <Cocoa/Cocoa.h>
 +#include "systray.h"
@@ -1168,6 +1181,7 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +
 +// the root menu's state while it is open (main thread only)
 +static BOOL aiuMenuOpen = NO;
++static NSMenu *aiuOpenMenu = nil;          // the menu that is open
 +static BOOL aiuActed = NO;                 // an item's action came while it was open
 +static NSMenuItem *aiuLastHighlighted = nil; // the last item highlighted (nil ones are skipped)
 +static NSMutableArray<NSMenuItem *> *aiuDetach = nil; // view items that become text items at the close
@@ -1200,6 +1214,18 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +
 +void aiu_set_activate(bool on) {
 +  aiuActivate = on;
++}
++
++// The Go side stopped drawing (its viewer failed): the open menu, whose
++// views would stay blank until it closes, is cancelled, as Windows ends
++// its menu. Later on the main queue: a failure is reported from inside a
++// view's drawing or sizing.
++void aiu_cancel_open_menu(void) {
++  dispatch_async(dispatch_get_main_queue(), ^{
++    if (aiuMenuOpen && aiuOpenMenu != nil) {
++      [aiuOpenMenu cancelTracking];
++    }
++  });
 +}
 +
 +// Return and keypad Enter choose the menu's highlighted item. Space does
@@ -1528,6 +1554,7 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +// The menu delegate's calls (systray_darwin.m).
 +void aiu_panel_menu_will_open(NSMenu *menu) {
 +  aiuMenuOpen = YES;
++  aiuOpenMenu = menu;
 +  aiuActed = NO;
 +  aiuLastHighlighted = nil;
 +  systray_panel_menu_opening();
@@ -1585,6 +1612,7 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 +  NSMenuItem *last = aiuLastHighlighted;
 +  BOOL acted = aiuActed;
 +  aiuMenuOpen = NO;
++  aiuOpenMenu = nil;
 +  aiuActed = NO;
 +  aiuLastHighlighted = nil;
 +  NSEvent *e = [NSApp currentEvent];
@@ -1671,7 +1699,7 @@ diff -aruN a/panelview_darwin.m b/panelview_darwin.m
 diff -aruN a/panelview_other.go b/panelview_other.go
 --- a/panelview_other.go
 +++ b/panelview_other.go
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,30 @@
 +//go:build !darwin
 +
 +// Not upstream code: this file was added to the copy of fyne.io/systray
@@ -1696,6 +1724,9 @@ diff -aruN a/panelview_other.go b/panelview_other.go
 +
 +// RaiseInNextPanelViewText does nothing here (a test hook of macOS').
 +func RaiseInNextPanelViewText() {}
++
++// CancelPanelMenu does nothing here: menu items with a view are macOS'.
++func CancelPanelMenu() {}
 +
 +// ActivateOnMenuOpen does nothing here (a CI test switch of macOS').
 +func ActivateOnMenuOpen(bool) {}

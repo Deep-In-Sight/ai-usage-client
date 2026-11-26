@@ -83,6 +83,8 @@ type winDrawer struct {
 	fonts  map[uint32]*menuFonts
 	open   map[uint32]panel.Item // what each item held when the menu opened
 	failed bool
+	// stopped is closed at the first failure (after the menu was ended)
+	stopped stopSignal
 	// trace, when set (tests only), gets each Draw's steps
 	trace func(id uint32, ops []panel.Op)
 }
@@ -116,8 +118,12 @@ func (d *winDrawer) Failed() bool {
 	return d.failed
 }
 
+// FailedSignal is closed at the first failure.
+func (d *winDrawer) FailedSignal() <-chan struct{} { return d.stopped.C() }
+
 // recovered ends a panic of what (deferred in each of the drawer's
-// methods): logged once, the drawing stops and the open menu is closed.
+// methods): logged once, the drawing stops, the open menu is closed and
+// the helper is told at once (FailedSignal).
 func (d *winDrawer) recovered(what string) {
 	r := recover()
 	if r == nil {
@@ -130,6 +136,7 @@ func (d *winDrawer) recovered(what string) {
 	if first {
 		log.Printf("panel: %s failed (%v); the tray menu is text from now on", what, r)
 		d.endMenu()
+		d.stopped.stop()
 	}
 }
 
