@@ -462,3 +462,134 @@ func TestTextsSayCodexIsNeverStarted(t *testing.T) {
 		}
 	}
 }
+
+// Plan Task 16: every file in the repository with the Clawd artwork's
+// bytes (the original extension's clawd.svg and its copies: the usage
+// panel's extension and the forms generated from it) is in the Clawd
+// mark's Files, which the README and the notices name; and every file
+// listed is there.
+func TestEveryClawdFileIsListed(t *testing.T) {
+	const root, original = "../../..", "claude-usage@localhost/clawd.svg"
+	want, err := os.ReadFile(filepath.Join(root, original))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clawd *Mark
+	for i := range Marks {
+		if slices.Contains(Marks[i].Files, original) {
+			clawd = &Marks[i]
+		}
+	}
+	if clawd == nil {
+		t.Fatalf("no mark lists %s", original)
+	}
+	for _, f := range clawd.Files {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(f))); err != nil {
+			t.Errorf("%s lists %s: %v", clawd.Name, f, err)
+		}
+	}
+	err = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		if info, err := d.Info(); err != nil || info.Size() != int64(len(want)) {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil || !bytes.Equal(b, want) {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		if rel = filepath.ToSlash(rel); !slices.Contains(clawd.Files, rel) {
+			t.Errorf("%s has the Clawd artwork's bytes but is not in %s's Files", rel, clawd.Name)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// cardWord is "card" or "cards" as a word, in any case.
+var cardWord = regexp.MustCompile(`(?i)\bcards?\b`)
+
+// Plan Task 16 (Constraint 6): the texts people read call the drawn
+// menu "the usage panel", never a "card" (a word the owner did not know
+// for it): the README outside the original extension's parts (its
+// summary at the top and its own section, which keep its words), every
+// shown text (internal/text) and the panel extension's metadata.json in
+// the source and in each generated form.
+func TestUserTextsNeverSayCard(t *testing.T) {
+	b, err := os.ReadFile("../../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := strings.ReplaceAll(string(b), "\r\n", "\n")
+	cut := func(s, from, to string) string {
+		i := strings.Index(s, from)
+		if i < 0 {
+			t.Fatalf("README has no %q", from)
+		}
+		j := strings.Index(s[i+len(from):], to)
+		if j < 0 {
+			t.Fatalf("README has no %q after %q", to, from)
+		}
+		return s[:i] + s[i+len(from)+j:]
+	}
+	readme = cut(readme, "\nThe extension, at a glance", "\n## AI Usage agent\n")
+	readme = cut(readme, "\n## GNOME Shell extension\n", "\n## Licence\n")
+	files := map[string]string{"README.md (outside the original extension's parts)": readme}
+	for _, f := range []string{
+		"../text/text.go",
+		"../../../gnome-extension/ai-usage-panel@localhost/metadata.json",
+		"../gnomeext/gnome42/ai-usage-panel@localhost/metadata.json",
+		"../gnomeext/gnome46/ai-usage-panel@localhost/metadata.json",
+	} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[f] = string(b)
+	}
+	for name, s := range files {
+		for i, line := range strings.Split(s, "\n") {
+			if m := cardWord.FindString(line); m != "" {
+				t.Errorf("%s:%d says %q: %s", name, i+1, m, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+// Plan Task 16: the README names the Ubuntu releases the agent supports,
+// 26.04 among them, with their GNOME versions, and says what changes on
+// Ubuntu with the usage panel (design 9) and how to turn it on again
+// (ledger, the re-review of fix round 3).
+func TestReadmeListsUbuntu2604(t *testing.T) {
+	b, err := os.ReadFile("../../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := strings.Join(strings.Fields(string(b)), " ")
+	for _, want := range []string{
+		"| Windows, macOS, Ubuntu 22.04, 24.04 and 26.04 |",
+		"Ubuntu 22.04 (GNOME 42), 24.04 (GNOME 46) and 26.04 (GNOME 50)",
+		"After you log out and log in again, the usage panel appears in the top bar and the tray icon goes away.",
+		"To turn the panel off, switch off AI Usage Panel in the Extensions app; the tray icon comes back.",
+		"To turn it on again, switch on AI Usage Panel in the Extensions app",
+		"`gnome-extensions enable ai-usage-panel@localhost`",
+		"Removing AI Usage and installing it again counts as a new install",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README does not say %q", want)
+		}
+	}
+}

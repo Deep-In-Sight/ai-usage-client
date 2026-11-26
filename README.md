@@ -4,7 +4,7 @@ This repository holds two ways to keep an eye on your Claude plan usage:
 
 | | Runs on | What it does |
 | --- | --- | --- |
-| [AI Usage agent](#ai-usage-agent) | Windows, macOS, Ubuntu | A tray icon with your weekly usage. It also reports the numbers to your team's AI Usage server, and you install it from that server. |
+| [AI Usage agent](#ai-usage-agent) | Windows, macOS, Ubuntu 22.04, 24.04 and 26.04 | Tray icons and a usage panel with your Claude and Codex usage. It also reports the numbers to your team's AI Usage server, and you install it from that server. |
 | [GNOME Shell extension](#gnome-shell-extension) | Ubuntu 24.04 (GNOME 46) | The original: a ring and a percentage in the top bar, for you alone. |
 
 Use one of them on a PC, not both. Each asks Anthropic for the numbers on its
@@ -29,12 +29,12 @@ bar, so you don't have to keep opening the usage page on claude.ai.
 
 ## AI Usage agent
 
-A small program that runs for your OS user. It shows your weekly usage in the
+A small program that runs for your OS user. It shows your usage in the
 tray (the Windows notification area, the macOS menu bar, the Ubuntu top bar)
-and sends it to your team's AI Usage server, whose dashboard shows the
-whole team. Only one PC per Claude account asks Anthropic at a time: the
-server picks it, and every other PC on that account gets the numbers from the
-server.
+and in the usage panel that opens from it, and sends it to your team's AI
+Usage server, whose dashboard shows the whole team. Only one PC per Claude
+account asks Anthropic at a time: the server picks it, and every other PC on
+that account gets the numbers from the server.
 
 ### What it sends
 
@@ -60,7 +60,7 @@ address, as any server you connect to does.)
   128-bit value, so the key cannot be turned back into it; someone who
   already has this PC's identifier could compute the key and so recognise
   the PC, nothing more. When the OS gives no identifier, no key is sent and
-  a reinstall counts as a new PC. No network card address is used.
+  a reinstall counts as a new PC. No network adapter (MAC) address is used.
 - The agent: its version, and whether it shows a tray icon
 - The sign-in: whether Claude Code (and Codex) is signed in, and when the
   sign-in expires; on a PC without Codex, that Codex is not signed in
@@ -97,7 +97,7 @@ for Claude only: `schema`, `client.version`, `client.os`,
 ### What it never sends
 
 Your token, your conversations, your files, this PC's machine identifier
-(only its keyed hash, above) and its network card addresses.
+(only its keyed hash, above) and its network adapter (MAC) addresses.
 
 - It reads the sign-in Claude Code keeps and never refreshes or changes it.
   The token goes only to `api.anthropic.com`, and redirects are refused.
@@ -145,6 +145,10 @@ files on this repository's Releases page do not install on their own: the
 server's command writes the settings the agent needs (the server's address and
 its key).
 
+It runs on Windows, macOS, and Ubuntu 22.04 (GNOME 42), 24.04 (GNOME 46)
+and 26.04 (GNOME 50); on another Linux desktop it shows a tray icon where
+the desktop has a tray.
+
 You need Claude Code signed in with your claude.ai subscription, or Codex
 signed in with ChatGPT (the Codex CLI, its IDE extension or the Codex app,
 which keep the sign-in in `~/.codex`), or both, now or later; the agent
@@ -164,12 +168,80 @@ user who runs the command only, and needs no administrator rights.
 | Linux with a desktop | `~/.local/bin/ai-usage` | `~/.config/autostart/ai-usage.desktop` |
 | Linux without a desktop | `~/.local/bin/ai-usage` | the systemd user service `ai-usage.service`, plus linger so it runs without a login. If linger is refused, the installer says so and the agent runs only while you are logged in. |
 
+On Ubuntu 22.04, 24.04 and 26.04 the agent also puts the usage panel's
+GNOME Shell extension, AI Usage Panel, in your own extensions folder
+(`~/.local/share/gnome-shell/extensions/ai-usage-panel@localhost`). Run
+from a GNOME session, install says "The AI Usage panel appears after
+you log out and log in again."; run from elsewhere (over SSH, for
+example), the agent writes the extension at your next GNOME login instead.
+
 Run the same command again to upgrade. The PC stays the same device on the
 dashboard and nothing waiting to be sent is lost.
 
 ### Using it
 
-The menu, from top to bottom:
+Click an AI Usage icon to open the usage panel. Every icon opens the same
+panel. From top to bottom:
+
+| Part | What it shows |
+| --- | --- |
+| New version available: 1.1.0 | Shown when your server has a newer agent. Opens the server's install page. |
+| A header for each provider | Clawd and **Claude**, or the ring and **Codex**; the account, how many PCs report for it (Codex: and its plan), such as `team-a@… · 3 PCs`; and on the right when the numbers were fetched, `Updated 18:52`. A provider has a section when it is signed in on this PC or its sign-in needs you. |
+| A problem line | Under the header, when there is one: `Sign-in expired: open Claude Code to renew it`, `Codex sign-in expired: run Codex once to renew it` and the like (more in [The text menu](#the-text-menu)). The last numbers stay. |
+| A row for each limit | The limit's name (Claude: `5-hour` when the account has one, `Weekly`, `Fable` when the account has one; Codex: each limit window in its reply, at most four, then `More limits on the dashboard`), its percentage on the right, a bar, and when it resets: `Resets Sun 01:00 · in 1d 6h`, or `Blocked · resets Fri 19:35 · in 35m` when the limit is used up. `–%` and an empty bar until there are numbers. |
+| Sign in to Claude Code or Codex | Nobody is signed in on this PC. |
+| The server line | `Server connected · this PC fetches Claude, Codex`, or which PC fetches the numbers; `Server not reachable · this PC fetches every 30 min` when this PC asks Anthropic itself until the server is back. |
+| Open dashboard | Opens your server's dashboard. |
+| Refresh now | Asks the server for fresh numbers (`Refreshing…` meanwhile). |
+| Start at login | Turns starting at login on or off (checked when on). |
+| Remove AI Usage | Removes the agent. Click it twice within 10 seconds. |
+| Quit | Stops the agent until the next login. |
+
+Clicking a limit row opens that account's page on the dashboard. A bar is
+terracotta normally, yellow at 75% or more (or when Anthropic flags the
+limit as being used up fast), and red at 90% or more, when its percentage
+is red too. A provider's whole section is faded when its numbers are more
+than 15 minutes old. On Windows and macOS an open panel keeps the numbers
+it opened with until it closes; on Ubuntu it shows new numbers while it is
+open.
+
+How the panel looks on each OS:
+
+- **Windows:** the agent draws the whole menu, every item in it. It
+  follows the Windows app mode (Settings › Personalization › Colors),
+  light or dark, also when you change it while the agent runs: no restart
+  is needed. In dark mode the thin frame Windows draws around the menu
+  stays light; with a high-contrast theme the menu uses the theme's
+  colours. The keyboard works as in any menu (arrow keys, Enter). Screen
+  readers do not read the drawn items yet.
+- **macOS:** the headers, the limit rows, the server line and the sign-in
+  line are drawn by the agent, in the menu's light or dark colours; the
+  actions (Open dashboard to Quit) and the new-version line stay macOS's
+  own menu items. Each drawn item has a label for VoiceOver, which also
+  says "warning", "critical" or "not current" where the panel shows that
+  by colour.
+- **Ubuntu 22.04, 24.04 and 26.04:** the AI Usage Panel extension shows
+  the usage panel. After you log out and log in
+  again, the usage panel appears in the top bar and the tray icon goes
+  away. Clawd with Claude's percentage and the ring with Codex's sit side
+  by side; click either to open the panel. To turn the panel off, switch
+  off AI Usage Panel in the Extensions app; the tray icon comes back. It
+  stays off at the next login: the agent turns the extension on once, at
+  the first login after it is installed, and never again after you turned
+  it off. To turn it on again, switch on AI Usage Panel in the Extensions
+  app (or run `gnome-extensions enable ai-usage-panel@localhost`); the
+  panel comes back and the tray icon goes. Removing AI Usage and
+  installing it again counts as a new install: the next login turns the
+  panel on once more. The extension shows only what the agent gives it,
+  finished texts and numbers: it reads no sign-in, makes no network
+  request and runs no program.
+
+### The text menu
+
+Other Linux desktops (and Ubuntu before the first login with the panel,
+or with the panel turned off) show the tray icon with a text menu. Should
+drawing the panel fail on Windows or macOS, the agent shows the text menu
+instead. From top to bottom:
 
 | Item | What it is |
 | --- | --- |
@@ -184,16 +256,14 @@ The menu, from top to bottom:
 | Sign in to Claude Code or Codex | Nobody is signed in on this PC (the only line above the server's). |
 | Server connected · Updated 18:58 · fetching: TEST-PC-03 | When the numbers were fetched, and which PC fetches them (`this PC fetches Claude` when it is this one). |
 | Server not reachable · this PC fetches every 30 min | The server cannot be reached; this PC asks Anthropic itself, every 30 minutes, until it can. |
-| Open dashboard | Opens your server's dashboard. |
-| Refresh now | Asks the server for fresh numbers. |
-| Start at login | Turns starting at login on or off. |
-| Remove AI Usage | Removes the agent. Click it twice within 10 seconds. |
-| Quit | Stops the agent until the next login. |
+| Open dashboard, Refresh now, Start at login, Remove AI Usage, Quit | As in the usage panel. |
 
 Clicking a usage row opens that account's page on the dashboard. The bars
 start at the left edge so they line up whatever the menu's font; the
 percentages are padded to the same width. Each provider has a section, and
 every icon has the same menu.
+
+### The icons
 
 | You see | It means |
 | --- | --- |
@@ -212,20 +282,24 @@ every icon has the same menu.
   keep it in view.
 - **macOS:** Clawd over a usage bar, and the percentage next to it, in the
   menu bar.
-- **Ubuntu:** Clawd over a usage bar, and the percentage as text next to it,
-  in the top bar (through the AppIndicator extension Ubuntu has on by
-  default). Desktops that show only tray icons, such as KDE, show Clawd with
-  the percentage under it, as on Windows.
+- **Ubuntu:** with the usage panel, Clawd and the ring with their
+  percentages in the top bar (`⚠` after an old one). Without it, Clawd
+  over a usage bar and the percentage as text next to it, in the top bar
+  (through the AppIndicator extension Ubuntu has on by default). Desktops
+  that show only tray icons, such as KDE, show Clawd with the percentage
+  under it, as on Windows.
 - Without a tray, such as a server with no desktop, it runs without an icon.
   Ask it what it is doing with `~/.local/bin/ai-usage status`.
 - If the top bar's tray appears late after login, or Ubuntu restarts the
-  session at logout while the agent keeps running, the icon comes back by
-  itself; the numbers are collected all the while. At login, the agent the
-  new session starts replaces one left over from the old session.
+  session at logout while the agent keeps running, the icon (or the usage
+  panel) comes back by itself; the numbers are collected all the while. At
+  login, the agent the new session starts replaces one left over from the
+  old session.
 - The icon is drawn by a small helper process the agent starts (the same
   `ai-usage` program, run as `ai-usage tray-helper`), so Task Manager,
   Activity Monitor or `ps` show two `ai-usage` processes (three with both
-  Claude and Codex: one helper per icon). If the desktop's
+  Claude and Codex: one helper per icon; on Ubuntu with the usage panel,
+  one helper passes the panel to the extension instead). If the desktop's
   tray goes away, only the helper ends; the agent goes on collecting and
   starts it again. The helper gets nothing but what to draw: no sign-in,
   no file, no network, and of the agent's environment only what a tray
@@ -247,7 +321,8 @@ every icon has the same menu.
 - macOS: `"$HOME/Library/Application Support/AIUsage/ai-usage" uninstall`
 - Linux: `~/.local/bin/ai-usage uninstall`
 
-Removing takes the program, its settings and its start-at-login entry away.
+Removing takes the program, its settings and its start-at-login entry away;
+on Ubuntu also the usage panel's extension, which GNOME turns off first.
 Linger, if the installer turned it on, is left as it is. Windows cannot
 delete a program while it runs, so removing it from the tray or from
 Installed apps moves `ai-usage.exe` to your `TEMP` folder; the next
